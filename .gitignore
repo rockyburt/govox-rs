@@ -23,9 +23,6 @@ target/
 # dependencies (whisper.cpp, ONNX Runtime) that are not workspace dependencies.
 spikes/*/Cargo.lock
 
-# Reproducible extract of govox-py at the commit named in REFERENCE. Derived,
-# never edited, and re-created on demand by tools/parity-gen/pinned-source.sh.
-tools/parity-gen/.parity-src/
 
 # Release binaries built by tools/build-release.sh. Reproducible from a tag, and
 # far too large to track.

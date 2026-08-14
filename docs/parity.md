@@ -9,25 +9,25 @@ covers:
   - crates/govox-ime/
 ---
 
-# Parity ledger
+# Behavioural decision record
 
-Every behaviour of `govox-py` is recorded here as **ported**, **changed** or **dropped**.
+Why govox behaves as it does. Each entry is a decision with its reasoning attached, and
+several are traps that cost days to find — the kind of thing that looks like a redundant
+line of code until you remove it.
 
-> **If you are reading this from outside the project:** `govox-py` is an earlier,
-> unpublished Python implementation by the same author, from which govox-rs grew. You
-> cannot check out the commit named below, and the tooling in `tools/parity-gen/` will
-> not run for you. This file is still the most useful thing in the repository for
-> understanding *why* govox-rs behaves the way it does — every entry is a decision with
-> its reasoning attached, and several of them are traps that cost days to find.
+**Read this before concluding a behaviour is a bug.** A surprising number of them are
+load-bearing: an API that reports success and does nothing, a regex whose exact `\b`
+semantics matter, an offset that must be counted in characters rather than bytes.
 
-**Reference:** govox-py @ `3ad8c0fb07b25972628f9ae4e4ac9943fde08507` (2026-08-13), as
-pinned in [`../REFERENCE`](../REFERENCE). Every claim below is a claim about *that*
-commit. When the pin moves, re-read this file alongside the corpus diff — a behaviour
-recorded as `ported` may have stopped being true upstream.
+The marks — **ported**, **changed**, **dropped** — are historical. govox was rewritten in
+Rust from an earlier, unpublished Python implementation by the same author, and this file
+began as the ledger tracking that port: what was carried over deliberately, what was
+altered, and what was left behind. The port is finished, so treat the marks as provenance.
+The reasoning is the part that still matters.
 
-This file exists because "full parity" is an ambiguous goal on a codebase that contains
-dead code, stale remedy strings and workarounds for Python-specific problems. Parity means
-*this ledger is complete and every entry is deliberate* — not that nothing changed.
+Behaviour is now pinned by the golden corpora rather than by comparison with anything
+external — see [index.md](index.md) and `crates/govox-core/tests/correction_golden.rs`.
+When a decision here changes, update the entry in the same change.
 
 Review it at the end of every milestone. An undocumented divergence found later is a bug;
 a documented one is a decision.
@@ -61,7 +61,7 @@ a documented one is a decision.
 | Exit codes: 1 runtime, 2 config | ported | `RestartPreventExitStatus=2` in the systemd unit depends on 2 meaning "do not restart". |
 | `SuccessExitStatus=143` in the systemd unit | dropped | An artefact of `uv run` reporting its child's SIGTERM as an exit code. A real binary exits on SIGTERM normally. |
 | Config layering order (default → XDG user → env → `--config`) | ported | Deep merge; non-table values, lists included, replace wholesale. Missing `--config` path is an error. |
-| Resolved default configuration, every key and value | ported | **Verified by differential test**, not by hand-written assertions: `corpus/config-defaults.json` is generated from the pinned govox-py and compared field by field in `crates/govox-core/tests/config_parity.rs`. That test also contains a self-check proving it detects planted drift. |
+| Resolved default configuration, every key and value | ported | **Verified by differential test**, not by hand-written assertions: `corpus/config-defaults.json` is compared field by field in `crates/govox-core/tests/config_golden.rs`. That test also contains a self-check proving it detects planted drift. |
 | `GOVOX__A__B` env override with bool→int→float→str coercion | ported | Hand-rolled, **not** `figment` — the coercion order is a parity surface. One narrowing: Python's `int()`/`float()` accept digit separators (`1_0` → 10) and Rust's `parse` does not, so such a value arrives as a string and is rejected by the schema. Narrower, never wider. |
 | `extra="forbid"` on the config root **only** | ported | The asymmetry is deliberate and was verified against the pinned source: an unknown *section* is rejected, an unknown *key inside a known section* is silently ignored. `deny_unknown_fields` is therefore on `Config` and on no section struct. Putting it everywhere — the obvious Rust instinct — would reject configs that work today. **Candidate improvement**, not to be made by accident: a typo'd key currently does nothing, silently. |
 | Environment read from the process | changed | `Config::load_from` takes an injected `Environment`. `govox-py`'s tests use `monkeypatch.setenv`, which is order-dependent under any parallel runner; Rust's test harness is threaded by default, so the environment is a parameter. |

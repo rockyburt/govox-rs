@@ -8,8 +8,10 @@
 //! utterances split in different places and the ported VAD tests stop being
 //! parity tests.
 //!
-//! Reference values come from `tools/parity-gen/silero_probs.py`, which drives
-//! `govox.audio.vad.load_silero()` over the same WAV.
+//! Reference values came from a generator that drove the earlier Python
+//! implementation's Silero wrapper over the same WAV. That generator has been
+//! retired along with the rest of the port scaffolding; the recorded result is
+//! in `docs/spikes/m-1c-silero-vad.md`.
 //!
 //! Usage: `cargo run --release -- <audio.wav>`
 

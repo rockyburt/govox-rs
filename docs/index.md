@@ -15,12 +15,12 @@ pre-implementation evidence.
 
 ## In this directory
 
-- **[parity.md](parity.md)** — the behavioural ledger: every govox-py behaviour marked
-  ported, deliberately-changed or dropped, with the reason. Covers the three silent-success
-  traps (`ydotool key` by name, synchronous `set_global_engine` deadlock,
-  `PreeditFocusMode.COMMIT` typing into documents), character-vs-byte offsets,
-  `collapse_repeated_words`, `NullNotifier`, CT2→GGUF model changes, and the
-  compile-time-vs-runtime GPU device divergence.
+- **[parity.md](parity.md)** — the behavioural decision record: why the pipeline behaves as
+  it does, with reasoning attached. Covers the three silent-success traps (`ydotool key` by
+  name, synchronous `set_global_engine` deadlock, `PreeditFocusMode.COMMIT` typing into
+  documents), character-vs-byte offsets, `collapse_repeated_words` and its `\b` semantics,
+  password-field refusal, `NullNotifier`, CT2→GGUF model changes, and why `gpu_device` is a
+  compile-time-versus-runtime problem.
 
 ## Sections
 
