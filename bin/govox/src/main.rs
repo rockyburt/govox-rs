@@ -160,30 +160,39 @@ fn dictate(config: Config) -> Result<(), Error> {
     runtime.block_on(async move {
         let cancel = tokio_util::sync::CancellationToken::new();
 
-        // Ctrl-C and SIGTERM both mean "stop cleanly". Cancelling rather than
-        // exiting lets the recognition thread release the GPU context and the
-        // capture stream close, instead of both being torn down mid-call.
-        let shutdown = cancel.clone();
-        tokio::spawn(async move {
-            let mut term =
-                match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-                    Ok(signal) => signal,
-                    Err(error) => {
-                        tracing::warn!(%error, "cannot listen for SIGTERM");
-                        return;
-                    }
-                };
-            tokio::select! {
-                _ = tokio::signal::ctrl_c() => tracing::info!("interrupted; stopping"),
-                _ = term.recv() => tracing::info!("terminated; stopping"),
-            }
-            shutdown.cancel();
-        });
+        // Detached so it runs alongside the daemon rather than before it; the
+        // runtime drops it once `run` returns.
+        tokio::spawn(cancel_on_signal(cancel.clone()));
 
         govox_daemon::run(config, cancel)
             .await
             .map_err(|e| Error::Runtime(e.to_string()))
     })
+}
+
+/// Wait for a shutdown signal, then cancel `token`.
+///
+/// Ctrl-C and SIGTERM both mean "stop cleanly". Cancelling rather than exiting
+/// lets the recognition thread release the GPU context and the capture stream
+/// close, instead of both being torn down mid-call.
+async fn cancel_on_signal(token: tokio_util::sync::CancellationToken) {
+    match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+        Ok(mut term) => {
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => tracing::info!("interrupted; stopping"),
+                _ = term.recv() => tracing::info!("terminated; stopping"),
+            }
+        }
+        // Losing SIGTERM costs us the clean systemd stop, but Ctrl-C is the
+        // signal a person is most likely to send, so keep handling that rather
+        // than dropping back to the default disposition for both.
+        Err(error) => {
+            tracing::warn!(%error, "cannot listen for SIGTERM; Ctrl-C only");
+            let _ = tokio::signal::ctrl_c().await;
+            tracing::info!("interrupted; stopping");
+        }
+    }
+    token.cancel();
 }
 
 /// List microphones, in `govox-py`'s exact line format.
