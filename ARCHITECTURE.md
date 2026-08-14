@@ -3,8 +3,8 @@
 How govox-rs is put together: the directory layout, the path a spoken word takes, and the
 three structural rules that the rest of the design follows from.
 
-For what the daemon *does*, see [README.md](README.md). For how it differs from its Python
-predecessor and why, see the parity ledger indexed from [docs/index.md](docs/index.md).
+For what the daemon *does*, see [README.md](README.md). For why individual behaviours are
+the way they are, see the decision record indexed from [docs/index.md](docs/index.md).
 
 ## Directory layout
 
@@ -22,8 +22,7 @@ predecessor and why, see the parity ledger indexed from [docs/index.md](docs/ind
 | `bin/govox/` | The CLI: `run`, `doctor`, `devices`, `keys`. |
 | `bin/govox-overlay/` | The HUD renderer — x11rb and tiny-skia, its own process. |
 | `config/default.toml` | Every default and the reasoning for it. Embedded with `include_str!`, so there is no runtime path to resolve. |
-| `corpus/` | Golden corpora and the recorded baseline the parity tests replay. |
-| `tools/parity-gen/` | Generators that extract the pinned govox-py and record its behaviour. Need a checkout that is not published. |
+| `corpus/` | Golden corpora — ~239k recorded correction calls, the config-defaults snapshot, and the recorded latency baseline. Re-recorded with `GOVOX_BLESS=1`. |
 | `spikes/` | Throwaway probes from the pre-implementation spikes, kept as evidence. |
 | `packaging/` | systemd units, IBus component XML, Debian notes. See [packaging/README.md](packaging/README.md). |
 | `tests/` | Cross-crate fixtures. |
@@ -50,9 +49,9 @@ words are shown as provisional text and can still change.
 **`govox-core` depends on nothing.** Not tokio, not an OS binding, not a sibling crate. Every
 other crate depends on it and nothing else; `govox-daemon` is the only crate that depends on
 all of them. This is enforced in CI, not by convention — `.github/workflows/ci.yml` walks
-`cargo tree` and fails the build on a forbidden edge. The reason is the differential parity
-harness: it must stay runnable on any machine with no hardware and no desktop session, which
-is what keeps it cheap enough to run on every save.
+`cargo tree` and fails the build on a forbidden edge. The reason is the golden harness: it
+must stay runnable on any machine with no hardware and no desktop session, which is what
+keeps it cheap enough to run on every save.
 
 Everything that touches the outside world sits behind a trait `govox-core` defines
 (`Recognizer`, `Corrector`, `Injector`, `PreeditSink`, `TextModel`), so the logic is tested

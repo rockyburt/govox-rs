@@ -1,25 +1,37 @@
-//! Differential parity: replay govox-py's recorded behaviour against the port.
+//! Golden corpus: ~239k recorded calls pinning the correction pipeline.
 //!
-//! `corpus/correction.jsonl.gz` was produced by *running* the pinned govox-py
-//! (see `REFERENCE` and `tools/parity-gen/correction_corpus.py`). Every expected
-//! value in it came out of the reference implementation; none was written by
-//! hand. Each record is one call and its answer.
+//! Each record in `corpus/correction.jsonl.gz` is one call and its answer:
+//! `{stage, args, out}`. The test replays every one and asserts the answer is
+//! unchanged. This is the project's largest safety net, and it guards the code
+//! that most needs one — pure logic, an enormous input space, and failure modes
+//! that are silent rather than loud. A character-vs-byte offset or a stage
+//! reordering does not crash; it puts slightly wrong text in a document.
 //!
-//! The corpus is checked in because CI is Rust-only — no Python, no govox-py —
-//! and because it must outlive the reference once that is retired.
-//!
-//! Regenerate deliberately, and read the diff:
+//! **A diff here means govox's behaviour changed.** The only question is
+//! whether that was intended. If it was, re-record and read the diff:
 //!
 //! ```console
-//! $ ./tools/parity-gen/pinned-source.sh
-//! $ PYTHONPATH=tools/parity-gen/.parity-src/src <interpreter> \
-//!     tools/parity-gen/correction_corpus.py | gzip -9 > corpus/correction.jsonl.gz
+//! $ GOVOX_BLESS=1 cargo test -p govox-core --test correction_golden -- --ignored bless
 //! ```
+//!
+//! Blessing recomputes `out` for every existing record from the current code,
+//! and adds records for any table-driven input not already covered — so a new
+//! spoken emoji or punctuation phrase gains coverage by being added to its
+//! table. Inputs are otherwise preserved verbatim, which keeps the diff small
+//! enough to actually review.
+//!
+//! History: the expected values were originally recorded by running an earlier
+//! Python implementation, which is how the port was verified. That is
+//! provenance now, not process — the corpus regenerates from govox itself and
+//! needs nothing outside this repository. See `docs/parity.md` for why
+//! individual behaviours are the way they are.
 
-use std::collections::BTreeMap;
-use std::io::{BufRead, BufReader};
+use std::collections::{BTreeMap, BTreeSet};
+use std::io::{BufRead, BufReader, Write};
 
+use flate2::Compression;
 use flate2::read::GzDecoder;
+use flate2::write::GzEncoder;
 use govox_core::config::CorrectionConfig;
 use govox_core::correction::{
     self, Context, CorrectionPipeline, commands, dictionary, emoji, grammar, numbers, punctuation,
@@ -415,18 +427,19 @@ impl TextModel for CorpusModel {
 
 /// Replay every Nth record instead of all of them.
 ///
-/// The full corpus takes ~2 minutes, essentially all of it inside `fancy-regex`
+/// The full corpus takes ~3 minutes, essentially all of it inside `fancy-regex`
 /// (the two patterns needing a backreference and a lookahead are the price of
-/// matching the reference exactly). That is fine in CI, which always runs the
-/// whole thing, but slow for a gate run on every save — so
-/// `GOVOX_PARITY_SAMPLE=50` gives a representative pass in a couple of seconds.
+/// the exact `\b` semantics this pipeline depends on). That is fine on `main`,
+/// which always runs the whole thing, but slow for a gate run on every save —
+/// so `GOVOX_GOLDEN_SAMPLE=50` gives a representative pass in a couple of
+/// seconds.
 ///
-/// Sampling is strided rather than random: the corpus is generated in a stable
+/// Sampling is strided rather than random: the corpus is written in a stable
 /// order, so a stride hits every stage and every config variant, and the same
 /// stride always selects the same records. A failure found under sampling is
 /// reproducible without it.
 fn sample_stride() -> usize {
-    std::env::var("GOVOX_PARITY_SAMPLE")
+    std::env::var("GOVOX_GOLDEN_SAMPLE")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|n| *n > 1)
@@ -434,7 +447,7 @@ fn sample_stride() -> usize {
 }
 
 #[test]
-fn correction_matches_the_pinned_reference() {
+fn correction_matches_the_golden_corpus() {
     let reader = BufReader::new(GzDecoder::new(CORPUS));
     let stride = sample_stride();
 
@@ -485,8 +498,11 @@ fn correction_matches_the_pinned_reference() {
             .map(|(s, n)| format!("{s}: {n}"))
             .collect();
         panic!(
-            "{total} of {checked} corpus records diverge from govox-py @ REFERENCE\n\
-             per stage: {}\n\nfirst {} failures:\n  {}",
+            "{total} of {checked} golden records changed\n\
+             per stage: {}\n\n\
+             If the change was intended, re-record with:\n  \
+             GOVOX_BLESS=1 cargo test -p govox-core --test correction_golden -- --ignored bless\n\n\
+             first {} failures:\n  {}",
             summary.join(", "),
             failures.len(),
             failures.join("\n  ")
@@ -506,4 +522,171 @@ fn correction_matches_the_pinned_reference() {
     } else {
         println!("checked {checked} records, every stage ported");
     }
+}
+
+/// Where the corpus lives, relative to this crate.
+const CORPUS_PATH: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../corpus/correction.jsonl.gz"
+);
+
+/// Inputs generated from the lookup tables themselves, so a phrase added to a
+/// table gains golden coverage by being added.
+///
+/// This is the half the corpus could not previously grow: its inputs were swept
+/// from another implementation's tables, so an entry that only exists here could
+/// never appear. The templates mirror that original sweep — a phrase alone, in
+/// the middle of a sentence, at either end, upper-cased, and behind a determiner
+/// (which suppresses the rule).
+fn table_driven_inputs() -> Vec<(&'static str, String)> {
+    let mut out = Vec::new();
+
+    for (phrase, _) in emoji::SPOKEN_EMOJI {
+        for text in [
+            (*phrase).to_owned(),
+            format!("hello {phrase}"),
+            format!("hello {phrase} world"),
+            format!("a {phrase} here"),
+            format!("the {phrase} here"),
+            format!("hello {}", phrase.to_uppercase()),
+        ] {
+            out.push(("apply_spoken_emoji", text));
+        }
+    }
+
+    for entry in punctuation::SPOKEN_PUNCTUATION {
+        let phrase = entry.0;
+        for text in [
+            (*phrase).to_owned(),
+            format!("hello {phrase}"),
+            format!("hello {phrase} world"),
+            format!("{phrase} world"),
+            format!("hello {phrase} {phrase} world"),
+            format!("hello {} world", phrase.to_uppercase()),
+            format!("add a {phrase} here"),
+        ] {
+            out.push(("apply_spoken_punctuation", text));
+        }
+    }
+    for determiner in punctuation::DETERMINERS {
+        out.push((
+            "apply_spoken_punctuation",
+            format!("add {determiner} comma here"),
+        ));
+    }
+
+    for (word, _) in numbers::NUMBER_WORDS {
+        for text in [
+            (*word).to_owned(),
+            format!("{word} dogs"),
+            format!("i have {word}"),
+            format!("{word} percent"),
+            format!("{word}."),
+        ] {
+            out.push(("apply_number_formatting", text));
+        }
+    }
+    for (symbol, _) in numbers::CURRENCY {
+        for text in [
+            format!("{symbol} five"),
+            format!("five {symbol}"),
+            format!("twenty {symbol}"),
+        ] {
+            out.push(("apply_number_formatting", text));
+        }
+    }
+
+    out
+}
+
+/// Re-record the corpus from the current implementation.
+///
+/// Ignored because it rewrites a checked-in fixture: blessing is a deliberate
+/// act whose diff is the thing being reviewed, never a side effect of running
+/// the suite. `GOVOX_BLESS=1` is required on top of `--ignored`, so neither
+/// `cargo test -- --ignored` nor a stray `--include-ignored` can rewrite the
+/// corpus by accident.
+///
+/// Records whose answer is unchanged keep their original line **byte for byte**.
+/// Re-serialising all ~239k would reformat every line and bury the handful that
+/// actually changed, which would defeat the review this exists for.
+#[test]
+#[ignore = "rewrites corpus/correction.jsonl.gz; run deliberately with GOVOX_BLESS=1"]
+fn bless_the_golden_corpus() {
+    assert!(
+        std::env::var("GOVOX_BLESS").is_ok(),
+        "refusing to rewrite the corpus without GOVOX_BLESS=1"
+    );
+
+    let reader = BufReader::new(GzDecoder::new(CORPUS));
+    let mut lines: Vec<String> = Vec::new();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    let mut rerecorded: BTreeMap<String, usize> = BTreeMap::new();
+    let mut kept = 0usize;
+
+    for line in reader.lines() {
+        let line = line.expect("corpus line reads");
+        if line.trim().is_empty() {
+            continue;
+        }
+        let mut record: Value = serde_json::from_str(&line).expect("corpus line parses");
+        let stage = record["stage"].as_str().expect("stage").to_owned();
+        seen.insert(format!("{stage}\u{0}{}", record["args"]));
+
+        match evaluate(&stage, &record["args"]) {
+            Some(actual) if actual != record["out"] => {
+                *rerecorded.entry(stage).or_default() += 1;
+                record["out"] = actual;
+                lines.push(serde_json::to_string(&record).expect("record serialises"));
+            }
+            // Unchanged, or a stage this test does not evaluate: keep the
+            // original bytes so the diff shows only real movement.
+            _ => {
+                kept += 1;
+                lines.push(line);
+            }
+        }
+    }
+
+    let mut added: BTreeMap<String, usize> = BTreeMap::new();
+    for (stage, text) in table_driven_inputs() {
+        let args = json!({ "text": text });
+        if !seen.insert(format!("{stage}\u{0}{args}")) {
+            continue;
+        }
+        let out = evaluate(stage, &args).expect("table-driven stages are all evaluated");
+        *added.entry(stage.to_owned()).or_default() += 1;
+        lines.push(
+            serde_json::to_string(&json!({"stage": stage, "args": args, "out": out}))
+                .expect("record serialises"),
+        );
+    }
+
+    let file = std::fs::File::create(CORPUS_PATH).expect("corpus is writable");
+    let mut encoder = GzEncoder::new(file, Compression::best());
+    for line in &lines {
+        writeln!(encoder, "{line}").expect("corpus line writes");
+    }
+    encoder.finish().expect("corpus finishes");
+
+    let summary = |m: &BTreeMap<String, usize>| {
+        m.iter()
+            .map(|(s, n)| format!("{s}: {n}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    println!(
+        "wrote {} records to {CORPUS_PATH}\n  unchanged: {kept}\n  re-recorded: {}\n  added: {}",
+        lines.len(),
+        if rerecorded.is_empty() {
+            "none".to_owned()
+        } else {
+            summary(&rerecorded)
+        },
+        if added.is_empty() {
+            "none".to_owned()
+        } else {
+            summary(&added)
+        },
+    );
 }

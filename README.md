@@ -182,21 +182,28 @@ default:
 cargo test --workspace -- --ignored
 ```
 
-The parity ledger records every behavioural decision — what was kept, what was
-deliberately changed, and why. It is the first place to look when something behaves
-unexpectedly, and changes to behaviour are expected to update it. Find it, and the rest of
-the written record, from [docs/index.md](docs/index.md).
+The correction pipeline is pinned by a **golden corpus** of ~239,000 recorded calls, which
+runs as an ordinary test. If you change that pipeline and the corpus disagrees, the
+behaviour moved — decide whether you meant it, then re-record and read the diff:
+
+```bash
+GOVOX_BLESS=1 cargo test -p govox-core --test correction_golden -- --ignored bless
+```
+
+The decision record behind those behaviours — what was chosen and why, including three
+desktop APIs that report success and do nothing — is reachable from
+[docs/index.md](docs/index.md).
 
 ## Prior work
 
-govox-rs grew out of `govox-py`, an earlier private Python implementation by the same
-author, which established the architecture and worked out most of the hard-won desktop
-integration details. This is a clean-room rewrite rather than a translation, and it now
-goes well beyond what the original did.
+govox grew out of an earlier, unpublished Python implementation by the same author, which
+established the architecture and worked out most of the hard-won desktop integration
+details. This is a clean-room rewrite rather than a translation, and it now goes well
+beyond what the original did.
 
-Some tooling in `tools/parity-gen/` and the `REFERENCE` file exist to diff behaviour
-against that predecessor. They need a checkout that is not published here, so they will
-not run for you — kept because they still serve the original author.
+That history shows up in two places: the golden corpora were first recorded from it, and
+`docs/parity.md` explains behaviours it originally settled. Both are self-contained now —
+nothing here depends on that predecessor, or on anything outside this repository.
 
 ## Changes
 
