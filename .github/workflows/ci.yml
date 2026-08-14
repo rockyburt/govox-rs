@@ -5,11 +5,27 @@ on:
     branches: [main]
   pull_request:
 
+# Every cargo invocation in this file must see an identical environment.
+# RUSTFLAGS, the feature set and the profile are all part of a crate's
+# fingerprint, so a single difference between two steps silently compiles the
+# whole workspace a second time — and the cache then stores both.
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: -D warnings
+  RUSTFLAGS: -D warnings -C link-arg=-fuse-ld=mold
+  # Incremental compilation pays off across repeated edits on one machine. A
+  # runner is fresh every time, so here it is pure overhead that also bloats
+  # what the cache has to carry.
+  CARGO_INCREMENTAL: 0
+  # Full debuginfo dominates link time and cache size. Line tables are enough to
+  # read a panic location, which is all CI ever needs from a backtrace.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
 
 jobs:
+  # Format, lint and test are one job on purpose. Split across three, each would
+  # restore its own cache and rebuild the workspace — including whisper.cpp,
+  # which is C++ compiled from source and dominates the run. One job, one
+  # target/, one build.
   check:
     runs-on: ubuntu-latest
     steps:
@@ -17,13 +33,14 @@ jobs:
 
       # cpal binds ALSA, and whisper.cpp is compiled from source with the Vulkan
       # backend that `govox-asr` ships as its default feature — which needs the
-      # Vulkan headers and `glslc` to build its shaders. None of the three are on
-      # the runner. This went unnoticed until now because the job had never got
-      # past `govox-core` to a crate that needed them.
+      # Vulkan headers and `glslc` for its shaders. libssl-dev arrives via
+      # hf-hub -> reqwest -> native-tls, and libclang-dev is what bindgen loads.
+      # mold is the linker; see RUSTFLAGS above.
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev libvulkan-dev glslc
+          sudo apt-get install -y \
+            libasound2-dev libvulkan-dev glslc libssl-dev libclang-dev mold
 
       # No toolchain named here on purpose: a bare install reads
       # rust-toolchain.toml, so the version and its components live in exactly
@@ -31,7 +48,17 @@ jobs:
       - name: Install the pinned toolchain
         run: rustup toolchain install
 
+      # Keys on the toolchain and the lockfile, and prunes target/ before
+      # saving. Hand-rolling this with actions/cache reliably ends up slower,
+      # because an unpruned target/ grows without bound until restoring it costs
+      # more than the rebuild it was meant to avoid.
       - uses: Swatinem/rust-cache@v2
+
+      # A prebuilt binary in seconds rather than several minutes of
+      # `cargo install` compiling it from source on every run.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
 
       - name: Format
         run: cargo fmt --all --check
@@ -40,13 +67,13 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Test
-        run: cargo test --workspace
+        run: cargo nextest run --workspace
 
       # Hardware- and desktop-dependent tests are #[ignore]d, mirroring
-      # govox-py's `@pytest.mark.integration`. They are listed here but not run,
-      # so a test that silently stops existing is still visible in CI.
+      # govox-py's `@pytest.mark.integration`. They are listed but not run, so a
+      # test that silently stops existing is still visible in CI.
       - name: List ignored tests
-        run: cargo test --workspace -- --ignored --list
+        run: cargo nextest list --workspace --run-ignored ignored-only
 
   reference-pin:
     runs-on: ubuntu-latest
@@ -71,13 +98,15 @@ jobs:
           fi
           echo "no direct references to the live checkout"
 
+  # Deliberately has no cache: `cargo tree` reads the lockfile and compiles
+  # nothing, so restoring and re-saving a build cache here would cost time and
+  # buy nothing.
   layering:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Install the pinned toolchain
         run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
 
       # govox-core is the parity heart and must stay testable on any machine
       # with no hardware and no desktop session. If it ever gains a dependency
