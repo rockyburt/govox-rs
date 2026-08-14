@@ -108,6 +108,11 @@ fn trailing(word: &str) -> String {
 ///
 /// "and" is only permitted between parts ("three hundred and twelve"); a run
 /// that is nothing but "and" is not a number.
+// clippy wants the final `else { return None }` folded into `multiplier(token)?`.
+// Declined: the three arms classify a token as a number word, a multiplier, or
+// unrecognised, and the third arm abandoning the whole run is the rule worth
+// seeing. `?` would hide that decision inside an operator on the second arm.
+#[allow(clippy::question_mark)]
 fn compose(tokens: &[String]) -> Option<i64> {
     let mut total: i64 = 0;
     let mut current: i64 = 0;
