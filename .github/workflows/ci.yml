@@ -15,6 +15,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # cpal binds ALSA, and whisper.cpp is compiled from source with the Vulkan
+      # backend that `govox-asr` ships as its default feature — which needs the
+      # Vulkan headers and `glslc` to build its shaders. None of the three are on
+      # the runner. This went unnoticed until now because the job had never got
+      # past `govox-core` to a crate that needed them.
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libvulkan-dev glslc
+
       # No toolchain named here on purpose: a bare install reads
       # rust-toolchain.toml, so the version and its components live in exactly
       # one place and CI cannot drift from a developer's machine.
