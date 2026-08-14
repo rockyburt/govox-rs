@@ -41,7 +41,12 @@ network once the model is cached.
 - Optional: **IBus** for underlined provisional text, **AT-SPI** for reading the focused
   field so `delete that` can verify what it is about to remove.
 
-Build-time: a stable Rust toolchain and `libasound2-dev`.
+Build-time: the Rust toolchain named in `rust-toolchain.toml` (rustup installs it for
+you), plus `build-essential`, `cmake`, `pkg-config`, `libasound2-dev`, `libssl-dev`,
+`libclang-dev`, and — for the default Vulkan backend — `libvulkan-dev` and `glslc`.
+whisper.cpp is compiled from source, which is what the C++ toolchain and `libclang` (for
+bindgen) are for. `tools/build-release.sh` installs exactly this list in a container, so
+it is the authoritative copy if this one drifts.
 
 ## Install
 
@@ -192,6 +197,11 @@ goes well beyond what the original did.
 Some tooling in `tools/parity-gen/` and the `REFERENCE` file exist to diff behaviour
 against that predecessor. They need a checkout that is not published here, so they will
 not run for you — kept because they still serve the original author.
+
+## Changes
+
+Release notes and known limitations for each version are in
+[CHANGELOG.md](CHANGELOG.md).
 
 ## Licence
 
