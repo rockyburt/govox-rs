@@ -64,7 +64,7 @@ futures-util = "0.3"
 thiserror = "2"
 tokio = { version = "1.53", features = ["full"] }
 tokio-util = "0.7"
-toml = "0.9"
+toml = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
