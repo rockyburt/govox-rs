@@ -58,6 +58,7 @@ govox-py's behaviour moving, and every hunk needs a decision in `docs/parity.md`
 | Read the M-1 feasibility results | [docs/spikes/index.md](docs/spikes/index.md) |
 | Advise on model size, latency or `gpu_device` | [docs/guides/index.md](docs/guides/index.md) |
 | Know what hardware or desktop a claim was verified on | [docs/reference/index.md](docs/reference/index.md) |
+| See what shipped in a release, and its known limitations | [CHANGELOG.md](CHANGELOG.md) |
 | Change domain types or traits | `crates/govox-core/src/domain.rs` |
 | Change config schema | `crates/govox-core/src/config.rs`, `config/default.toml` |
 | Change correction rules | `crates/govox-core/src/correction/` |
