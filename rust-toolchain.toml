@@ -1,0 +1,17 @@
+# The toolchain this project is built and linted with, everywhere.
+#
+# Pinned rather than tracking `stable` because `-D warnings` makes every new
+# clippy lint a build failure: tracking the moving channel means an unrelated
+# Rust release can turn CI red with no change from us. That is not
+# hypothetical — 1.97 added `clippy::question_mark` and did exactly that.
+#
+# Bumping is a deliberate, reviewable act: raise the version here, run
+# `cargo clippy --workspace --all-targets -- -D warnings`, and fix what the new
+# release found. CI reads this file, so local and CI cannot drift apart.
+#
+# `rust-version` in Cargo.toml (1.90) is a different promise — the oldest
+# compiler the crates claim to support. This is the one we actually build with.
+[toolchain]
+channel = "1.97"
+components = ["rustfmt", "clippy"]
+profile = "minimal"
