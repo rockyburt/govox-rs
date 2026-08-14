@@ -1,0 +1,17 @@
+# M-1(a) spike. Deliberately OUTSIDE the workspace (see [workspace] below) so
+# that building whisper.cpp never slows down `cargo test -p govox-core`, which
+# is the loop the correction-parity work lives in.
+#
+# Throwaway: this answers a question, it does not become govox-asr.
+[package]
+name = "whisper-probe"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+whisper-rs = "0.16"
+hound = "3"
+anyhow = "1"

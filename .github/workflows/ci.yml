@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace
+
+      # Hardware- and desktop-dependent tests are #[ignore]d, mirroring
+      # govox-py's `@pytest.mark.integration`. They are listed here but not run,
+      # so a test that silently stops existing is still visible in CI.
+      - name: List ignored tests
+        run: cargo test --workspace -- --ignored --list
+
+  reference-pin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # REFERENCE names the single govox-py commit this port targets. It must
+      # stay a full 40-character SHA: a branch name or short SHA would let the
+      # parity corpus re-baseline itself against upstream work in progress,
+      # which turns a real divergence into a passing test.
+      - name: REFERENCE names a full commit SHA
+        run: ./tools/parity-gen/check-pin.sh
+
+      # A generator that reaches for the live checkout instead of the extracted
+      # pinned source silently defeats the pin.
+      - name: No generator reads the live govox-py checkout
+        run: |
+          set -euo pipefail
+          if grep -rn 'govox-py/src' tools/ 2>/dev/null; then
+            echo "::error::a tool references govox-py/src directly; use .parity-src via pinned-source.sh"
+            exit 1
+          fi
+          echo "no direct references to the live checkout"
+
+  layering:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # govox-core is the parity heart and must stay testable on any machine
+      # with no hardware and no desktop session. If it ever gains a dependency
+      # on tokio, a sibling crate or an OS binding, the differential harness
+      # stops being cheap to run and this check fails.
+      - name: govox-core has no in-workspace or async dependencies
+        run: |
+          set -euo pipefail
+          deps=$(cargo tree -p govox-core --edges normal --prefix none \
+                 | awk '{print $1}' | sort -u)
+          for forbidden in tokio govox-audio govox-vad govox-asr \
+                           govox-input govox-ime govox-a11y govox-ui govox-daemon; do
+            if grep -qx "$forbidden" <<<"$deps"; then
+              echo "::error::govox-core must not depend on $forbidden"
+              exit 1
+            fi
+          done
+          echo "govox-core layering OK"

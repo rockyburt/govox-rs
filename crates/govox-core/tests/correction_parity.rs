@@ -1,0 +1,509 @@
+//! Differential parity: replay govox-py's recorded behaviour against the port.
+//!
+//! `corpus/correction.jsonl.gz` was produced by *running* the pinned govox-py
+//! (see `REFERENCE` and `tools/parity-gen/correction_corpus.py`). Every expected
+//! value in it came out of the reference implementation; none was written by
+//! hand. Each record is one call and its answer.
+//!
+//! The corpus is checked in because CI is Rust-only — no Python, no govox-py —
+//! and because it must outlive the reference once that is retired.
+//!
+//! Regenerate deliberately, and read the diff:
+//!
+//! ```console
+//! $ ./tools/parity-gen/pinned-source.sh
+//! $ PYTHONPATH=tools/parity-gen/.parity-src/src <interpreter> \
+//!     tools/parity-gen/correction_corpus.py | gzip -9 > corpus/correction.jsonl.gz
+//! ```
+
+use std::collections::BTreeMap;
+use std::io::{BufRead, BufReader};
+
+use flate2::read::GzDecoder;
+use govox_core::config::CorrectionConfig;
+use govox_core::correction::{
+    self, Context, CorrectionPipeline, commands, dictionary, emoji, grammar, numbers, punctuation,
+};
+use govox_core::domain::{
+    EditAction, FieldSnapshot, InsertionAction, PersonalDictionary, PipelineAction, TextModel, Unit,
+};
+use govox_core::editing::{self, spans};
+use serde_json::{Value, json};
+
+const CORPUS: &[u8] = include_bytes!("../../../corpus/correction.jsonl.gz");
+
+/// The dictionary the generator used. Kept in step with `correction_corpus.py`.
+fn dictionary_fixture() -> PersonalDictionary {
+    PersonalDictionary {
+        bias_terms: vec!["Rentals.ca".into()],
+        replacements: vec![
+            ("rentals api".into(), "Rentals-API".into()),
+            ("see plus plus".into(), "C++".into()),
+            ("dot ca".into(), ".ca".into()),
+            ("back slash".into(), "\\".into()),
+            ("group one".into(), r"\1".into()),
+        ],
+    }
+}
+
+fn action_json(action: &PipelineAction) -> Value {
+    match action {
+        PipelineAction::Text(text) => json!({"kind": "text", "text": text}),
+        PipelineAction::Command(name) => json!({"kind": "command", "name": name}),
+        PipelineAction::Mode { command_mode } => {
+            json!({"kind": "mode", "command_mode": command_mode})
+        }
+        PipelineAction::Edit(edit) => edit_json(edit),
+    }
+}
+
+fn edit_json(edit: &EditAction) -> Value {
+    json!({
+        "kind": "edit",
+        "op": op_name(edit),
+        "unit": edit.unit.map(unit_name),
+        "direction": edit.direction.map(direction_name),
+        "count": edit.count,
+        "phrase": edit.phrase,
+        "replacement": edit.replacement,
+    })
+}
+
+fn op_name(edit: &EditAction) -> &'static str {
+    use govox_core::domain::EditOp as O;
+    match edit.op {
+        O::Undo => "undo",
+        O::Redo => "redo",
+        O::DeleteLast => "delete_last",
+        O::DeleteUnit => "delete_unit",
+        O::DeleteAll => "delete_all",
+        O::Cut => "cut",
+        O::Copy => "copy",
+        O::Paste => "paste",
+        O::SelectAll => "select_all",
+        O::SelectLast => "select_last",
+        O::Deselect => "deselect",
+        O::SelectUnit => "select_unit",
+        O::MoveUnit => "move_unit",
+        O::MoveToEdge => "move_to_edge",
+        O::UppercaseLast => "uppercase_last",
+        O::LowercaseLast => "lowercase_last",
+        O::CapitalizeLast => "capitalize_last",
+        O::SelectPhrase => "select_phrase",
+        O::DeletePhrase => "delete_phrase",
+        O::ReplacePhrase => "replace_phrase",
+        O::MoveBeforePhrase => "move_before_phrase",
+        O::MoveAfterPhrase => "move_after_phrase",
+    }
+}
+
+fn unit_name(unit: govox_core::domain::Unit) -> &'static str {
+    use govox_core::domain::Unit as U;
+    match unit {
+        U::Character => "character",
+        U::Word => "word",
+        U::Sentence => "sentence",
+        U::Paragraph => "paragraph",
+        U::Line => "line",
+        U::Document => "document",
+    }
+}
+
+fn direction_name(direction: govox_core::domain::Direction) -> &'static str {
+    match direction {
+        govox_core::domain::Direction::Previous => "previous",
+        govox_core::domain::Direction::Next => "next",
+    }
+}
+
+fn correction_config(args: &Value) -> CorrectionConfig {
+    CorrectionConfig {
+        enabled: args["enabled"].as_bool().unwrap(),
+        dictionary_path: String::new(),
+        drop_fillers: args["drop_fillers"].as_bool().unwrap(),
+        filler_words: args["filler_words"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_owned())
+            .collect(),
+        collapse_repeats: args["collapse_repeats"].as_bool().unwrap(),
+        spoken_punctuation: args["spoken_punctuation"].as_bool().unwrap(),
+        spoken_emoji: args["spoken_emoji"].as_bool().unwrap(),
+        number_formatting: args["number_formatting"].as_bool().unwrap(),
+    }
+}
+
+fn text(args: &Value, key: &str) -> String {
+    args[key].as_str().unwrap_or_default().to_owned()
+}
+
+fn optional(args: &Value, key: &str) -> Option<String> {
+    args.get(key).and_then(Value::as_str).map(str::to_owned)
+}
+
+/// Evaluate one record. `None` means the stage is not implemented here yet, and
+/// the caller counts it as skipped rather than passing.
+fn evaluate(stage: &str, args: &Value) -> Option<Value> {
+    let out = match stage {
+        "normalize_spacing" => json!(correction::normalize_spacing(&text(args, "text"))),
+        "collapse_repeated_words" => {
+            json!(correction::collapse_repeated_words(&text(args, "text")))
+        }
+        "drop_filler_words" => {
+            let fillers: Vec<String> = args["fillers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_str().unwrap().to_owned())
+                .collect();
+            json!(correction::drop_filler_words(&text(args, "text"), &fillers))
+        }
+        "sentence_case" => json!(correction::sentence_case(&text(args, "text"))),
+        "ensure_terminal_punctuation" => {
+            json!(correction::ensure_terminal_punctuation(&text(args, "text")))
+        }
+        "apply_spoken_punctuation" => {
+            json!(punctuation::apply_spoken_punctuation(&text(args, "text")))
+        }
+        "capitalize_after_terminators" => {
+            json!(punctuation::capitalize_after_terminators(&text(
+                args, "text"
+            )))
+        }
+        "apply_number_formatting" => {
+            json!(numbers::apply_number_formatting(&text(args, "text")))
+        }
+        "attach_units_to_digits" => json!(numbers::attach_units_to_digits(&text(args, "text"))),
+        "apply_spoken_emoji" => json!(emoji::apply_spoken_emoji(&text(args, "text"))),
+        "normalize_command_text" => {
+            json!(commands::normalize_command_text(&text(args, "text")))
+        }
+        "is_restart_request" => json!(commands::is_restart_request(&text(args, "text"))),
+        "match_edit" => match grammar::match_edit(&text(args, "normalized")) {
+            Some(edit) => edit_json(&edit),
+            None => Value::Null,
+        },
+        "match_phrase_edit" => match grammar::match_phrase_edit(&text(args, "normalized")) {
+            Some(edit) => edit_json(&edit),
+            None => Value::Null,
+        },
+        "bounded_pattern" => json!(dictionary::bounded_pattern(&text(args, "source"))),
+        "apply_replacements" => {
+            json!(dictionary::apply_replacements(
+                &text(args, "text"),
+                &dictionary_fixture()
+            ))
+        }
+        "is_continuation" => json!(correction::is_continuation(
+            optional(args, "preceding").as_deref()
+        )),
+        "separator_for" => json!(correction::separator_for(
+            optional(args, "preceding").as_deref()
+        )),
+        "is_prose_field" => json!(correction::is_prose_field(
+            optional(args, "purpose").as_deref()
+        )),
+        "undo_prose_casing" => json!(correction::undo_prose_casing(
+            &text(args, "text"),
+            optional(args, "purpose").as_deref()
+        )),
+        "detect_command" => action_json(&commands::detect_command(
+            &text(args, "text"),
+            args["mode_switching"].as_bool().unwrap(),
+            args["command_mode"].as_bool().unwrap(),
+        )),
+        "apply_rules" => json!(correction::apply_rules(
+            &text(args, "text"),
+            &correction_config(&args["config"]),
+            optional(args, "preceding").as_deref(),
+            args["prose"].as_bool().unwrap(),
+        )),
+        "pipeline_correct" => {
+            // Memoised on the config: constructing a pipeline compiles the
+            // dictionary's patterns, and the corpus holds ~100k records across
+            // only a handful of configurations.
+            thread_local! {
+                static PIPELINES: std::cell::RefCell<BTreeMap<String, CorrectionPipeline>> =
+                    const { std::cell::RefCell::new(BTreeMap::new()) };
+            }
+            let key = args["config"].to_string();
+            PIPELINES.with(|cache| {
+                let mut cache = cache.borrow_mut();
+                let pipeline = cache.entry(key).or_insert_with(|| {
+                    CorrectionPipeline::new(
+                        correction_config(&args["config"]),
+                        dictionary_fixture(),
+                        true,
+                    )
+                });
+                let context = Context {
+                    command_mode: args["command_mode"].as_bool().unwrap(),
+                    preceding_text: optional(args, "preceding"),
+                    field_purpose: optional(args, "purpose"),
+                };
+                let result = pipeline.correct(&text(args, "text"), &context);
+                json!({
+                    "raw_text": result.raw_text,
+                    "corrected_text": result.corrected_text,
+                    "action": action_json(&result.action),
+                })
+            })
+        }
+        "boundaries" => json!(spans::boundaries(
+            &text(args, "text"),
+            unit_from(args, "unit")
+        )),
+        "distance_back" => json!(spans::distance_back(
+            &text(args, "text"),
+            args["caret"].as_u64().unwrap() as usize,
+            unit_from(args, "unit"),
+            args["count"].as_u64().unwrap() as usize,
+        )),
+        "distance_forward" => json!(spans::distance_forward(
+            &text(args, "text"),
+            args["caret"].as_u64().unwrap() as usize,
+            unit_from(args, "unit"),
+            args["count"].as_u64().unwrap() as usize,
+        )),
+        "find_phrase" => match spans::find_phrase(
+            &text(args, "text"),
+            args["caret"].as_u64().unwrap() as usize,
+            &text(args, "phrase"),
+        ) {
+            Some((start, end)) => json!([start, end]),
+            None => Value::Null,
+        },
+        "compile_edit" => {
+            let action = edit_from(&args["action"]);
+            let model = CorpusModel::named(args["model"].as_str().unwrap());
+            let plan = editing::compile_edit(&action, &model);
+            json!({
+                "actions": plan.actions.iter().map(insertion_json).collect::<Vec<_>>(),
+                "unsupported": plan.unsupported,
+            })
+        }
+        _ => return None,
+    };
+    Some(out)
+}
+
+fn insertion_json(action: &InsertionAction) -> Value {
+    match action {
+        InsertionAction::Text(text) => json!({"kind": "text", "text": text}),
+        InsertionAction::Command(name) => json!({"kind": "command", "name": name}),
+        InsertionAction::Keys(chords) => json!({"kind": "keys", "chords": chords}),
+    }
+}
+
+fn unit_from(args: &Value, key: &str) -> Unit {
+    match args[key].as_str().unwrap() {
+        "character" => Unit::Character,
+        "word" => Unit::Word,
+        "sentence" => Unit::Sentence,
+        "paragraph" => Unit::Paragraph,
+        "line" => Unit::Line,
+        "document" => Unit::Document,
+        other => panic!("unknown unit {other}"),
+    }
+}
+
+fn edit_from(value: &Value) -> EditAction {
+    use govox_core::domain::EditOp as O;
+    let op = match value["op"].as_str().unwrap() {
+        "undo" => O::Undo,
+        "redo" => O::Redo,
+        "delete_last" => O::DeleteLast,
+        "delete_unit" => O::DeleteUnit,
+        "delete_all" => O::DeleteAll,
+        "cut" => O::Cut,
+        "copy" => O::Copy,
+        "paste" => O::Paste,
+        "select_all" => O::SelectAll,
+        "select_last" => O::SelectLast,
+        "deselect" => O::Deselect,
+        "select_unit" => O::SelectUnit,
+        "move_unit" => O::MoveUnit,
+        "move_to_edge" => O::MoveToEdge,
+        "uppercase_last" => O::UppercaseLast,
+        "lowercase_last" => O::LowercaseLast,
+        "capitalize_last" => O::CapitalizeLast,
+        "select_phrase" => O::SelectPhrase,
+        "delete_phrase" => O::DeletePhrase,
+        "replace_phrase" => O::ReplacePhrase,
+        "move_before_phrase" => O::MoveBeforePhrase,
+        "move_after_phrase" => O::MoveAfterPhrase,
+        other => panic!("unknown op {other}"),
+    };
+    EditAction {
+        op,
+        unit: value["unit"]
+            .as_str()
+            .map(|u| unit_from(&json!({"u": u}), "u")),
+        direction: value["direction"].as_str().map(|d| match d {
+            "previous" => govox_core::domain::Direction::Previous,
+            "next" => govox_core::domain::Direction::Next,
+            other => panic!("unknown direction {other}"),
+        }),
+        count: value["count"].as_i64().unwrap_or(1),
+        phrase: value["phrase"].as_str().map(str::to_owned),
+        replacement: value["replacement"].as_str().map(str::to_owned),
+    }
+}
+
+/// The field states the generator used, by name.
+struct CorpusModel {
+    last: Option<String>,
+    snapshot: Option<FieldSnapshot>,
+}
+
+impl CorpusModel {
+    fn named(name: &str) -> Self {
+        let field = |text: &str, caret: usize| {
+            Some(FieldSnapshot {
+                text: text.into(),
+                caret,
+            })
+        };
+        match name {
+            "no-field-no-last" => Self {
+                last: None,
+                snapshot: None,
+            },
+            "last-only" => Self {
+                last: Some("hello world".into()),
+                snapshot: None,
+            },
+            "last-unicode" => Self {
+                last: Some("café ❤️".into()),
+                snapshot: None,
+            },
+            "field-matching" => Self {
+                last: Some("world".into()),
+                snapshot: field("hello world", 11),
+            },
+            "field-mismatched" => Self {
+                last: Some("world".into()),
+                snapshot: field("hello there", 11),
+            },
+            "field-no-last" => Self {
+                last: None,
+                snapshot: field("the old file is here", 20),
+            },
+            "field-long" => Self {
+                last: None,
+                snapshot: field(&"x".repeat(900), 900),
+            },
+            other => panic!("unknown model {other}"),
+        }
+    }
+}
+
+impl TextModel for CorpusModel {
+    fn last_insertion(&self) -> Option<String> {
+        self.last.clone()
+    }
+    fn record_insertion(&self, _text: &str) {}
+    fn consume_last(&self) -> Option<String> {
+        self.last.clone()
+    }
+    fn read_field(&self) -> Option<FieldSnapshot> {
+        self.snapshot.clone()
+    }
+    fn reset(&self) {}
+}
+
+/// Replay every Nth record instead of all of them.
+///
+/// The full corpus takes ~2 minutes, essentially all of it inside `fancy-regex`
+/// (the two patterns needing a backreference and a lookahead are the price of
+/// matching the reference exactly). That is fine in CI, which always runs the
+/// whole thing, but slow for a gate run on every save — so
+/// `GOVOX_PARITY_SAMPLE=50` gives a representative pass in a couple of seconds.
+///
+/// Sampling is strided rather than random: the corpus is generated in a stable
+/// order, so a stride hits every stage and every config variant, and the same
+/// stride always selects the same records. A failure found under sampling is
+/// reproducible without it.
+fn sample_stride() -> usize {
+    std::env::var("GOVOX_PARITY_SAMPLE")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|n| *n > 1)
+        .unwrap_or(1)
+}
+
+#[test]
+fn correction_matches_the_pinned_reference() {
+    let reader = BufReader::new(GzDecoder::new(CORPUS));
+    let stride = sample_stride();
+
+    let mut seen = 0usize;
+    let mut checked = 0usize;
+    let mut skipped: BTreeMap<String, usize> = BTreeMap::new();
+    let mut failures: Vec<String> = Vec::new();
+    // Per-stage tallies, so a wholly-broken stage is obvious rather than being
+    // buried in the first few reported failures.
+    let mut failed_by_stage: BTreeMap<String, usize> = BTreeMap::new();
+
+    for line in reader.lines() {
+        let line = line.expect("corpus line reads");
+        if line.trim().is_empty() {
+            continue;
+        }
+        seen += 1;
+        if stride > 1 && !seen.is_multiple_of(stride) {
+            continue;
+        }
+        let record: Value = serde_json::from_str(&line).expect("corpus line parses");
+        let stage = record["stage"].as_str().expect("stage").to_owned();
+        let args = &record["args"];
+
+        let Some(actual) = evaluate(&stage, args) else {
+            *skipped.entry(stage).or_default() += 1;
+            continue;
+        };
+        checked += 1;
+
+        let expected = &record["out"];
+        if &actual != expected {
+            *failed_by_stage.entry(stage.clone()).or_default() += 1;
+            if failures.len() < 25 {
+                failures.push(format!(
+                    "{stage}\n    args:     {args}\n    expected: {expected}\n    actual:   {actual}"
+                ));
+            }
+        }
+    }
+
+    assert!(checked > 0, "corpus produced no comparable records");
+
+    if !failures.is_empty() {
+        let total: usize = failed_by_stage.values().sum();
+        let summary: Vec<String> = failed_by_stage
+            .iter()
+            .map(|(s, n)| format!("{s}: {n}"))
+            .collect();
+        panic!(
+            "{total} of {checked} corpus records diverge from govox-py @ REFERENCE\n\
+             per stage: {}\n\nfirst {} failures:\n  {}",
+            summary.join(", "),
+            failures.len(),
+            failures.join("\n  ")
+        );
+    }
+
+    if !skipped.is_empty() {
+        // Not a failure: editing stages land in the second half of M2. Printed
+        // so the gap is visible rather than silently tolerated.
+        let summary: Vec<String> = skipped.iter().map(|(s, n)| format!("{s}: {n}")).collect();
+        println!(
+            "checked {checked}; stages not yet ported: {}",
+            summary.join(", ")
+        );
+    } else if stride > 1 {
+        println!("checked {checked} of {seen} records (stride {stride}), every stage ported");
+    } else {
+        println!("checked {checked} records, every stage ported");
+    }
+}

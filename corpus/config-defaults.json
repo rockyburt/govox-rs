@@ -1,0 +1,112 @@
+{
+  "activation": {
+    "double_tap_ms": 400,
+    "mode": "toggle",
+    "push_to_talk_key": "KEY_PAUSE",
+    "queue_size": 8,
+    "toggle_key": "KEY_SCROLLLOCK"
+  },
+  "audio": {
+    "device": "",
+    "frame_ms": 30,
+    "sample_rate": 16000
+  },
+  "correction": {
+    "collapse_repeats": true,
+    "dictionary_path": "",
+    "drop_fillers": true,
+    "enabled": true,
+    "filler_words": [
+      "um",
+      "uh",
+      "er",
+      "ah",
+      "erm",
+      "hmm",
+      "mhm"
+    ],
+    "number_formatting": false,
+    "spoken_emoji": false,
+    "spoken_punctuation": true
+  },
+  "editing": {
+    "command_mode": false,
+    "last_insertion_ttl_s": 30.0,
+    "read_focused_field": false
+  },
+  "feedback": {
+    "app_rules": [],
+    "chime": true,
+    "overlay": true,
+    "overlay_caption": true,
+    "overlay_caret_debug": false,
+    "overlay_click_to_stop": true,
+    "overlay_follow_caret": true,
+    "overlay_level": true,
+    "overlay_position": "top-right",
+    "overlay_require_caret_width": false,
+    "silence_auto_stop": true,
+    "silence_timeout_s": 60.0,
+    "tick": true,
+    "tick_interval_s": 45.0,
+    "tray_pulse": true
+  },
+  "ime": {
+    "baseline_engine": "xkb:us::eng",
+    "enabled": false,
+    "engine_name": "govox"
+  },
+  "indicator": {
+    "enabled": true
+  },
+  "injection": {
+    "method": "ydotool",
+    "ydotool_socket": ""
+  },
+  "logging": {
+    "format": "%(asctime)s %(name)s %(levelname)s %(message)s",
+    "level": "INFO",
+    "loggers": {},
+    "root_level": "WARNING",
+    "style": "auto"
+  },
+  "recognition": {
+    "advanced": {
+      "compression_ratio_threshold": 2.4,
+      "condition_on_previous_text": false,
+      "log_prob_threshold": -1.0,
+      "no_speech_threshold": 0.6,
+      "temperature": 0.0
+    },
+    "beam_size": 1,
+    "bias_prompt_token_budget": 180,
+    "compute_type": "int8",
+    "device": "auto",
+    "download_policy": "offline",
+    "engine": "local",
+    "language": "en",
+    "model": "small",
+    "model_dir": ""
+  },
+  "streaming": {
+    "buffer_trimming": "segment",
+    "buffer_trimming_sec": 10.0,
+    "enabled": false,
+    "engine": "whisper_streaming",
+    "fallback_to_utterance": true,
+    "min_chunk_size_s": 1.0,
+    "vad": true
+  },
+  "telemetry": {
+    "console": false,
+    "enabled": false,
+    "endpoint": "",
+    "service_name": "govox"
+  },
+  "vad": {
+    "hangover_ms": 400,
+    "min_speech_ms": 180,
+    "silence_threshold": 0.35,
+    "speech_threshold": 0.5
+  }
+}

@@ -1,0 +1,54 @@
+{
+  "_comment": [
+    "Reference measurements taken from govox-py BEFORE the Rust port changed anything.",
+    "Moving CTranslate2 -> GGUF changes the model files, so these numbers are not",
+    "reproducible after the fact. The gate is 'no worse', not 'identical':",
+    "  WER_rs <= WER_py + 1.0 absolute, and p95_latency_rs <= p95_latency_py.",
+    "Chasing exact equality across a model-format change would burn weeks for nothing."
+  ],
+  "latency": {
+    "measured_at": "2026-08-13",
+    "implementation": "govox-py",
+    "harness": "python -m govox.eval.latency",
+    "method": "1 warmup run then 20 timed runs; nearest-rank p95; transcribe+correct only, injection excluded",
+    "machine": {
+      "gpu": "NVIDIA GeForce RTX 4070 Laptop GPU (8188 MiB)",
+      "driver": "595.84"
+    },
+    "config": {
+      "model": "small",
+      "engine": "faster-whisper 1.2.1 (CTranslate2)",
+      "device": "cuda",
+      "compute_type": "float16",
+      "beam_size": 1,
+      "language": "en"
+    },
+    "samples": [
+      {
+        "audio": "govox-py/tests/fixtures/hello.wav",
+        "duration_s": 1.51,
+        "min_s": 0.117,
+        "median_s": 0.118,
+        "p95_s": 0.126
+      }
+    ],
+    "overall_p95_s": 0.126,
+    "target_p95_s": 1.5,
+    "caveat": [
+      "hello.wav is a 1.5s single-word utterance, so this is a floor measurement",
+      "dominated by fixed overhead rather than a representative dictation latency.",
+      "Before M5 claims parity, re-run over a corpus of realistic utterances",
+      "(5-15s of connected speech) on BOTH implementations."
+    ]
+  },
+  "wer": {
+    "status": "NOT YET MEASURED",
+    "blocker": [
+      "Needs a speech corpus with reference transcripts, which this repo does not have.",
+      "Plan: ~150 utterances of Rocky's own speech in the real usage domain, plus a",
+      "LibriSpeech test-clean slice. Measure on govox-py/CT2 first and record here,",
+      "then on govox-rs/GGUF over the identical audio."
+    ],
+    "target_wer": 0.1
+  }
+}

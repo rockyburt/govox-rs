@@ -1,0 +1,20 @@
+# M-1(b) spike. Outside the workspace like the others.
+#
+# The question is whether an IBus component can be serialized and registered
+# from Rust over raw D-Bus, without libibus and without a GLib main loop.
+# IBus's serializable objects use a bespoke GVariant layout that is not
+# documented anywhere; the exact shapes used here were read off the live daemon
+# with `gdbus call`, not guessed.
+[package]
+name = "ibus-probe"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+zbus = "5.19"
+zvariant = "5"
+anyhow = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }

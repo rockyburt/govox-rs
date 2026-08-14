@@ -1,0 +1,22 @@
+[package]
+name = "govox-core"
+description = "Domain types, traits, config and the correction/editing pipeline. No OS dependencies."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+serde.workspace = true
+toml.workspace = true
+regex.workspace = true
+fancy-regex.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+rstest.workspace = true
+insta.workspace = true
+serde_json.workspace = true
+flate2.workspace = true

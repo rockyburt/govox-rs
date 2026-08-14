@@ -1,0 +1,81 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/govox-core",
+    "crates/govox-audio",
+    "crates/govox-vad",
+    "crates/govox-asr",
+    "crates/govox-input",
+    "crates/govox-ime",
+    "crates/govox-a11y",
+    "crates/govox-ui",
+    "crates/govox-daemon",
+    "bin/govox",
+    "bin/govox-overlay",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "MIT"
+authors = ["Rocky Burt <rocky.burt@gmail.com>"]
+
+# Single source of truth for versions; member crates use `foo.workspace = true`.
+#
+# Only dependencies reachable from a compiled milestone live here. The heavy
+# native ones (whisper-rs, ort, cpal, zbus, x11rb) arrive with the milestone
+# that needs them, so an unused pin never silently rots and `cargo test
+# -p govox-core` stays fast.
+[workspace.dependencies]
+govox-core = { path = "crates/govox-core" }
+govox-audio = { path = "crates/govox-audio" }
+govox-vad = { path = "crates/govox-vad" }
+govox-asr = { path = "crates/govox-asr" }
+govox-input = { path = "crates/govox-input" }
+govox-ime = { path = "crates/govox-ime" }
+govox-a11y = { path = "crates/govox-a11y" }
+govox-ui = { path = "crates/govox-ui" }
+govox-daemon = { path = "crates/govox-daemon" }
+
+anyhow = "1"
+arc-swap = "1.9"
+cpal = "0.16"
+evdev = "0.13"
+ksni = "0.3"
+notify-rust = "4.18"
+rodio = "0.22"
+hf-hub = { version = "1", default-features = false, features = ["blocking", "rustls-tls"] }
+silero = "0.6"
+whisper-rs = "0.16"
+tiny-skia = "0.12"
+fontdue = "0.9"
+x11rb = { version = "0.14", features = ["shape", "randr"] }
+atspi = { version = "0.30", default-features = false, features = ["connection", "proxies", "wrappers", "tokio"] }
+zbus = { version = "5.11", default-features = false, features = ["tokio"] }
+zvariant = "5"
+clap = { version = "4.6", features = ["derive"] }
+fancy-regex = "0.19"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+flate2 = "1"
+futures-util = "0.3"
+thiserror = "2"
+tokio = { version = "1.53", features = ["full"] }
+tokio-util = "0.7"
+toml = "0.9"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+insta = "1"
+rstest = "0.26"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+# The correction-parity loop runs hundreds of times a day during M2; optimise
+# dependencies even in dev builds so it stays sub-second.
+[profile.dev.package."*"]
+opt-level = 2

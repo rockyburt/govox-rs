@@ -1,0 +1,35 @@
+[package]
+name = "govox-daemon"
+description = "Pipeline orchestration, diagnostics and telemetry."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+# Forwarded so `--features vulkan`/`--features cuda` reach whisper.cpp from
+# anywhere in the tree. The GPU backend is a compile-time choice all the way up.
+#
+# No `default` entry: `govox-asr` is a normal dependency, so its own default
+# (vulkan) applies. Naming vulkan again here would be a second place to keep in
+# step, and the failure would be silent — a stray CPU build of whisper.cpp that
+# looks fine and runs ten times too slow.
+[features]
+vulkan = ["govox-asr/vulkan"]
+cuda = ["govox-asr/cuda"]
+
+[dependencies]
+govox-core.workspace = true
+govox-audio.workspace = true
+govox-vad.workspace = true
+govox-asr.workspace = true
+govox-input.workspace = true
+govox-ime.workspace = true
+govox-a11y.workspace = true
+govox-ui.workspace = true
+anyhow.workspace = true
+arc-swap.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true

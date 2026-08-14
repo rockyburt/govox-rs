@@ -1,0 +1,48 @@
+[Unit]
+Description=govox-rs dictation daemon (development build)
+# Needs the live Wayland session env (WAYLAND_DISPLAY/DISPLAY), so bind to the
+# graphical session rather than plain login. ydotoold provides key injection.
+After=graphical-session.target ydotoold.service
+Wants=ydotoold.service
+PartOf=graphical-session.target
+# The whole coexistence problem, solved by systemd rather than by remembering.
+# Two daemons would both grab evdev and both try to register the IBus engine
+# named `govox`; the bus name refuses the second, but evdev does not, so the
+# activation key would fire twice. Conflicts= means starting this one *stops*
+# govox-py, and vice versa — the same relationship the two .deb packages
+# declare with Conflicts/Replaces.
+Conflicts=govox.service
+
+# Skipped, rather than crash-looped, when the binary is not there. This unit
+# runs out of a build directory, so `cargo clean` or a fresh clone leaves
+# nothing to start — and at login that would otherwise be a restart loop whose
+# journal says only "no such file". A skipped unit says exactly what is
+# missing, once.
+ConditionPathExists=%h/dev/personal/personal-playground/govox-rs/target/debug/govox
+
+[Service]
+Type=simple
+# The debug binary, deliberately. `[profile.dev.package."*"] opt-level = 2` in
+# the workspace manifest means every dependency — whisper.cpp and the Vulkan
+# backend included — is already optimised, so the only unoptimised code is
+# govox's own glue, which is not where the time goes. A release build would
+# add LTO and codegen-units=1 to every edit-run cycle for no audible gain.
+#
+# Point at the shared target directory rather than a worktree, so the unit
+# keeps working whichever worktree the build came from.
+ExecStart=%h/dev/personal/personal-playground/govox-rs/target/debug/govox run
+Restart=on-failure
+RestartSec=2
+# Exit 2 is a configuration or personal-dictionary error: govox refuses to run
+# rather than dictate without what it was told to use. Restarting cannot fix a
+# malformed file, and the loop actively hides the problem — `systemctl
+# is-active` keeps reporting "active" while the daemon dies every RestartSec.
+RestartPreventExitStatus=2
+
+# Development-only. The daemon logs recognised text at DEBUG when the config
+# asks it to, and this leaves it going to the journal exactly as govox-py's
+# does. Nothing here raises the level on its own.
+Environment=RUST_BACKTRACE=1
+
+[Install]
+WantedBy=graphical-session.target

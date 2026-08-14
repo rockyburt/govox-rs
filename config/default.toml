@@ -1,0 +1,255 @@
+[audio]
+sample_rate = 16000
+frame_ms = 30
+device = ""
+
+[recognition]
+engine = "local"
+model = "small"
+# Language code, or "auto" to let Whisper detect it from the audio. Detection
+# runs per utterance, so it switches between utterances, never mid-sentence,
+# and costs a little accuracy when you only ever speak one language.
+language = "en"
+device = "auto"
+compute_type = "int8"
+beam_size = 1
+bias_prompt_token_budget = 180
+download_policy = "offline"
+model_dir = ""
+# Which GPU to run on, by device index. Only consulted on a GPU build.
+#
+# 0 is whatever the driver enumerates first, which on a laptop with switchable
+# graphics is usually the integrated GPU rather than the discrete one — so the
+# default can silently be the slow choice. The indices are printed at startup as
+# `ggml_vulkan: N = <name>`; set this to the one you want and check the
+# "recognition configured" log line agrees.
+#
+# govox-rs only. `govox-py` cannot select a device at all.
+gpu_device = 0
+
+[recognition.advanced]
+temperature = 0.0
+compression_ratio_threshold = 2.4
+log_prob_threshold = -1.0
+no_speech_threshold = 0.6
+condition_on_previous_text = false
+
+[streaming]
+enabled = false
+engine = "whisper_streaming"
+min_chunk_size_s = 1.0
+buffer_trimming = "segment"
+buffer_trimming_sec = 10.0
+vad = true
+fallback_to_utterance = true
+
+[correction]
+enabled = true
+dictionary_path = ""
+# Drop standalone verbal fillers ("um", "uh", ...) before injection.
+drop_fillers = true
+# Filler words removed when they appear as standalone whole words (case-insensitive).
+# "like" and "you know" are common fillers but also meaningful words — add them
+# only if you accept that real uses may be dropped, e.g.:
+#   filler_words = ["um", "uh", "er", "ah", "erm", "hmm", "mhm", "like", "you know"]
+filler_words = ["um", "uh", "er", "ah", "erm", "hmm", "mhm"]
+# Collapse immediately-repeated words ("the the dog" -> "the dog").
+collapse_repeats = true
+# Turn spoken punctuation words into marks: "hello comma world period" ->
+# "Hello, world." Whisper already punctuates from prosody, so this only matters
+# when the word is said out loud. These are ordinary English words, so there is
+# a false-positive cost ("the Victorian period"); set false to dictate them
+# literally. "a"/"the" before the word already suppress it ("add a comma here").
+spoken_punctuation = true
+# Turn spoken emoji phrases into characters: "thumbs up" -> 👍. Off by default
+# on two counts. The phrases are ordinary English ("a thumbs up gesture"), and
+# whether an emoji reaches the screen depends on the injector: ydotool types by
+# emulating keycodes and there is no keycode for an emoji, so the clipboard
+# injector is the path most likely to work. See docs/reference/commands.md.
+spoken_emoji = false
+# Turn spoken numbers into digits, attaching currency and percent:
+# "twenty five dollars" -> "$25", "fifty percent" -> "50%". Off by default:
+# a bare small number is far more often prose than data ("I have one idea"),
+# so a lone number word only converts when a unit follows it. Multi-word
+# numbers ("twenty five") always compose. Dates, times and phone numbers are
+# deliberately not handled.
+number_formatting = false
+
+[injection]
+method = "ydotool"
+ydotool_socket = ""
+
+[activation]
+# govox observes activation keys without grabbing them, so the chosen key also
+# reaches the focused app. Toggle taps the key twice (harmless); push-to-talk
+# holds it for the whole utterance (a held modifier wrecks the focused app), so
+# toggle is the default. Defaults use keys with no modern function — run
+# `govox keys` to find the evdev name of a key that suits your keyboard.
+mode = "toggle"
+push_to_talk_key = "KEY_PAUSE"
+toggle_key = "KEY_SCROLLLOCK"
+queue_size = 8
+
+[editing]
+# How long "delete that" keeps trusting its record of the last dictated text.
+# govox cannot detect that you clicked into another window, so the record is
+# expired by age instead: past this many seconds, "delete that" reports that it
+# has nothing to delete rather than firing backspaces at whatever now has focus.
+# Raise it if you routinely pause before correcting; lower it if you switch
+# windows mid-dictation.
+last_insertion_ttl_s = 30.0
+
+# Enable the spoken "command mode" / "dictation mode" switch.
+#
+# While command mode is on, an utterance that does not match a command is
+# announced and discarded instead of typed. That is the point — it stops a
+# half-heard command scattering words through your document mid-edit — but it
+# is also a way to lose a sentence you meant to dictate, so it is opt-in.
+#
+# With this false the phrases do nothing: "command mode" dictates as ordinary
+# text, so no dormant state can surprise you.
+command_mode = false
+
+# Read the focused widget over AT-SPI to check govox's record before acting.
+#
+# With this on, "delete that" and friends confirm that the text before the
+# caret is still what govox typed, and refuse if it is not — closing the window
+# that last_insertion_ttl_s can only bound. Where the field cannot be read they
+# behave exactly as they do with this off, which is most of the time: GTK apps
+# expose their text, terminals do not, Chromium needs
+# --force-renderer-accessibility, and Electron apps expose nothing at all.
+#
+# Off by default because it can only ever turn a command that would have run
+# into one that refuses. Requires: sudo apt install python3-gi gir1.2-atspi-2.0
+read_focused_field = false
+
+[ime]
+# Show dictation as underlined provisional text inside the focused field — the
+# mechanism macOS Dictation uses — instead of only in the HUD caption.
+#
+# While a streaming session runs, the running transcript appears in the field
+# itself, revised in place as Whisper revises it, and commits as a single
+# insertion when you stop. Nothing enters the document until that commit, so
+# unlike rewriting injected text this cannot race your typing, and it reaches
+# apps that expose no writable accessible text at all (Chrome among them).
+#
+# Off by default: it registers govox as an input method, which changes how the
+# desktop routes keystrokes, and coverage is partial — an application that
+# ignores IBus simply shows nothing until the commit. With this off, streaming
+# behaves exactly as it always has.
+#
+# Requires: sudo apt install python3-gi gir1.2-ibus-1.0
+# Note: while active, the engine receives every keystroke in the focused field.
+# govox passes them straight through and never logs, counts or stores them.
+enabled = false
+
+# The engine govox registers, and the input source to return to when a session
+# ends. Check `ibus list-engine` if your layout is not US.
+engine_name = "govox"
+baseline_engine = "xkb:us::eng"
+
+[indicator]
+enabled = true
+
+[vad]
+speech_threshold = 0.5
+silence_threshold = 0.35
+min_speech_ms = 180
+hangover_ms = 400
+
+[feedback]
+# Recording-state feedback layers. Each is best-effort and independently
+# toggleable; any layer that fails degrades to a logged no-op and never
+# disrupts dictation.
+# Rising/falling chime on session start/stop.
+chime = true
+# Periodic soft "still listening" tick while a session is active.
+tick = true
+# Seconds between ticks (must be > 0).
+tick_interval_s = 45
+# Pulse the tray icon while listening.
+tray_pulse = true
+# On-screen overlay indicator (XWayland; degrades to no-op when unavailable).
+overlay = true
+# Overlay corner: "top-left", "top-right", "bottom-left", or "bottom-right".
+overlay_position = "top-right"
+# Sit under the caret when the focused application reports one (it does so
+# through the [ime] input method), instead of staying in the corner. On, the
+# card is where you are already looking; off, it stays out of the middle of
+# the screen. Either way it appears in its final position rather than fading
+# in at the corner and gliding across.
+overlay_follow_caret = true
+# Draw the caret rectangle the focused application reported, for calibrating
+# an app rule below. Debugging aid, off by default.
+overlay_caret_debug = false
+# Ignore a reported caret whose width is under 2px. Such a rectangle is the
+# signature of a client that never measured the position it is reporting, so
+# the card falls back to its corner rather than being placed confidently in
+# the wrong place.
+overlay_require_caret_width = false
+# Drive the overlay's level meter from live mic input.
+overlay_level = true
+# Show the streaming interim transcript in the overlay caption as you speak.
+overlay_caption = true
+# Click the overlay card to stop dictation (click-through preserved elsewhere).
+overlay_click_to_stop = true
+# Auto-stop a toggle session after prolonged silence (push-to-talk/streaming exempt).
+silence_auto_stop = true
+# Seconds of no voice before auto-stop fires (must be > 0).
+silence_timeout_s = 60
+
+# Per-application overlay overrides, resolved once when a session starts and
+# applied to the caret that application reports. Add one table per rule; the
+# first whose `match` applies wins, so put the specific ones first.
+#
+#   [[feedback.app_rules]]
+#   match = "google chrome"   # see below
+#   caret_offset_x = 167      # pixels, added to the reported caret
+#   caret_offset_y = 263
+#   follow_caret = false      # optional; overrides overlay_follow_caret here
+#
+# `match` is compared case-insensitively against the focused window's label,
+# which is "Application / Title" — for example
+# "Google Chrome / Inbox — Gmail". Run
+#
+#   cargo test -p govox-a11y --test live_atspi \
+#     reports_what_the_focused_field_exposes -- --ignored --nocapture
+#
+# with the window focused to print the exact label it reports.
+#
+# Two matching shapes, chosen by whether the pattern contains a wildcard:
+#
+#   "google chrome"            substring — matches whatever document is open
+#   "*chrome*"                 the same thing, spelled explicitly
+#   "google chrome / *gmail*"  anchored glob — this application, one document
+#   "?oogle chrome*"           `?` matches exactly one character
+#
+# A pattern with `*` or `?` is matched against the whole label, so "chrome*"
+# does NOT match "Google Chrome / ..." — use "*chrome*". Patterns without a
+# wildcard keep the original substring behaviour, so existing rules are
+# unaffected. There is no escape syntax; a literal `*` cannot be matched.
+
+[telemetry]
+enabled = false
+service_name = "govox"
+# Leave empty to use OTEL_EXPORTER_OTLP_ENDPOINT (or localhost:4317).
+endpoint = ""
+# Set true to print spans/metrics/logs to stdout instead of exporting via OTLP.
+console = false
+
+[logging]
+# Level for govox's own loggers (the "govox" namespace).
+level = "INFO"
+# Default level for every other logger, e.g. chatty third-party libraries.
+root_level = "WARNING"
+# Console log line format (stdlib logging format string).
+format = "%(asctime)s %(name)s %(levelname)s %(message)s"
+# Console rendering: "plain" (no color), "color" (ANSI level coloring),
+# "json" (one JSON object per line, ignores `format`), or "auto"
+# (color on an interactive terminal, plain otherwise).
+style = "auto"
+
+# Per-logger level overrides, keyed by dotted logger name. Examples:
+[logging.loggers]
+# faster_whisper = "ERROR"
+# "govox.recognition" = "DEBUG"

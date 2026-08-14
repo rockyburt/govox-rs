@@ -1,0 +1,26 @@
+# The govox-py commit this port is a port OF.
+#
+# Single source of truth. Every tool that reads govox-py — the golden-corpus
+# generator above all — resolves this, never a branch tip and never whatever
+# happens to be checked out.
+#
+# Why pin at all: govox-py is under active development. The M2 correction
+# parity harness generates its expected values BY RUNNING govox-py, so an
+# unpinned reference means the corpus silently re-baselines itself against
+# whatever landed that afternoon, and a genuine divergence looks like a passing
+# test.
+#
+# Moving the pin is a deliberate, reviewable act: bump the SHA here, regenerate
+# the corpus, and read the resulting diff. A corpus diff with no pin change is a
+# bug in govox-rs; a corpus diff WITH a pin change is govox-py's behaviour
+# moving, and each hunk needs a decision recorded in docs/parity.md.
+
+# Values are quoted so this file stays `source`-able from sh: the subject line
+# contains parentheses, which are shell syntax.
+GOVOX_PY_COMMIT="3ad8c0fb07b25972628f9ae4e4ac9943fde08507"
+GOVOX_PY_DATE="2026-08-13"
+GOVOX_PY_BRANCH="develop"
+GOVOX_PY_SUBJECT="fix(overlay): actually call _capture_app_rule at session start"
+
+# Default location of the govox-py checkout. Override with GOVOX_PY_REPO.
+GOVOX_PY_REPO_DEFAULT="../govox-py"

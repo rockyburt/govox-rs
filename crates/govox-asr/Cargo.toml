@@ -1,0 +1,40 @@
+[package]
+name = "govox-asr"
+description = "Whisper recognition, model fetch and the streaming processor."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+# GPU backends are a *compile-time* choice in whisper.cpp, where `[recognition]
+# device` is a runtime key in govox-py. That mismatch is the single most
+# dangerous thing in this crate: a CPU build silently falling back would look
+# like a working daemon that is ten times too slow. `device` is therefore
+# validated against the compiled backend at startup and fails loudly.
+#
+# **Vulkan is the default**, and that is a build-time decision as much as a
+# runtime one. Selecting the backend by feature means each distinct feature set
+# is a distinct fingerprint, and whisper.cpp's C++ is rebuilt from source for
+# every one of them — a measured 2m28s each. With a CPU default, alternating
+# between `cargo test --workspace` and `--features vulkan` rebuilt it on every
+# switch; one worktree accumulated ten `whisper-rs-sys` build directories,
+# four of them 655 MB. Defaulting to the variant that actually ships means the
+# common commands all agree, and it builds once.
+#
+# It also matches the machine: Vulkan works on the reference RTX 4070 with no
+# CUDA toolkit installed, and is portable across vendors.
+#
+# For a CPU-only build: `--no-default-features`.
+[features]
+default = ["vulkan"]
+vulkan = ["whisper-rs/vulkan"]
+cuda = ["whisper-rs/cuda"]
+
+[dependencies]
+govox-core.workspace = true
+hf-hub.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+whisper-rs.workspace = true

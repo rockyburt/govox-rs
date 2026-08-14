@@ -1,0 +1,35 @@
+[package]
+name = "govox"
+description = "Wayland-first speech-to-text dictation daemon."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "govox"
+path = "src/main.rs"
+
+# Forwarded so `--features vulkan`/`--features cuda` reach whisper.cpp from
+# anywhere in the tree. The GPU backend is a compile-time choice all the way up.
+#
+# No `default` entry: `govox-daemon` is a normal dependency, so its own default
+# (vulkan) applies. Naming vulkan again here would be a second place to keep in
+# step, and the failure would be silent — a stray CPU build of whisper.cpp that
+# looks fine and runs ten times too slow.
+[features]
+vulkan = ["govox-daemon/vulkan"]
+cuda = ["govox-daemon/cuda"]
+
+[dependencies]
+govox-audio.workspace = true
+govox-core.workspace = true
+govox-daemon.workspace = true
+govox-input.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

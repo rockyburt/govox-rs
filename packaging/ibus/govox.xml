@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  IBus component describing govox's dictation engine.
+
+  govox registers this same component at runtime whenever the daemon starts with
+  [ime] enabled, so dictation works without installing this file at all. Install
+  it only if you want a *permanent* input source — an entry under
+  Settings ▸ Keyboard ▸ Input Sources that survives govox not running.
+
+  That matters because gnome-shell resolves an input source by name: a name in
+  org.gnome.desktop.input-sources that nothing has registered cannot be
+  activated, so adding the entry before govox exists is what makes activation
+  fail. On disk, the name always resolves.
+
+  Install:
+      sudo install -Dm644 packaging/ibus/govox.xml \
+          /usr/share/ibus/component/govox.xml
+      ibus restart
+
+  <exec> is deliberately empty: the engine lives in the govox daemon (started by
+  systemd --user), not in a process ibus-daemon spawns on demand. When govox is
+  not running the input source is simply inert, and the keyboard behaves
+  normally.
+
+  Note that this file is the *static* registry, and ibus-daemon's
+  GetEnginesByNames reads only from here — it reports zero engines for a
+  runtime registration that succeeded, including for an engine that is live and
+  active. Do not use that method to check whether govox registered.
+-->
+<component>
+  <name>org.freedesktop.IBus.Govox</name>
+  <description>govox dictation</description>
+  <exec></exec>
+  <version>0.1</version>
+  <author>govox</author>
+  <license>MIT</license>
+  <homepage>https://github.com/rockyburt/govox</homepage>
+  <textdomain>govox</textdomain>
+
+  <engines>
+    <engine>
+      <name>govox</name>
+      <language>en</language>
+      <license>MIT</license>
+      <author>govox</author>
+      <icon>audio-input-microphone</icon>
+      <layout>us</layout>
+      <longname>govox dictation</longname>
+      <description>Speech dictation as provisional text</description>
+      <!-- Rank 0 so the desktop never offers dictation as a default input
+           source. An engine that types nothing until you speak is a bad thing
+           to land on by accident. -->
+      <rank>0</rank>
+    </engine>
+  </engines>
+</component>

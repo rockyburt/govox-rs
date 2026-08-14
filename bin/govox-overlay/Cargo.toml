@@ -1,0 +1,22 @@
+[package]
+name = "govox-overlay"
+description = "On-screen dictation HUD, driven over a line protocol on stdin."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "govox-overlay"
+path = "src/main.rs"
+
+[dependencies]
+tiny-skia.workspace = true
+fontdue.workspace = true
+x11rb.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+
+[dev-dependencies]
+govox-ui.workspace = true

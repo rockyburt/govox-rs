@@ -1,0 +1,18 @@
+# M-1(c) spike. Outside the workspace, like the whisper probe, so that linking
+# ONNX Runtime never enters the govox-core test loop.
+#
+# The question is not "does a Silero crate exist" — several do. It is whether
+# one reproduces the probability *sequence* govox-py's VadSegmenter is tuned
+# against, and how ONNX Runtime gets onto the machine at install time.
+[package]
+name = "silero-probe"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+silero = "0.6"
+hound = "3"
+anyhow = "1"

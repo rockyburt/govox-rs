@@ -1,0 +1,34 @@
+[Unit]
+Description=govox dictation daemon
+# Needs the live Wayland session env (WAYLAND_DISPLAY/DISPLAY), so bind to the
+# graphical session rather than plain login. ydotoold provides key injection.
+After=graphical-session.target ydotoold.service
+Wants=ydotoold.service
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+# A single binary: no interpreter, no venv, and no `--extra` list. govox-py
+# needed `uv run --extra audio --extra activation --extra recognition --extra
+# streaming --extra vad` because `uv run` re-syncs the venv to exactly the
+# extras named, so omitting one uninstalled its dependencies.
+ExecStart=%h/.local/bin/govox run
+Restart=on-failure
+RestartSec=2
+# govox-py needs SuccessExitStatus=143 here, because `uv run` reports the signal
+# its child died from as an exit code rather than re-raising it — so every
+# ordinary `systemctl --user restart` logged "Failed with result 'exit-code'"
+# and trained you to ignore the one line that should mean something has gone
+# wrong. A binary exits on SIGTERM the way systemd already expects, so the
+# workaround is gone rather than ported.
+#
+# Exit 2 is a configuration or personal-dictionary error: govox refuses to run
+# rather than dictate without what it was told to use. Restarting cannot fix a
+# malformed file, and the loop actively hides the problem — `systemctl
+# is-active` keeps reporting "active" while the daemon dies every RestartSec.
+# Stopping on 2 makes the unit report `failed`, which is the truth, and
+# `systemctl --user status govox` then shows the line naming the file.
+RestartPreventExitStatus=2
+
+[Install]
+WantedBy=graphical-session.target

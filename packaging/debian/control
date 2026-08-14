@@ -1,0 +1,23 @@
+Package: govox-rs
+Version: 0.1.0
+Section: utils
+Priority: optional
+Architecture: amd64
+Maintainer: Rocky Burt <rocky.burt@gmail.com>
+Depends: ydotool, wl-clipboard
+Provides: govox
+Conflicts: govox-py
+Replaces: govox-py
+Description: Wayland-first speech-to-text dictation daemon
+ govox provides local-first dictation for Wayland desktops with ydotool
+ injection and clipboard fallback.
+ .
+ This is the Rust implementation. It reserves the same Provides: govox as
+ govox-py and declares the reciprocal Conflicts/Replaces, so exactly one of
+ the two can be installed — which is what stops two daemons grabbing the same
+ evdev devices and registering the same IBus engine.
+ .
+ Architecture is amd64 rather than all: this ships a compiled binary with
+ whisper.cpp linked in. No python3 dependency, and no PyGObject, IBus typelib
+ or ONNX Runtime either — the Silero model and its runtime are compiled in,
+ and IBus and AT-SPI are reached over D-Bus rather than through libraries.

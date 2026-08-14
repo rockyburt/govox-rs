@@ -1,0 +1,14 @@
+[package]
+name = "govox-vad"
+description = "Silero VAD speech-probability backend."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+govox-core.workspace = true
+silero.workspace = true
+thiserror.workspace = true
+tracing.workspace = true

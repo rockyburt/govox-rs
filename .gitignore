@@ -1,0 +1,28 @@
+target/
+**/target/
+**/*.rs.bk
+.claude/worktrees/
+
+# Machine-local cargo settings, chiefly a shared `build.target-dir`.
+#
+# Deliberately untracked rather than committed. Cargo resolves a relative
+# `target-dir` against the directory holding the config file, and it discovers
+# config by walking *up* from the current directory — so a tracked
+# `.cargo/config.toml` would appear inside every git worktree and each one would
+# resolve to its own `target/`, which is the opposite of sharing. Only an
+# untracked file at the repo root is found from every worktree and points them
+# all at the same absolute path.
+#
+# The cost of not sharing is not theoretical: five worktrees each rebuilt
+# whisper.cpp from source, 7.5 GB of `whisper-rs-sys` artifacts across 39 GB of
+# `target/` directories.
+.cargo/
+
+# Spikes are throwaway probes that answer a question and are kept only as
+# executable evidence for docs/spikes/. Their lockfiles pin heavy native
+# dependencies (whisper.cpp, ONNX Runtime) that are not workspace dependencies.
+spikes/*/Cargo.lock
+
+# Reproducible extract of govox-py at the commit named in REFERENCE. Derived,
+# never edited, and re-created on demand by tools/parity-gen/pinned-source.sh.
+tools/parity-gen/.parity-src/
