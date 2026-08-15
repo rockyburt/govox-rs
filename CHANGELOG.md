@@ -8,6 +8,13 @@ before 1.0.0, minor versions may change behaviour.
 
 ### Added
 
+- **An About submenu in the tray**, reporting the version and licence alongside the facts
+  that actually decide how govox behaves: model, backend and GPU index, injector, preedit
+  and field reading. Each says whether the feature is *in effect*, not merely configured —
+  so a GPU build running on the integrated card, an IBus engine that never registered, or a
+  failed AT-SPI connection is now visible in the menu instead of only in the journal.
+  Built from `ksni`, which was already a dependency: no new crate, no second process, and
+  no GLib main loop.
 - **Spoken symbol names**, so an email address or a path can be dictated at all:
   "rocky at sign gmail dot com" → `rocky@gmail.com`, "usr forward slash local" →
   `usr/local`. 21 phrases in total — `at sign`, `dot`, `slash`, `backslash`,
@@ -23,6 +30,12 @@ before 1.0.0, minor versions may change behaviour.
 
 ### Fixed
 
+- **The HUD no longer sits under the desktop panel.** X11 reports a monitor as its full
+  physical rectangle, which takes no notice of panels, so the card was placed 24 px from the
+  top of the screen and the GNOME top bar — 45 px on the machine this was reported from —
+  covered the top 21 px of it. Placement now respects `_NET_WORKAREA`, which fixes both the
+  configured corner and the follow-the-caret position. Where no work area is published, or
+  it does not cover the monitor in question, the card falls back to its previous placement.
 - **Spoken emoji reached the document.** `ydotool` types by emulating keycodes and no
   keycode produces an emoji, so `ydotool type 👍` exited 0 and typed nothing — meaning
   `[correction] spoken_emoji` looked broken whenever it was switched on. Text containing an

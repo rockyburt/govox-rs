@@ -102,6 +102,12 @@ pub async fn run(config: Config, cancel: CancellationToken) -> Result<(), Pipeli
     let frame_ms = config.audio.frame_ms;
     let device = config.audio.device.clone();
     let vad_config = config.vad.clone();
+    let recognition_config = config.recognition.clone();
+
+    // Probed once and shared. `select_injector` needs it to choose a backend,
+    // and the About submenu needs to report the same choice — deriving that
+    // from a second probe would let the two disagree.
+    let caps = probe_capabilities();
 
     let recognizer = WhisperRecognizer::start(&config.recognition, &dictionary, queue_size)?;
     let asr = recognizer.handle();
@@ -163,17 +169,36 @@ pub async fn run(config: Config, cancel: CancellationToken) -> Result<(), Pipeli
     // Reading the focused field is an enhancement, never a dependency: an
     // accessibility bus that will not answer leaves the dictation buffer,
     // which is a complete implementation of the default configuration.
-    let text_model: Arc<dyn TextModel> = if read_focused_field {
+    // The flag records which of the two was actually built. Asking the trait
+    // object afterwards is not possible, and `read_focused_field` alone would
+    // claim AT-SPI even when the connection failed and the buffer was used —
+    // which is exactly the "configured but not in effect" case the About
+    // submenu exists to expose.
+    let (text_model, field_reading): (Arc<dyn TextModel>, bool) = if read_focused_field {
         match govox_a11y::AtspiTextModel::connect(ttl_s).await {
-            Ok(model) => Arc::new(model),
+            Ok(model) => (Arc::new(model), true),
             Err(error) => {
                 tracing::info!(%error, "continuing without field reading");
-                Arc::new(DictationBuffer::new(ttl_s))
+                (Arc::new(DictationBuffer::new(ttl_s)), false)
             }
         }
     } else {
-        Arc::new(DictationBuffer::new(ttl_s))
+        (Arc::new(DictationBuffer::new(ttl_s)), false)
     };
+
+    // Published here rather than at `Tray::start`, because half of it is not
+    // known until now: the accessibility bus has only just answered, and the
+    // input method either registered or did not.
+    if let Some(tray) = tray.as_ref() {
+        tray.set_about(about_facts(
+            &recognition_config,
+            &caps,
+            shared.config.load().injection.method,
+            preedit.is_some(),
+            field_reading,
+            streaming_config.enabled,
+        ));
+    }
 
     // Started now rather than on the first `show`, so the first session does
     // not wait for a process launch it can see.
@@ -229,7 +254,7 @@ pub async fn run(config: Config, cancel: CancellationToken) -> Result<(), Pipeli
             shared: Arc::clone(&shared),
             transcriber: WhisperTranscriber(asr),
             injector: govox_input::select_injector(
-                &probe_capabilities(),
+                &caps,
                 &shared.config.load(),
                 Arc::new(ProcessRunner),
                 SilentNotify,
@@ -1042,6 +1067,66 @@ fn spawn_capture(
     });
 }
 
+/// The facts the tray's About submenu reports.
+///
+/// Pure, so it can be checked without a desktop, a tray or a model — which is
+/// the only way the interesting cases get tested at all. Each row answers a
+/// question that currently requires reading the journal, and every one of them
+/// distinguishes *configured* from *in effect*: a GPU build running on the
+/// integrated card, an IBus engine that never registered, an AT-SPI connection
+/// that failed and silently left the dictation buffer in charge.
+fn about_facts(
+    recognition: &govox_core::config::RecognitionConfig,
+    caps: &govox_core::domain::Capabilities,
+    injection: govox_core::config::InjectionMethod,
+    preedit: bool,
+    field_reading: bool,
+    streaming: bool,
+) -> govox_ui::AboutFacts {
+    use govox_core::config::InjectionMethod;
+
+    let backend = govox_asr::Backend::compiled();
+    // `unwrap_or(false)` covers the one error case — `device = "cuda"` on a CPU
+    // build — which the daemon has already refused to start on, so reporting
+    // "not on a GPU" here is unreachable rather than wrong.
+    let on_gpu = govox_asr::whisper::resolve_gpu(recognition.device, backend).unwrap_or(false);
+    let backend = if on_gpu {
+        format!("{} · GPU {}", backend.name(), recognition.gpu_device)
+    } else {
+        backend.name().to_owned()
+    };
+
+    // Mirrors `select_injector`'s own rule rather than restating it loosely:
+    // ydotool is used when it is preferred *and* available, else the clipboard.
+    let prefers_ydotool = matches!(injection, InjectionMethod::Ydotool | InjectionMethod::Auto);
+    let injection = if prefers_ydotool && caps.supports_injection("ydotool") {
+        "ydotool"
+    } else {
+        "clipboard"
+    };
+
+    let yes_no = |on: bool, name: &str| {
+        if on {
+            name.to_owned()
+        } else {
+            "off".to_owned()
+        }
+    };
+
+    govox_ui::AboutFacts {
+        version: env!("CARGO_PKG_VERSION").to_owned(),
+        licence: "MIT".to_owned(),
+        rows: vec![
+            ("Model".to_owned(), recognition.model.clone()),
+            ("Backend".to_owned(), backend),
+            ("Injection".to_owned(), injection.to_owned()),
+            ("Preedit".to_owned(), yes_no(preedit, "IBus")),
+            ("Field reading".to_owned(), yes_no(field_reading, "AT-SPI")),
+            ("Streaming".to_owned(), yes_no(streaming, "on")),
+        ],
+    }
+}
+
 /// What this session can do, as far as the pipeline needs to know.
 ///
 /// The real probe — `/dev/uinput`, `$WAYLAND_DISPLAY`, `$PATH` — is `doctor`'s
@@ -1052,4 +1137,136 @@ fn probe_capabilities() -> govox_core::domain::Capabilities {
     // the diagnostic reports cannot disagree — which was the whole point of
     // there being a diagnostic.
     crate::diagnostics::capabilities(&crate::diagnostics::Probes::default())
+}
+
+#[cfg(test)]
+mod about_tests {
+    use super::about_facts;
+    use govox_core::config::{Config, Environment, InjectionMethod};
+    use govox_core::domain::Capabilities;
+
+    fn recognition() -> govox_core::config::RecognitionConfig {
+        Config::load_from(None, &Environment::default())
+            .expect("defaults load")
+            .recognition
+    }
+
+    fn row<'a>(facts: &'a govox_ui::AboutFacts, label: &str) -> &'a str {
+        facts
+            .rows
+            .iter()
+            .find(|(key, _)| key == label)
+            .map(|(_, value)| value.as_str())
+            .unwrap_or_else(|| panic!("no {label} row"))
+    }
+
+    fn caps(injection: &[&str]) -> Capabilities {
+        Capabilities {
+            injection_strategies: injection.iter().map(|s| (*s).to_owned()).collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn the_version_and_licence_are_reported() {
+        let facts = about_facts(
+            &recognition(),
+            &caps(&["ydotool"]),
+            InjectionMethod::Auto,
+            false,
+            false,
+            false,
+        );
+        assert_eq!(facts.version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(facts.licence, "MIT");
+    }
+
+    /// The point of the submenu: a feature that is *configured* but not in
+    /// effect must not be reported as working.
+    #[test]
+    fn a_failed_atspi_connection_reads_as_off() {
+        let facts = about_facts(
+            &recognition(),
+            &caps(&["ydotool"]),
+            InjectionMethod::Auto,
+            false,
+            // read_focused_field was true in the config, but connect() failed
+            false,
+            false,
+        );
+        assert_eq!(row(&facts, "Field reading"), "off");
+    }
+
+    #[test]
+    fn an_ibus_engine_that_registered_reads_as_ibus() {
+        let facts = about_facts(
+            &recognition(),
+            &caps(&["ydotool"]),
+            InjectionMethod::Auto,
+            true,
+            true,
+            true,
+        );
+        assert_eq!(row(&facts, "Preedit"), "IBus");
+        assert_eq!(row(&facts, "Field reading"), "AT-SPI");
+        assert_eq!(row(&facts, "Streaming"), "on");
+    }
+
+    /// Must mirror `select_injector`: preferring ydotool where it is not
+    /// available still ends on the clipboard, and About has to say so.
+    #[test]
+    fn injection_follows_what_is_actually_available() {
+        let with = about_facts(
+            &recognition(),
+            &caps(&["ydotool", "clipboard"]),
+            InjectionMethod::Auto,
+            false,
+            false,
+            false,
+        );
+        assert_eq!(row(&with, "Injection"), "ydotool");
+
+        let without = about_facts(
+            &recognition(),
+            &caps(&["clipboard"]),
+            InjectionMethod::Auto,
+            false,
+            false,
+            false,
+        );
+        assert_eq!(row(&without, "Injection"), "clipboard");
+    }
+
+    #[test]
+    fn choosing_the_clipboard_is_reported_even_where_ydotool_works() {
+        let facts = about_facts(
+            &recognition(),
+            &caps(&["ydotool", "clipboard"]),
+            InjectionMethod::Clipboard,
+            false,
+            false,
+            false,
+        );
+        assert_eq!(row(&facts, "Injection"), "clipboard");
+    }
+
+    /// The row that answers "why is dictation slow?" — the default
+    /// `gpu_device = 0` is the integrated GPU on a switchable-graphics laptop.
+    #[test]
+    fn the_backend_row_names_the_gpu_index_when_on_a_gpu() {
+        let facts = about_facts(
+            &recognition(),
+            &caps(&["ydotool"]),
+            InjectionMethod::Auto,
+            false,
+            false,
+            false,
+        );
+        let backend = row(&facts, "Backend");
+        let compiled = govox_asr::Backend::compiled();
+        assert!(backend.starts_with(compiled.name()), "{backend}");
+        if compiled.is_gpu() {
+            assert!(backend.contains("GPU "), "{backend}");
+        }
+    }
 }

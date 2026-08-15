@@ -242,10 +242,16 @@ impl Hud {
     fn reposition(&mut self, immediate: bool) -> anyhow::Result<()> {
         let monitors = self.window.monitors();
         let card = (self.state.width, self.state.height);
+        // Panels are excluded when *placing* but not when deciding which
+        // monitor a point is on: a caret reported inside the top bar's strip
+        // still belongs to that monitor, and hit-testing against the trimmed
+        // rectangle would reject it and send the card to the corner instead.
+        let work_area = self.window.work_area();
 
         if let Some(caret) = self.anchor
             && let Some(monitor) = g::monitor_at(&monitors, caret.x, caret.y)
-            && let Some((x, y)) = g::caret_position(caret, monitor, card)
+            && let Some((x, y)) =
+                g::caret_position(caret, monitor, g::usable_area(monitor, work_area), card)
         {
             return self.place(x, y, immediate);
         }
@@ -256,7 +262,7 @@ impl Hud {
             .and_then(|(x, y)| g::monitor_at(&monitors, x, y))
             .or_else(|| monitors.first().copied())
             .unwrap_or(g::Rect::new(0, 0, 1920, 1080));
-        let (x, y) = g::corner_position(monitor, card, self.corner);
+        let (x, y) = g::corner_position(g::usable_area(monitor, work_area), card, self.corner);
         // The corner is a fixed home, not somewhere to drift to: landing there
         // at once avoids a long diagonal glide when the caret is simply lost.
         self.place(x, y, immediate || self.anchor.is_none())

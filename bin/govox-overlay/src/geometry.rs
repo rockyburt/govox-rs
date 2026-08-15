@@ -150,6 +150,58 @@ impl Rect {
     pub const fn contains(&self, x: i32, y: i32) -> bool {
         x >= self.x && x < self.x + self.width && y >= self.y && y < self.y + self.height
     }
+
+    /// The overlap of two rectangles, or `None` if they do not meet.
+    ///
+    /// `None` rather than a zero-sized rectangle: a card placed inside an empty
+    /// area is nonsense, and the caller has a sensible fallback for "these do
+    /// not overlap" that it does not have for "this area is 0 px wide".
+    #[must_use]
+    pub const fn intersect(&self, other: Self) -> Option<Self> {
+        let x = if self.x > other.x { self.x } else { other.x };
+        let y = if self.y > other.y { self.y } else { other.y };
+        let right = {
+            let a = self.x + self.width;
+            let b = other.x + other.width;
+            if a < b { a } else { b }
+        };
+        let bottom = {
+            let a = self.y + self.height;
+            let b = other.y + other.height;
+            if a < b { a } else { b }
+        };
+        if right <= x || bottom <= y {
+            return None;
+        }
+        Some(Self::new(x, y, right - x, bottom - y))
+    }
+}
+
+/// The part of `monitor` a card may actually occupy.
+///
+/// X11 reports monitors as their full physical rectangle, which takes no notice
+/// of panels and docks. On GNOME the top bar is 45 px tall on the reference
+/// machine, and the card is placed at `monitor.y + MARGIN` = 24 — so the top
+/// 21 px of a 52 px card sat *underneath the panel*. Nothing in the geometry
+/// knew the panel existed.
+///
+/// `_NET_WORKAREA` is the freedesktop answer to that, and intersecting with it
+/// fixes the corner and the caret paths together, because both are placed
+/// against this same rectangle.
+///
+/// Two deliberate fallbacks, both to the untrimmed monitor:
+///
+/// * **No property.** Not every environment sets one, and a card in a slightly
+///   wrong place beats no card at all.
+/// * **No overlap.** `_NET_WORKAREA` is a single screen-wide rectangle rather
+///   than one per monitor, so on a multi-head setup it can miss a monitor
+///   entirely — a portrait display below the primary, for instance. Trimming to
+///   an empty area would put the card nowhere.
+#[must_use]
+pub fn usable_area(monitor: Rect, work_area: Option<Rect>) -> Rect {
+    work_area
+        .and_then(|area| monitor.intersect(area))
+        .unwrap_or(monitor)
 }
 
 /// Which corner the card sits in when there is no caret to follow.
@@ -238,8 +290,21 @@ pub fn corner_position(monitor: Rect, card: (i32, i32), corner: Corner) -> (i32,
 /// against the monitor it claims to be on and rejected if it does not land
 /// there — **a HUD in the wrong place is worse than one in a predictable
 /// corner**.
+///
+/// `monitor` decides whether the caret belongs here; `usable` decides where the
+/// card may go. They are separate arguments because they answer different
+/// questions and the trimmed rectangle is the wrong answer to the first: a
+/// caret reported inside the panel's strip is still on that monitor, and
+/// testing it against the work area would reject a perfectly good caret and
+/// send the card to the corner. Pass the same rectangle twice where there is no
+/// work area to speak of.
 #[must_use]
-pub fn caret_position(caret: Rect, monitor: Rect, card: (i32, i32)) -> Option<(i32, i32)> {
+pub fn caret_position(
+    caret: Rect,
+    monitor: Rect,
+    usable: Rect,
+    card: (i32, i32),
+) -> Option<(i32, i32)> {
     if !monitor.contains(caret.x, caret.y) {
         return None;
     }
@@ -248,11 +313,11 @@ pub fn caret_position(caret: Rect, monitor: Rect, card: (i32, i32)) -> Option<(i
     // Below the caret, unless that would run off the bottom, in which case flip
     // above it — the same rule a candidate window follows.
     let mut y = caret.y + caret.height.max(0) + CARET_GAP;
-    if y + card_h > monitor.y + monitor.height {
+    if y + card_h > usable.y + usable.height {
         y = caret.y - card_h - CARET_GAP;
     }
-    let x = caret.x.clamp(monitor.x, monitor.x + monitor.width - card_w);
-    let y = y.clamp(monitor.y, monitor.y + monitor.height - card_h);
+    let x = caret.x.clamp(usable.x, usable.x + usable.width - card_w);
+    let y = y.clamp(usable.y, usable.y + usable.height - card_h);
     Some((x, y))
 }
 
@@ -393,6 +458,86 @@ mod tests {
         );
     }
 
+    // --- work area ----------------------------------------------------------
+
+    /// The reported bug, with the reporter's real numbers.
+    ///
+    /// `_NET_WORKAREA` on that machine is `y = 45`, so the GNOME top bar is
+    /// 45 px. Placing at `monitor.y + MARGIN` = 24 put the top 21 px of a
+    /// 52 px card underneath the panel — about 40% of it.
+    #[test]
+    fn a_top_corner_clears_the_gnome_panel() {
+        let card = (CARD_WIDTH_IDLE, CARD_HEIGHT);
+        let screen = Rect::new(0, 0, 3840, 2160);
+        let work = Rect::new(0, 45, 3840, 2115);
+        let corner = Corner::parse("top-right").unwrap();
+
+        let (_, before) = corner_position(screen, card, corner);
+        assert_eq!(before, MARGIN, "the old behaviour, for contrast");
+        assert!(before < 45, "the card started inside the 45px panel");
+
+        let (_, after) = corner_position(usable_area(screen, Some(work)), card, corner);
+        assert_eq!(after, 45 + MARGIN);
+        assert!(after >= 45, "the whole card must clear the panel");
+    }
+
+    #[test]
+    fn a_bottom_corner_is_unaffected_by_a_top_panel() {
+        let card = (CARD_WIDTH_IDLE, CARD_HEIGHT);
+        let screen = Rect::new(0, 0, 3840, 2160);
+        let work = Rect::new(0, 45, 3840, 2115);
+        let corner = Corner::parse("bottom-right").unwrap();
+        // 45 + 2115 == 2160: the bottom edge did not move, so neither does the
+        // card. This is why "bottom-right" was a usable workaround.
+        assert_eq!(
+            corner_position(usable_area(screen, Some(work)), card, corner),
+            corner_position(screen, card, corner)
+        );
+    }
+
+    /// `_NET_WORKAREA` is one screen-wide rectangle, not one per monitor, so on
+    /// a multi-head layout it can miss a monitor entirely. Trimming to an empty
+    /// area would place the card nowhere.
+    #[test]
+    fn a_monitor_outside_the_work_area_keeps_its_full_rectangle() {
+        let below = Rect::new(0, 2160, 1920, 1080);
+        let work = Rect::new(0, 45, 3840, 2115);
+        assert_eq!(usable_area(below, Some(work)), below);
+    }
+
+    #[test]
+    fn a_missing_work_area_changes_nothing() {
+        assert_eq!(usable_area(monitor(), None), monitor());
+    }
+
+    #[test]
+    fn intersect_is_none_when_the_rectangles_only_touch() {
+        // Half-open, like `contains`: a shared edge is not an overlap.
+        let left = Rect::new(0, 0, 100, 100);
+        let right = Rect::new(100, 0, 100, 100);
+        assert_eq!(left.intersect(right), None);
+        assert_eq!(
+            left.intersect(Rect::new(50, 50, 100, 100)),
+            Some(Rect::new(50, 50, 50, 50))
+        );
+    }
+
+    /// The caret path is placed against the same rectangle, so it clears the
+    /// panel too — a caret near the top of the screen used to put the card
+    /// under it.
+    #[test]
+    fn the_caret_path_also_clears_the_panel() {
+        let card = (CARD_WIDTH_CAPTION, CARD_HEIGHT);
+        let screen = Rect::new(0, 0, 3840, 2160);
+        let work = Rect::new(0, 45, 3840, 2115);
+        // A caret high enough that the card would flip above it and land in
+        // the panel strip.
+        let caret = Rect::new(600, 20, 2, 24);
+        let (_, y) = caret_position(caret, screen, usable_area(screen, Some(work)), card)
+            .expect("the caret is on this monitor");
+        assert!(y >= 45, "card at y={y} is under the 45px panel");
+    }
+
     #[test]
     fn a_corner_on_a_second_monitor_is_relative_to_that_monitor() {
         // The bug this guards: treating monitor-local geometry as global put
@@ -411,7 +556,7 @@ mod tests {
         let caret = Rect::new(400, 300, 11, 26);
         let card = (PILL_WIDTH, PILL_HEIGHT);
         assert_eq!(
-            caret_position(caret, monitor(), card),
+            caret_position(caret, monitor(), monitor(), card),
             Some((400, 300 + 26 + CARET_GAP))
         );
     }
@@ -422,7 +567,7 @@ mod tests {
         // clamped to the screen edge and covers the text being dictated.
         let caret = Rect::new(400, 1040, 11, 26);
         let card = (PILL_WIDTH, PILL_HEIGHT);
-        let (_, y) = caret_position(caret, monitor(), card).unwrap();
+        let (_, y) = caret_position(caret, monitor(), monitor(), card).unwrap();
         assert!(y < 1040, "should be above the caret, got {y}");
         assert_eq!(y, 1040 - PILL_HEIGHT - CARET_GAP);
     }
@@ -431,7 +576,7 @@ mod tests {
     fn a_caret_near_the_right_edge_keeps_the_whole_card_on_screen() {
         let caret = Rect::new(1900, 300, 11, 26);
         let card = (PILL_WIDTH, PILL_HEIGHT);
-        let (x, _) = caret_position(caret, monitor(), card).unwrap();
+        let (x, _) = caret_position(caret, monitor(), monitor(), card).unwrap();
         assert_eq!(x, 1920 - PILL_WIDTH);
     }
 
@@ -443,7 +588,7 @@ mod tests {
         // the caller falls back rather than clamping nonsense onto a screen.
         let caret = Rect::new(9000, 9000, 11, 26);
         assert_eq!(
-            caret_position(caret, monitor(), (PILL_WIDTH, PILL_HEIGHT)),
+            caret_position(caret, monitor(), monitor(), (PILL_WIDTH, PILL_HEIGHT)),
             None
         );
     }
