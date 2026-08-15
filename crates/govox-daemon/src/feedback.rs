@@ -32,7 +32,19 @@ pub struct FeedbackChannel<S: PlaySink> {
     notifier: Box<dyn Notifier>,
     session: Mutex<SessionTracker>,
     tick: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// Recomputes the tray's About facts, run when a session ends.
+    ///
+    /// Some of those facts are only knowable *after* something has happened —
+    /// which injector actually carried the text, in particular — so they cannot
+    /// be published once at startup and left. A session edge is the natural
+    /// place to refresh: it is where the numbers can have changed, and it fires
+    /// a few times a minute rather than per utterance, so the menu stays
+    /// current without a stream of D-Bus updates behind it.
+    about: Option<AboutRefresh>,
 }
+
+/// Builds the current About facts on demand.
+pub type AboutRefresh = Arc<dyn Fn() -> govox_ui::AboutFacts + Send + Sync>;
 
 impl<S: PlaySink + 'static> FeedbackChannel<S> {
     #[must_use]
@@ -51,7 +63,16 @@ impl<S: PlaySink + 'static> FeedbackChannel<S> {
             notifier,
             session: Mutex::new(SessionTracker::default()),
             tick: Mutex::new(None),
+            about: None,
         }
+    }
+
+    /// Attach the About refresh. Separate from `new` so every existing caller —
+    /// and every test — keeps working without one.
+    #[must_use]
+    pub fn with_about(mut self, about: AboutRefresh) -> Self {
+        self.about = Some(about);
+        self
     }
 
     fn start_layers(&self) {
@@ -162,7 +183,14 @@ impl<S: PlaySink + 'static> Announcer for FeedbackChannel<S> {
             .observe(state);
         match edge {
             Some(SessionEdge::Started) => self.start_layers(),
-            Some(SessionEdge::Stopped) => self.stop_layers(),
+            Some(SessionEdge::Stopped) => {
+                self.stop_layers();
+                // After the layers, and only on the closing edge: the session
+                // that just ended is what may have changed the facts.
+                if let (Some(tray), Some(about)) = (&self.tray, &self.about) {
+                    tray.set_about(about());
+                }
+            }
             None => {}
         }
     }

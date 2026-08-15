@@ -109,6 +109,10 @@ pub async fn run(config: Config, cancel: CancellationToken) -> Result<(), Pipeli
     // from a second probe would let the two disagree.
     let caps = probe_capabilities();
 
+    // Shared with the injector so the About menu can report the backend that
+    // actually carried the text, not merely the one chosen at startup.
+    let injection_report = govox_input::InjectionReport::new();
+
     let recognizer = WhisperRecognizer::start(&config.recognition, &dictionary, queue_size)?;
     let asr = recognizer.handle();
     let asr_handle = recognizer.handle();
@@ -186,18 +190,35 @@ pub async fn run(config: Config, cancel: CancellationToken) -> Result<(), Pipeli
         (Arc::new(DictationBuffer::new(ttl_s)), false)
     };
 
+    // One closure, called now and again at the end of every session. The facts
+    // it reads are not all fixed: the injector's is only known once something
+    // has been injected, so publishing once at startup would freeze a value
+    // that is still "unused" at the time.
+    let about: crate::feedback::AboutRefresh = {
+        let recognition = recognition_config.clone();
+        let caps = caps.clone();
+        let method = shared.config.load().injection.method;
+        let report = injection_report.clone();
+        let preedit_active = preedit.is_some();
+        let streaming_enabled = streaming_config.enabled;
+        Arc::new(move || {
+            about_facts(
+                &recognition,
+                &caps,
+                method,
+                report.last(),
+                preedit_active,
+                field_reading,
+                streaming_enabled,
+            )
+        })
+    };
+
     // Published here rather than at `Tray::start`, because half of it is not
     // known until now: the accessibility bus has only just answered, and the
     // input method either registered or did not.
     if let Some(tray) = tray.as_ref() {
-        tray.set_about(about_facts(
-            &recognition_config,
-            &caps,
-            shared.config.load().injection.method,
-            preedit.is_some(),
-            field_reading,
-            streaming_config.enabled,
-        ));
+        tray.set_about(about());
     }
 
     // Started now rather than on the first `show`, so the first session does
@@ -207,13 +228,16 @@ pub async fn run(config: Config, cancel: CancellationToken) -> Result<(), Pipeli
     }
 
     let loop_feedback = feedback_config.clone();
-    let announcer = Arc::new(FeedbackChannel::new(
-        feedback_config,
-        tray,
-        chime,
-        overlay,
-        Box::new(DesktopNotifier::new()),
-    ));
+    let announcer = Arc::new(
+        FeedbackChannel::new(
+            feedback_config,
+            tray,
+            chime,
+            overlay,
+            Box::new(DesktopNotifier::new()),
+        )
+        .with_about(about),
+    );
 
     let (utterances_tx, utterances) = mpsc::channel::<Job>(queue_size);
     let (events_tx, events) = mpsc::channel::<Event>(256);
@@ -258,6 +282,7 @@ pub async fn run(config: Config, cancel: CancellationToken) -> Result<(), Pipeli
                 &shared.config.load(),
                 Arc::new(ProcessRunner),
                 SilentNotify,
+                injection_report.clone(),
             ),
             text_model: Arc::clone(&text_model),
             announcer: Box::new(SharedAnnouncer(Arc::clone(&announcer))),
@@ -1079,11 +1104,13 @@ fn about_facts(
     recognition: &govox_core::config::RecognitionConfig,
     caps: &govox_core::domain::Capabilities,
     injection: govox_core::config::InjectionMethod,
+    used: govox_input::UsedBackend,
     preedit: bool,
     field_reading: bool,
     streaming: bool,
 ) -> govox_ui::AboutFacts {
     use govox_core::config::InjectionMethod;
+    use govox_input::UsedBackend;
 
     let backend = govox_asr::Backend::compiled();
     // `unwrap_or(false)` covers the one error case — `device = "cuda"` on a CPU
@@ -1091,7 +1118,17 @@ fn about_facts(
     // "not on a GPU" here is unreachable rather than wrong.
     let on_gpu = govox_asr::whisper::resolve_gpu(recognition.device, backend).unwrap_or(false);
     let backend = if on_gpu {
-        format!("{} · GPU {}", backend.name(), recognition.gpu_device)
+        // "requested", not a bare index. Whether ggml honoured it cannot be
+        // asked: whisper.cpp takes `gpu_device` and reports nothing back, and
+        // the only evidence is the `ggml_vulkan: N = <name>` lines it prints at
+        // startup. Naming the index without that qualifier would claim a
+        // verification this cannot perform — the exact overstatement this
+        // change exists to remove.
+        format!(
+            "{} · GPU {} requested",
+            backend.name(),
+            recognition.gpu_device
+        )
     } else {
         backend.name().to_owned()
     };
@@ -1099,10 +1136,22 @@ fn about_facts(
     // Mirrors `select_injector`'s own rule rather than restating it loosely:
     // ydotool is used when it is preferred *and* available, else the clipboard.
     let prefers_ydotool = matches!(injection, InjectionMethod::Ydotool | InjectionMethod::Auto);
-    let injection = if prefers_ydotool && caps.supports_injection("ydotool") {
+    let selected = if prefers_ydotool && caps.supports_injection("ydotool") {
         "ydotool"
     } else {
         "clipboard"
+    };
+    // What was chosen and what has actually run are different facts, and the
+    // interesting case is when they disagree: `ydotool` selected, rejecting
+    // every call, and the fallback quietly carrying the text over the
+    // clipboard. Before this, the menu reported the choice and called it truth.
+    let injection = match used {
+        UsedBackend::NotYet => format!("{selected} (selected, unused)"),
+        UsedBackend::Ydotool => "ydotool".to_owned(),
+        UsedBackend::Clipboard if selected == "ydotool" => {
+            "clipboard (ydotool did not carry it)".to_owned()
+        }
+        UsedBackend::Clipboard => "clipboard".to_owned(),
     };
 
     let yes_no = |on: bool, name: &str| {
@@ -1114,12 +1163,17 @@ fn about_facts(
     };
 
     govox_ui::AboutFacts {
-        version: env!("CARGO_PKG_VERSION").to_owned(),
-        licence: "MIT".to_owned(),
+        // The build, not the manifest. `CARGO_PKG_VERSION` is "0.1.0" for every
+        // commit since the tag, so it cannot answer the question the menu is
+        // opened to answer. See this crate's `build.rs`.
+        version: env!("GOVOX_BUILD_VERSION").to_owned(),
+        // Read from the manifest rather than written out again here, so
+        // relicensing cannot leave the menu asserting the old one.
+        licence: env!("CARGO_PKG_LICENSE").to_owned(),
         rows: vec![
             ("Model".to_owned(), recognition.model.clone()),
             ("Backend".to_owned(), backend),
-            ("Injection".to_owned(), injection.to_owned()),
+            ("Injection".to_owned(), injection),
             ("Preedit".to_owned(), yes_no(preedit, "IBus")),
             ("Field reading".to_owned(), yes_no(field_reading, "AT-SPI")),
             ("Streaming".to_owned(), yes_no(streaming, "on")),
@@ -1144,6 +1198,7 @@ mod about_tests {
     use super::about_facts;
     use govox_core::config::{Config, Environment, InjectionMethod};
     use govox_core::domain::Capabilities;
+    use govox_input::UsedBackend;
 
     fn recognition() -> govox_core::config::RecognitionConfig {
         Config::load_from(None, &Environment::default())
@@ -1167,28 +1222,125 @@ mod about_tests {
         }
     }
 
+    /// The common case: ydotool available, and it did the work.
+    fn facts(used: UsedBackend) -> govox_ui::AboutFacts {
+        about_facts(
+            &recognition(),
+            &caps(&["ydotool", "clipboard"]),
+            InjectionMethod::Auto,
+            used,
+            false,
+            false,
+            false,
+        )
+    }
+
+    // --- version and licence ------------------------------------------------
+
+    /// `CARGO_PKG_VERSION` is "0.1.0" for every commit since the tag, so it
+    /// cannot answer "which build is this?". `build.rs` attaches the commit as
+    /// semver build metadata, which can.
+    ///
+    /// The exact value depends on where the build happened — on the tag, past
+    /// it, or with no repository at all — so this pins the *shape*: the
+    /// manifest version, optionally followed by `+` and the commit.
     #[test]
-    fn the_version_and_licence_are_reported() {
+    fn the_version_is_the_manifest_plus_the_commit() {
+        let version = facts(UsedBackend::Ydotool).version;
+        let manifest = env!("CARGO_PKG_VERSION");
+
+        let Some(metadata) = version.strip_prefix(manifest) else {
+            panic!("{version:?} does not start with the manifest version {manifest:?}");
+        };
+        match metadata {
+            // Standing on the release tag, or built without git.
+            "" => {}
+            // Anywhere else: `+`, then the commit, and nothing that would make
+            // this a *prerelease* — a leading `-` would sort the build below
+            // the release it comes after.
+            other => {
+                let commit = other
+                    .strip_prefix('+')
+                    .unwrap_or_else(|| panic!("{version:?} must separate metadata with '+'"));
+                assert!(
+                    !commit.is_empty()
+                        && commit
+                            .chars()
+                            .all(|c| c.is_ascii_alphanumeric() || c == '.'),
+                    "{commit:?} is not valid semver build metadata"
+                );
+            }
+        }
+        assert!(
+            !version.contains(&format!("{manifest}-")),
+            "{version:?} uses a prerelease suffix, which sorts below {manifest}"
+        );
+    }
+
+    /// Read from the manifest, so relicensing cannot leave this asserting the
+    /// old licence.
+    #[test]
+    fn the_licence_comes_from_the_manifest() {
+        assert_eq!(
+            facts(UsedBackend::Ydotool).licence,
+            env!("CARGO_PKG_LICENSE")
+        );
+        assert_eq!(facts(UsedBackend::Ydotool).licence, "MIT");
+    }
+
+    // --- injection: chosen versus used --------------------------------------
+
+    /// Before anything is injected only the *choice* is known, and the row says
+    /// so rather than implying the backend has been exercised.
+    #[test]
+    fn nothing_injected_yet_is_reported_as_unused() {
+        assert_eq!(
+            row(&facts(UsedBackend::NotYet), "Injection"),
+            "ydotool (selected, unused)"
+        );
+    }
+
+    #[test]
+    fn the_backend_that_did_the_work_is_what_is_reported() {
+        assert_eq!(row(&facts(UsedBackend::Ydotool), "Injection"), "ydotool");
+    }
+
+    /// The case the whole change exists for: ydotool was chosen, rejected every
+    /// call, and the clipboard quietly carried the text. The menu used to
+    /// report "ydotool" here.
+    #[test]
+    fn a_silent_fallback_to_the_clipboard_is_visible() {
+        assert_eq!(
+            row(&facts(UsedBackend::Clipboard), "Injection"),
+            "clipboard (ydotool did not carry it)"
+        );
+    }
+
+    /// Where the clipboard was the choice, using it is not a fallback and must
+    /// not be dressed up as one.
+    #[test]
+    fn the_clipboard_by_choice_is_not_reported_as_a_fallback() {
         let facts = about_facts(
             &recognition(),
-            &caps(&["ydotool"]),
-            InjectionMethod::Auto,
+            &caps(&["clipboard"]),
+            InjectionMethod::Clipboard,
+            UsedBackend::Clipboard,
             false,
             false,
             false,
         );
-        assert_eq!(facts.version, env!("CARGO_PKG_VERSION"));
-        assert_eq!(facts.licence, "MIT");
+        assert_eq!(row(&facts, "Injection"), "clipboard");
     }
 
-    /// The point of the submenu: a feature that is *configured* but not in
-    /// effect must not be reported as working.
+    // --- the rows that were already honest ----------------------------------
+
     #[test]
     fn a_failed_atspi_connection_reads_as_off() {
         let facts = about_facts(
             &recognition(),
             &caps(&["ydotool"]),
             InjectionMethod::Auto,
+            UsedBackend::Ydotool,
             false,
             // read_focused_field was true in the config, but connect() failed
             false,
@@ -1198,11 +1350,12 @@ mod about_tests {
     }
 
     #[test]
-    fn an_ibus_engine_that_registered_reads_as_ibus() {
+    fn active_surfaces_are_named() {
         let facts = about_facts(
             &recognition(),
             &caps(&["ydotool"]),
             InjectionMethod::Auto,
+            UsedBackend::Ydotool,
             true,
             true,
             true,
@@ -1212,61 +1365,18 @@ mod about_tests {
         assert_eq!(row(&facts, "Streaming"), "on");
     }
 
-    /// Must mirror `select_injector`: preferring ydotool where it is not
-    /// available still ends on the clipboard, and About has to say so.
+    /// The GPU index is what was *asked for*. whisper.cpp takes `gpu_device`
+    /// and reports nothing back, so claiming it verified would be the same
+    /// overstatement this change removes.
     #[test]
-    fn injection_follows_what_is_actually_available() {
-        let with = about_facts(
-            &recognition(),
-            &caps(&["ydotool", "clipboard"]),
-            InjectionMethod::Auto,
-            false,
-            false,
-            false,
-        );
-        assert_eq!(row(&with, "Injection"), "ydotool");
-
-        let without = about_facts(
-            &recognition(),
-            &caps(&["clipboard"]),
-            InjectionMethod::Auto,
-            false,
-            false,
-            false,
-        );
-        assert_eq!(row(&without, "Injection"), "clipboard");
-    }
-
-    #[test]
-    fn choosing_the_clipboard_is_reported_even_where_ydotool_works() {
-        let facts = about_facts(
-            &recognition(),
-            &caps(&["ydotool", "clipboard"]),
-            InjectionMethod::Clipboard,
-            false,
-            false,
-            false,
-        );
-        assert_eq!(row(&facts, "Injection"), "clipboard");
-    }
-
-    /// The row that answers "why is dictation slow?" — the default
-    /// `gpu_device = 0` is the integrated GPU on a switchable-graphics laptop.
-    #[test]
-    fn the_backend_row_names_the_gpu_index_when_on_a_gpu() {
-        let facts = about_facts(
-            &recognition(),
-            &caps(&["ydotool"]),
-            InjectionMethod::Auto,
-            false,
-            false,
-            false,
-        );
-        let backend = row(&facts, "Backend");
+    fn the_gpu_index_is_marked_as_requested() {
+        let backend = row(&facts(UsedBackend::Ydotool), "Backend").to_owned();
         let compiled = govox_asr::Backend::compiled();
         assert!(backend.starts_with(compiled.name()), "{backend}");
         if compiled.is_gpu() {
-            assert!(backend.contains("GPU "), "{backend}");
+            assert!(backend.contains("requested"), "{backend}");
+        } else {
+            assert_eq!(backend, compiled.name());
         }
     }
 }

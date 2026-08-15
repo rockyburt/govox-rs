@@ -19,5 +19,7 @@ pub mod ydotool;
 
 pub use clipboard::ClipboardInjector;
 pub use runner::{CommandResult, ProcessRunner, RecordingRunner, Runner};
-pub use selector::{FallbackInjector, Notify, SilentNotify, select_injector};
+pub use selector::{
+    FallbackInjector, InjectionReport, Notify, SilentNotify, UsedBackend, select_injector,
+};
 pub use ydotool::YdotoolInjector;

@@ -10,7 +10,8 @@ use std::sync::Arc;
 use govox_core::config::{Config, Environment};
 use govox_core::domain::{Capabilities, GovoxError, Injector, InsertionAction};
 use govox_input::{
-    ClipboardInjector, RecordingRunner, YdotoolInjector, select_injector, selector::SilentNotify,
+    ClipboardInjector, InjectionReport, RecordingRunner, UsedBackend, YdotoolInjector,
+    select_injector, selector::SilentNotify,
 };
 
 /// `(argv, stdin)` as plain strings, so assertions read like the Python.
@@ -291,6 +292,7 @@ fn fallback_to_clipboard_on_rejection() {
                 .expect("notifications poisoned")
                 .push((title.to_owned(), body.to_owned()));
         },
+        InjectionReport::new(),
     );
 
     injector
@@ -319,6 +321,7 @@ fn selector_uses_clipboard_only_when_no_uinput() {
         &default_config(),
         Arc::clone(&runner),
         SilentNotify,
+        InjectionReport::new(),
     );
 
     injector
@@ -345,6 +348,7 @@ fn selector_honours_a_clipboard_preference_even_where_ydotool_works() {
         &config,
         Arc::clone(&runner),
         SilentNotify,
+        InjectionReport::new(),
     );
 
     injector
@@ -367,6 +371,7 @@ fn an_emoji_is_pasted_rather_than_typed() {
         &default_config(),
         Arc::clone(&runner),
         SilentNotify,
+        InjectionReport::new(),
     );
 
     injector
@@ -395,6 +400,7 @@ fn ordinary_text_still_goes_to_ydotool() {
         &default_config(),
         Arc::clone(&runner),
         SilentNotify,
+        InjectionReport::new(),
     );
 
     injector
@@ -417,6 +423,7 @@ fn non_ascii_letters_are_not_treated_as_untypeable() {
         &default_config(),
         Arc::clone(&runner),
         SilentNotify,
+        InjectionReport::new(),
     );
 
     for text in ["café", "日本語", "naïve — really…"] {
@@ -430,4 +437,86 @@ fn non_ascii_letters_are_not_treated_as_untypeable() {
         calls.iter().all(|(argv, _)| argv[0] == "ydotool"),
         "something was rerouted to the clipboard: {calls:?}"
     );
+}
+
+// --- what actually carried the text -----------------------------------------
+
+#[test]
+fn nothing_is_recorded_before_anything_is_injected() {
+    let report = InjectionReport::new();
+    let _ = select_injector(
+        &capabilities("ydotool", &["ydotool", "clipboard"]),
+        &default_config(),
+        Arc::new(RecordingRunner::new()),
+        SilentNotify,
+        report.clone(),
+    );
+    assert_eq!(report.last(), UsedBackend::NotYet);
+}
+
+#[test]
+fn a_successful_type_records_ydotool() {
+    let report = InjectionReport::new();
+    let injector = select_injector(
+        &capabilities("ydotool", &["ydotool", "clipboard"]),
+        &default_config(),
+        Arc::new(RecordingRunner::new()),
+        SilentNotify,
+        report.clone(),
+    );
+    injector
+        .insert(&InsertionAction::Text("Hello world.".to_owned()))
+        .expect("typing succeeds");
+    assert_eq!(report.last(), UsedBackend::Ydotool);
+}
+
+/// The case the report exists for: ydotool was selected, rejected the call, and
+/// the clipboard carried the text. Nothing observable said so before.
+#[test]
+fn a_silent_fallback_is_recorded_as_the_clipboard() {
+    let report = InjectionReport::new();
+    let injector = select_injector(
+        &capabilities("ydotool", &["ydotool", "clipboard"]),
+        &default_config(),
+        Arc::new(RecordingRunner::failing_first()),
+        SilentNotify,
+        report.clone(),
+    );
+    injector
+        .insert(&InsertionAction::Text("Hello world.".to_owned()))
+        .expect("the fallback carries the utterance");
+    assert_eq!(report.last(), UsedBackend::Clipboard);
+}
+
+/// Routing an emoji round ydotool is a clipboard insertion too, and the report
+/// must not keep claiming ydotool afterwards.
+#[test]
+fn the_emoji_route_records_the_clipboard() {
+    let report = InjectionReport::new();
+    let injector = select_injector(
+        &capabilities("ydotool", &["ydotool", "clipboard"]),
+        &default_config(),
+        Arc::new(RecordingRunner::new()),
+        SilentNotify,
+        report.clone(),
+    );
+    injector
+        .insert(&InsertionAction::Text("Nice work 👍".to_owned()))
+        .expect("the clipboard path carries the emoji");
+    assert_eq!(report.last(), UsedBackend::Clipboard);
+}
+
+/// With no ydotool there is one backend and it is known up front, so the report
+/// is right from the first utterance rather than only after one.
+#[test]
+fn a_clipboard_only_session_is_recorded_at_selection() {
+    let report = InjectionReport::new();
+    let _ = select_injector(
+        &capabilities("clipboard", &["clipboard"]),
+        &default_config(),
+        Arc::new(RecordingRunner::new()),
+        SilentNotify,
+        report.clone(),
+    );
+    assert_eq!(report.last(), UsedBackend::Clipboard);
 }

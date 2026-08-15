@@ -61,21 +61,54 @@ Never bless to make a red test green without reading what moved.
 
 ## Testing
 
+**Use `cargo nextest` for tests.** It is what CI runs, it reports failures from
+every binary in one pass instead of stopping at the first, and it is configured
+in `.config/nextest.toml`.
+
 ```bash
-cargo test --workspace
+# The inner loop. ~6s.
+GOVOX_GOLDEN_SAMPLE=50 cargo nextest run --workspace
+
+# Everything. ~2.5 minutes, and what a merge needs.
+cargo nextest run --workspace
+
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all --check
+```
 
-# The golden corpus replays ~239k recorded calls and takes ~3 minutes, almost
-# all of it inside fancy-regex. CI runs the whole corpus on main; for a fast
-# inner loop, take a strided sample instead (~3s, still hits every stage):
-GOVOX_GOLDEN_SAMPLE=50 cargo test --workspace
+The golden corpus replays ~239k recorded calls and is **99% of the run** — 144s
+of ~146s — essentially all of it inside `fancy-regex`. So the only thing that
+makes a test run fast here is sampling it; nothing else in the workspace is
+slower than milliseconds, and parallelism has nothing to work with.
+
+`GOVOX_GOLDEN_SAMPLE=50` takes every 50th record. The stride is not random: the
+corpus is written in a stable order, so a stride hits every stage and every
+config variant, and the same stride always selects the same records — a failure
+found under sampling reproduces without it.
+
+**A sampled run is not a corpus check.** It prints nothing to distinguish itself
+from a full one, so sampling is left off by default and named explicitly when
+wanted. Run the whole corpus before merging anything that touches
+`crates/govox-core/src/correction/`.
+
+```bash
+# Doc tests: nextest does not run them at all, so this stays `cargo test`.
+cargo test --workspace --doc
 
 # Tests needing real hardware, a model or a desktop session are #[ignore]d.
-# The bless tests are ignored too and additionally require GOVOX_BLESS=1, so
-# this cannot rewrite a corpus by accident.
-cargo test --workspace -- --ignored
+# Run them where you have the hardware. Exclude the bless tests: they are
+# ignored too and fail *by design* without GOVOX_BLESS=1, which is what stops a
+# stray --run-ignored rewriting a corpus.
+cargo nextest run --workspace --run-ignored ignored-only -E 'not test(bless)'
 ```
+
+Two of those need the desktop to themselves: `govox-ime`'s live tests register
+an IBus engine, so they fail while a `govox` daemon is running and already
+holding that registration. Stop the unit first, or expect that one to fail.
+
+CI only *lists* the ignored tests (`cargo nextest list --run-ignored
+ignored-only`), so a test that silently stops existing is still visible without
+CI needing a microphone.
 
 ## Conventions
 

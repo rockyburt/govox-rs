@@ -19,7 +19,10 @@ const EXIT_CONFIG: i32 = 2;
 #[derive(Parser)]
 #[command(
     name = "govox",
-    version,
+    // The build's version, not the manifest's, and the same string the tray's
+    // About shows. `version` alone is `CARGO_PKG_VERSION`, which has read
+    // "0.1.0" for every commit since the tag and so cannot identify a build.
+    version = govox_daemon::BUILD_VERSION,
     about = "Wayland-first speech-to-text dictation daemon"
 )]
 struct Cli {
