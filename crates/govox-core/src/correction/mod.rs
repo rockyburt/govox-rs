@@ -31,6 +31,22 @@ pub const VERBATIM_PURPOSES: &[&str] = &[
     "URL", "EMAIL", "TERMINAL", "PASSWORD", "PIN", "DIGITS", "NUMBER", "PHONE",
 ];
 
+/// Verbatim fields that nevertheless hold *words*, so consecutive utterances
+/// need a space between them.
+///
+/// Standing prose rules down and running utterances together are two different
+/// decisions, and treating them as one produced a real bug: dictating twice into
+/// a terminal gave `…it does now.this is fun!`. A terminal line is words
+/// separated by spaces — `cd` then `Documents` is two words — whereas every
+/// other verbatim purpose holds a single token, where a space would be
+/// corruption: `example` then `dot com` must join as `example.com`.
+///
+/// The cost is the mirror image, and it is deliberate: dictating a URL across
+/// two utterances *in a terminal* now yields `example .com`. That needs a
+/// hostname split mid-word in a shell; running every multi-utterance command
+/// line together is the far commoner failure. See `docs/parity.md`.
+pub const SPACED_PURPOSES: &[&str] = &["TERMINAL"];
+
 /// Where capitals are never meaningful, all of them go. A hostname is
 /// case-insensitive and conventionally lowercase, and so is an email address.
 pub const LOWERCASE_WHOLE: &[&str] = &["URL", "EMAIL"];
@@ -41,6 +57,33 @@ pub const LOWERCASE_WHOLE: &[&str] = &["URL", "EMAIL"];
 pub const LOWERCASE_FIRST_WORD: &[&str] = &["TERMINAL"];
 
 const SENTENCE_TERMINATORS: &[char] = &['.', '!', '?'];
+
+/// What the focused field wants from the pipeline.
+///
+/// One value rather than two booleans, because only three of the four
+/// combinations mean anything — there is no field that takes prose rules but
+/// refuses a separating space, and encoding the choice this way means no caller
+/// can ask for one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FieldRules {
+    /// Ordinary text: capitals, a closing full stop, and a space between
+    /// consecutive utterances.
+    Prose,
+    /// A single token — a URL, an address, a PIN. No prose rules, and no
+    /// separating space, since anything appended continues the same token.
+    SingleToken,
+    /// Words without prose: a terminal line. No capitals and no closing full
+    /// stop, but consecutive utterances are still separated by a space.
+    SpacedWords,
+}
+
+impl FieldRules {
+    /// Whether a space goes between this utterance and what precedes it.
+    #[must_use]
+    pub fn separates(self) -> bool {
+        matches!(self, Self::Prose | Self::SpacedWords)
+    }
+}
 
 /// Runtime state the pipeline consults per utterance.
 ///
@@ -102,7 +145,7 @@ impl CorrectionPipeline {
             text,
             &self.config,
             context.preceding_text.as_deref(),
-            is_prose_field(purpose),
+            field_rules(purpose),
         );
         // Before replacements, so a replacement's own casing wins over this.
         corrected = undo_prose_casing(&corrected, purpose);
@@ -128,7 +171,7 @@ pub fn apply_rules(
     text: &str,
     config: &CorrectionConfig,
     preceding: Option<&str>,
-    prose: bool,
+    rules: FieldRules,
 ) -> String {
     let mut normalized = normalize_spacing(text);
     if normalized.is_empty() {
@@ -159,12 +202,16 @@ pub fn apply_rules(
         normalized = emoji::apply_spoken_emoji(&normalized);
     }
     // Outside prose, none of what follows applies: a capital and a closing full
-    // stop are wrong in a URL bar, and so is a separating space. Spoken
-    // punctuation still works — saying "dot" is an explicit instruction, not an
-    // assumption govox is making on the user's behalf, and the same goes for
-    // spoken case.
-    if !prose {
-        return case_control(&normalized, config);
+    // stop are wrong in a URL bar. Spoken punctuation still works — saying "dot"
+    // is an explicit instruction, not an assumption govox is making on the
+    // user's behalf, and the same goes for spoken case.
+    //
+    // The separator is a *separate* question, asked below for every field that
+    // holds words. Returning early here without asking it is what ran two
+    // terminal utterances together.
+    if rules != FieldRules::Prose {
+        normalized = case_control(&normalized, config);
+        return separated(normalized, preceding, rules);
     }
 
     // Continuing an unfinished sentence is not the same job as starting one.
@@ -182,10 +229,20 @@ pub fn apply_rules(
     // capitals, so a "no caps" applied before them would be undone at exactly
     // the sentence start where it was most likely meant.
     normalized = case_control(&normalized, config);
-    if normalized.is_empty() {
-        return normalized; // the utterance was nothing but markers
+    separated(normalized, preceding, rules)
+}
+
+/// Prefix the separating space, when this field and this caret both call for
+/// one.
+///
+/// The empty check is not an optimisation: an utterance of nothing but case
+/// markers corrects to nothing, and a lone space is worse than silence.
+#[must_use]
+fn separated(text: String, preceding: Option<&str>, rules: FieldRules) -> String {
+    if text.is_empty() || !rules.separates() {
+        return text;
     }
-    format!("{}{normalized}", separator_for(preceding))
+    format!("{}{text}", separator_for(preceding))
 }
 
 /// Spoken case control, when it is switched on.
@@ -235,10 +292,27 @@ pub fn undo_prose_casing(text: &str, purpose: Option<&str>) -> String {
 /// silence as a signal would change behaviour everywhere at once.
 #[must_use]
 pub fn is_prose_field(purpose: Option<&str>) -> bool {
-    match purpose {
-        None => true,
-        Some(purpose) => !VERBATIM_PURPOSES.contains(&purpose),
+    field_rules(purpose) == FieldRules::Prose
+}
+
+/// Which rules the focused field gets — the full answer, of which
+/// [`is_prose_field`] is the first third.
+///
+/// Defined here and derived there, rather than the two reading the purpose
+/// tables independently: they answered the same question in two places once
+/// already, and the half that was never asked is the bug this fixes.
+#[must_use]
+pub fn field_rules(purpose: Option<&str>) -> FieldRules {
+    let Some(purpose) = purpose else {
+        return FieldRules::Prose; // silence means "carry on as before"
+    };
+    if !VERBATIM_PURPOSES.contains(&purpose) {
+        return FieldRules::Prose;
     }
+    if SPACED_PURPOSES.contains(&purpose) {
+        return FieldRules::SpacedWords;
+    }
+    FieldRules::SingleToken
 }
 
 /// Is the caret sitting mid-sentence?
@@ -381,5 +455,111 @@ pub fn command_text(name: &str) -> &'static str {
         "newline" => "\n",
         "new_paragraph" => "\n\n",
         _ => "",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FieldRules, apply_rules, field_rules};
+    use crate::config::CorrectionConfig;
+
+    fn config() -> CorrectionConfig {
+        CorrectionConfig {
+            enabled: true,
+            dictionary_path: String::new(),
+            drop_fillers: false,
+            filler_words: Vec::new(),
+            collapse_repeats: false,
+            spoken_punctuation: true,
+            spoken_emoji: false,
+            number_formatting: false,
+            case_control: false,
+        }
+    }
+
+    /// The bug, at the level it was reported: two utterances into a terminal.
+    ///
+    /// `"let's see what it does now."` followed by `"this is fun!"` arrived as
+    /// `"…now.this is fun!"`, because the verbatim arm returned before the
+    /// separator was ever considered.
+    #[test]
+    fn a_second_terminal_utterance_is_separated_from_the_first() {
+        let out = apply_rules(
+            "this is fun",
+            &config(),
+            Some("let's see what it does now."),
+            FieldRules::SpacedWords,
+        );
+        assert_eq!(out, " this is fun");
+    }
+
+    /// The differential that gives the test above its meaning: the same call
+    /// against a single-token field must *not* gain a space, or `example` plus
+    /// `dot com` would stop making `example.com`.
+    #[test]
+    fn a_single_token_field_still_joins_without_a_space() {
+        let out = apply_rules(
+            "dot com",
+            &config(),
+            Some("example"),
+            FieldRules::SingleToken,
+        );
+        assert_eq!(out, ".com");
+    }
+
+    #[test]
+    fn a_terminal_utterance_gains_no_prose_rules_with_its_space() {
+        let out = apply_rules("list files", &config(), Some("ls"), FieldRules::SpacedWords);
+        // A space, but no capital and no full stop.
+        assert_eq!(out, " list files");
+    }
+
+    /// A space already at the caret is not doubled — the separator asks the
+    /// caret, not just the field.
+    #[test]
+    fn an_existing_space_is_not_doubled() {
+        let out = apply_rules(
+            "list files",
+            &config(),
+            Some("ls "),
+            FieldRules::SpacedWords,
+        );
+        assert_eq!(out, "list files");
+    }
+
+    #[test]
+    fn an_empty_caret_starts_a_terminal_line_flush() {
+        assert_eq!(
+            apply_rules("list files", &config(), Some(""), FieldRules::SpacedWords),
+            "list files"
+        );
+        assert_eq!(
+            apply_rules("list files", &config(), None, FieldRules::SpacedWords),
+            "list files"
+        );
+    }
+
+    #[test]
+    fn purposes_split_three_ways() {
+        assert_eq!(field_rules(None), FieldRules::Prose);
+        assert_eq!(field_rules(Some("FREE_FORM")), FieldRules::Prose);
+        assert_eq!(field_rules(Some("TERMINAL")), FieldRules::SpacedWords);
+        assert_eq!(field_rules(Some("URL")), FieldRules::SingleToken);
+        assert_eq!(field_rules(Some("PASSWORD")), FieldRules::SingleToken);
+    }
+
+    /// Only the token fields refuse a separator. Stated as a sweep so a purpose
+    /// added to one list and not the other cannot pass unnoticed.
+    #[test]
+    fn every_verbatim_purpose_is_classified_and_only_terminals_separate() {
+        for purpose in super::VERBATIM_PURPOSES {
+            let rules = field_rules(Some(purpose));
+            assert_ne!(rules, FieldRules::Prose, "{purpose} is verbatim");
+            assert_eq!(
+                rules.separates(),
+                *purpose == "TERMINAL",
+                "{purpose} separator"
+            );
+        }
     }
 }
