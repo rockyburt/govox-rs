@@ -1,8 +1,12 @@
 name: CI
 
 on:
+  # `develop` is where work integrates before it reaches a release, so a push
+  # there has to be tested. Note that a push runs the workflow *as it exists on
+  # the branch being pushed to*, which is why this list has to be right on every
+  # branch, not only on main.
   push:
-    branches: [main]
+    branches: [main, develop]
   pull_request:
 
 # Every cargo invocation in this file must see an identical environment.
