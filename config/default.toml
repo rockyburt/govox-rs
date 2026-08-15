@@ -1,6 +1,13 @@
 [audio]
 sample_rate = 16000
 frame_ms = 30
+# Empty means the system default input. To pin a microphone, use the identifier
+# in brackets from `govox devices` — e.g. "hw:CARD=Microphones,DEV=0" — not the
+# human label beside it. Labels are duplicated: one machine here lists five
+# separate devices all called "Blue Microphones, USB Audio", so a label cannot
+# say which one you meant. The identifier is unique and survives reboots and
+# reconnections. A label is still accepted where it happens to be unambiguous,
+# so older configs keep working.
 device = ""
 
 [recognition]

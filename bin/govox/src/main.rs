@@ -204,10 +204,18 @@ fn devices() -> Result<(), Error> {
         ));
     }
     for device in devices {
+        // The id is printed because it is what `[audio] device` takes: labels
+        // are duplicated across devices, so a label alone cannot tell you which
+        // of five identically-named entries to configure.
         // `{:g}`-style formatting: 44100 rather than 44100.0.
         println!(
-            "{}: {} ({} ch, {} Hz)",
-            device.index, device.name, device.channels, device.default_sample_rate
+            "{}: {} [{}] ({} ch, {} Hz){}",
+            device.index,
+            device.name,
+            device.id,
+            device.channels,
+            device.default_sample_rate,
+            if device.is_default { " (default)" } else { "" }
         );
     }
     Ok(())

@@ -6,6 +6,22 @@ before 1.0.0, minor versions may change behaviour.
 
 ## [Unreleased]
 
+### Changed
+
+- **Input devices are identified by their backend id rather than their label.**
+  `govox devices` now prints the id in brackets — `hw:CARD=Microphones,DEV=0` — and
+  `[audio] device` prefers it. Labels turned out to be neither unique nor stable: one
+  machine lists five devices all called "Blue Microphones, USB Audio". A label is still
+  accepted where it is unambiguous, so existing configs keep working.
+- `govox devices` lists considerably more entries than before, because the audio backend
+  now enumerates every ALSA PCM variant rather than a summarised set. The bracketed id is
+  what tells them apart.
+
+### Internal
+
+- Migrated to cpal 0.18, which split the old `Device::name()` into `Display` for labels and
+  `DeviceId` for identity.
+
 ## [0.1.0] — 2026-08-14
 
 First release. govox dictates into any application on a Wayland desktop: press a key,
