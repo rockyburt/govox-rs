@@ -17,11 +17,27 @@ use std::process::Command;
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 
-    // Resolve HEAD through git itself rather than assuming `../../.git/HEAD`.
-    // In a linked worktree `.git` is a *file* pointing elsewhere, so the naive
-    // path does not exist and the rebuild trigger would silently never fire.
-    if let Some(head) = git(&["rev-parse", "--git-path", "HEAD"]) {
-        println!("cargo:rerun-if-changed={head}");
+    // Every path is resolved through git rather than assumed. In a linked
+    // worktree `.git` is a *file* pointing elsewhere, so `../../.git/HEAD` does
+    // not exist and the trigger would silently never fire.
+    //
+    // Watching HEAD alone is not enough, and quietly so: HEAD holds
+    // `ref: refs/heads/<branch>` and only changes when you *switch* branches. A
+    // commit moves the branch ref, leaving HEAD untouched — so the version
+    // string stayed at the previous commit until something else forced a
+    // rebuild. Caught by the tooling reporting a describe string one commit
+    // behind the tree it was built from.
+    for path in ["HEAD", "packed-refs"] {
+        if let Some(resolved) = git(&["rev-parse", "--git-path", path]) {
+            println!("cargo:rerun-if-changed={resolved}");
+        }
+    }
+    // The branch ref itself, which is what a commit actually writes. Absent on
+    // a detached HEAD, where HEAD above already carries the commit id.
+    if let Some(reference) = git(&["symbolic-ref", "--quiet", "HEAD"])
+        && let Some(resolved) = git(&["rev-parse", "--git-path", &reference])
+    {
+        println!("cargo:rerun-if-changed={resolved}");
     }
 
     let version = git(&["describe", "--tags", "--always", "--dirty"])

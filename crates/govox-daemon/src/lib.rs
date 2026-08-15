@@ -29,6 +29,16 @@ pub mod feedback;
 pub mod pipeline;
 pub mod state;
 
+/// The version of *this build*, from `git describe`, falling back to the
+/// manifest where there is no repository.
+///
+/// Exported so the CLI's `--version` and the tray's About read the same string.
+/// Two version surfaces that disagree are worse than one that is vague: the
+/// manifest version alone cannot tell the 0.1.0 release from a `develop` build
+/// thirteen commits later, and that is exactly when someone checks it. See this
+/// crate's `build.rs`.
+pub const BUILD_VERSION: &str = env!("GOVOX_BUILD_VERSION");
+
 pub use daemon::{Announcer, Daemon, LogAnnouncer, Transcriber, begin_session, end_session};
 pub use feedback::FeedbackChannel;
 pub use pipeline::{PipelineError, run};
