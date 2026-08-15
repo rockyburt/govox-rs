@@ -720,6 +720,52 @@ async fn the_field_purpose_reaches_the_correction_pipeline() {
     assert_ne!(prose, terminal);
 }
 
+/// The whole path for the bug that produced `…it does now.this is fun!`: a
+/// second utterance arriving against text already on the line.
+///
+/// Worth a daemon-level test on top of the pipeline's own, because the defect
+/// was never in the separator logic — `separator_for` was right all along. It
+/// was in which arm of `apply_rules` got to ask it, and that is a wiring
+/// question: the purpose has to reach `field_rules`, and the surrounding text
+/// has to reach `preceding`. Only a test that supplies both can fail if either
+/// stops arriving.
+#[tokio::test]
+async fn a_second_utterance_does_not_run_into_the_first() {
+    async fn dictated_after(purpose: &str, existing: &str) -> String {
+        let mut harness = harness("list the files");
+        let preedit = Arc::new(RecordingPreedit {
+            purpose: Some(purpose.to_owned()),
+            surrounding: Some(existing.to_owned()),
+            ..RecordingPreedit::default()
+        });
+        let sink: Arc<dyn govox_core::domain::PreeditSink> = Arc::clone(&preedit) as _;
+        harness.daemon.preedit = Some(sink);
+        // What `begin_session` captures from the field, set directly so the
+        // test exercises the correction path rather than session lifecycle.
+        harness
+            .daemon
+            .shared
+            .set_preceding(Some(existing.to_owned()));
+        harness.daemon.process_utterance(&utterance()).await;
+        harness.injector.texts().pop().expect("one insertion")
+    }
+
+    let terminal = dictated_after("TERMINAL", "ls -la").await;
+    let url = dictated_after("URL", "example").await;
+
+    assert!(
+        terminal.starts_with(' '),
+        "a terminal line is words, so the next utterance needs a space, got {terminal:?}"
+    );
+    // The differential that keeps the fix honest: the same call into a
+    // single-token field must still close up, or "example" + "dot com" would
+    // stop making "example.com".
+    assert!(
+        !url.starts_with(' '),
+        "a URL is one token and must not gain a space, got {url:?}"
+    );
+}
+
 #[tokio::test]
 async fn without_an_input_method_nothing_changes() {
     // `[ime] enabled` is off by default, so this is the ordinary path: no
