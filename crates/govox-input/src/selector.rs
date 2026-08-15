@@ -55,13 +55,52 @@ where
     );
 
     if prefers_ydotool && caps.supports_injection("ydotool") {
-        return Box::new(FallbackInjector {
-            primary: YdotoolInjector::new(runner),
-            fallback: clipboard,
-            notify,
+        // `ydotool` is available, so Ctrl+V is available, so the pasting
+        // clipboard is a real option here — unlike the fallback below, which
+        // exists precisely because `ydotool` just failed.
+        return Box::new(UntypeableViaClipboard {
+            primary: FallbackInjector {
+                primary: YdotoolInjector::new(Arc::clone(&runner)),
+                fallback: clipboard,
+                notify,
+            },
+            clipboard: ClipboardInjector::new(runner, true),
         });
     }
     Box::new(clipboard)
+}
+
+/// Sends text `ydotool` cannot type through the clipboard, and pastes it.
+///
+/// Only emoji reach this path in practice. They are the one thing the
+/// correction pipeline can produce that the default injector cannot deliver:
+/// `ydotool` emulates keycodes, and no keycode produces 👍. Before this, a
+/// spoken emoji became the character and the character was then silently
+/// dropped, so `[correction] spoken_emoji` appeared to do nothing.
+///
+/// This is a *router*, not another fallback: the decision is made from the text
+/// before anything is attempted, because the failure it avoids is not one
+/// `ydotool` reports. It exits 0 either way.
+pub struct UntypeableViaClipboard<P, F> {
+    pub primary: P,
+    pub clipboard: F,
+}
+
+impl<P, F> Injector for UntypeableViaClipboard<P, F>
+where
+    P: Injector,
+    F: Injector,
+{
+    fn insert(&self, action: &InsertionAction) -> Result<(), GovoxError> {
+        if let InsertionAction::Text(text) = action
+            && crate::ydotool::contains_untypeable(text)
+        {
+            // No notification: unlike the clipboard *fallback*, this pastes for
+            // the user, so there is nothing for them to do and nothing to say.
+            return self.clipboard.insert(action);
+        }
+        self.primary.insert(action)
+    }
 }
 
 /// Runs `primary`, and on rejection runs `fallback` and says so.

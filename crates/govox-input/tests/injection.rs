@@ -356,3 +356,78 @@ fn selector_honours_a_clipboard_preference_even_where_ydotool_works() {
         vec![call(&["wl-copy"], Some("Hello world."))]
     );
 }
+
+/// The bug this routing exists for: `ydotool type 👍` exits 0 and types
+/// nothing, so the emoji was silently dropped rather than reported missing.
+#[test]
+fn an_emoji_is_pasted_rather_than_typed() {
+    let runner = Arc::new(RecordingRunner::new());
+    let injector = select_injector(
+        &capabilities("ydotool", &["ydotool", "clipboard"]),
+        &default_config(),
+        Arc::clone(&runner),
+        SilentNotify,
+    );
+
+    injector
+        .insert(&InsertionAction::Text("Nice work 👍".to_owned()))
+        .expect("the clipboard path carries the emoji");
+
+    let calls = runner.calls();
+    // Never offered to ydotool: the check is made from the text, because the
+    // failure being avoided is one ydotool does not report.
+    assert_eq!(calls[0], call(&["wl-copy"], Some("Nice work 👍")));
+    assert_eq!(calls.len(), 2, "expected a copy and a paste, got {calls:?}");
+    assert!(
+        calls[1]
+            .0
+            .starts_with(&["ydotool".to_owned(), "key".to_owned()]),
+        "the text must be pasted for the user, not left on the clipboard: {:?}",
+        calls[1]
+    );
+}
+
+#[test]
+fn ordinary_text_still_goes_to_ydotool() {
+    let runner = Arc::new(RecordingRunner::new());
+    let injector = select_injector(
+        &capabilities("ydotool", &["ydotool", "clipboard"]),
+        &default_config(),
+        Arc::clone(&runner),
+        SilentNotify,
+    );
+
+    injector
+        .insert(&InsertionAction::Text("Hello world.".to_owned()))
+        .expect("typing succeeds");
+
+    assert_eq!(
+        runner.calls(),
+        vec![call(&["ydotool", "type", "Hello world."], None)]
+    );
+}
+
+/// Accented and non-Latin text is typed today and must keep being typed.
+/// Rerouting it would quietly move every non-English user onto the clipboard.
+#[test]
+fn non_ascii_letters_are_not_treated_as_untypeable() {
+    let runner = Arc::new(RecordingRunner::new());
+    let injector = select_injector(
+        &capabilities("ydotool", &["ydotool", "clipboard"]),
+        &default_config(),
+        Arc::clone(&runner),
+        SilentNotify,
+    );
+
+    for text in ["café", "日本語", "naïve — really…"] {
+        injector
+            .insert(&InsertionAction::Text(text.to_owned()))
+            .expect("typing succeeds");
+    }
+
+    let calls = runner.calls();
+    assert!(
+        calls.iter().all(|(argv, _)| argv[0] == "ydotool"),
+        "something was rerouted to the clipboard: {calls:?}"
+    );
+}

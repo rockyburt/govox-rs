@@ -69,10 +69,14 @@ collapse_repeats = true
 # literally. "a"/"the" before the word already suppress it ("add a comma here").
 spoken_punctuation = true
 # Turn spoken emoji phrases into characters: "thumbs up" -> 👍. Off by default
-# on two counts. The phrases are ordinary English ("a thumbs up gesture"), and
-# whether an emoji reaches the screen depends on the injector: ydotool types by
-# emulating keycodes and there is no keycode for an emoji, so the clipboard
-# injector is the path most likely to work. See docs/reference/commands.md.
+# because the phrases are ordinary English ("a thumbs up gesture"), the same
+# reason `case_control` and `number_formatting` are off.
+#
+# Delivery is handled for you: ydotool types by emulating keycodes and there is
+# no keycode for an emoji, so an utterance containing one is routed through the
+# clipboard and pasted instead of typed. Run `govox commands` to see the
+# phrases. (Before 0.2.0 the emoji was typed and silently dropped, which made
+# this setting look broken when it was switched on.)
 spoken_emoji = false
 # Turn spoken numbers into digits, attaching currency and percent:
 # "twenty five dollars" -> "$25", "fifty percent" -> "50%". Off by default:
