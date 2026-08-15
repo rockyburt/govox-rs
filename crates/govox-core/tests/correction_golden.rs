@@ -34,7 +34,8 @@ use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use govox_core::config::CorrectionConfig;
 use govox_core::correction::{
-    self, Context, CorrectionPipeline, commands, dictionary, emoji, grammar, numbers, punctuation,
+    self, Context, CorrectionPipeline, casing, commands, dictionary, emoji, grammar, numbers,
+    punctuation,
 };
 use govox_core::domain::{
     EditAction, FieldSnapshot, InsertionAction, PersonalDictionary, PipelineAction, TextModel, Unit,
@@ -143,6 +144,13 @@ fn correction_config(args: &Value) -> CorrectionConfig {
         spoken_punctuation: args["spoken_punctuation"].as_bool().unwrap(),
         spoken_emoji: args["spoken_emoji"].as_bool().unwrap(),
         number_formatting: args["number_formatting"].as_bool().unwrap(),
+        // Absent from every record written before spoken case control existed.
+        // Defaulting to false is what makes those records replay unchanged:
+        // the stage is a no-op unless a record explicitly asked for it.
+        case_control: args
+            .get("case_control")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
     }
 }
 
@@ -188,6 +196,7 @@ fn evaluate(stage: &str, args: &Value) -> Option<Value> {
         }
         "attach_units_to_digits" => json!(numbers::attach_units_to_digits(&text(args, "text"))),
         "apply_spoken_emoji" => json!(emoji::apply_spoken_emoji(&text(args, "text"))),
+        "apply_case_control" => json!(casing::apply_case_control(&text(args, "text"))),
         "normalize_command_text" => {
             json!(commands::normalize_command_text(&text(args, "text")))
         }
@@ -568,6 +577,20 @@ fn table_driven_inputs() -> Vec<(&'static str, String)> {
             out.push(("apply_spoken_punctuation", text));
         }
     }
+    for (marker, _) in casing::CASE_MARKERS {
+        for text in [
+            format!("{marker} hello world"),
+            format!("say {marker} hello there"),
+            format!("hello {marker}"),
+            format!("{marker} on hello there {marker} off world"),
+            format!("{marker} on hello there"),
+            format!("{} hello", marker.to_uppercase()),
+            format!("{marker} on one\ntwo"),
+        ] {
+            out.push(("apply_case_control", text));
+        }
+    }
+
     for determiner in punctuation::DETERMINERS {
         out.push((
             "apply_spoken_punctuation",

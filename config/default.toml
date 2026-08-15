@@ -81,6 +81,18 @@ spoken_emoji = false
 # numbers ("twenty five") always compose. Dates, times and phone numbers are
 # deliberately not handled.
 number_formatting = false
+# Turn spoken case markers into case: "all caps hello" -> "HELLO". Also
+# "caps <word>" (capitalise) and "no caps <word>" (force lower case), each with
+# an "on"/"off" span form — "all caps on ... all caps off".
+#
+# Off by default for the same reason as the two settings above: "caps" is an
+# ordinary English word (bottle caps, knee caps, caps lock), and a marker that
+# fires inside prose does not merely fail — it eats the word after it.
+#
+# A marker only lasts for the utterance that opened it. A span left unclosed
+# ends when you stop speaking rather than following you into the next sentence,
+# so there is no mode to get stuck in.
+case_control = false
 
 [injection]
 method = "ydotool"

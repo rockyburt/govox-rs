@@ -34,7 +34,11 @@ const GOLDEN: &str = include_str!("../../../corpus/config-defaults.json");
 ///   implementation this snapshot came from, which always took whatever the
 ///   driver enumerated first. On a laptop with switchable graphics that is the
 ///   integrated GPU, measured here at 2.4x slower.
-const RUST_ONLY_KEYS: &[&str] = &["recognition.gpu_device"];
+/// - `correction.case_control` — spoken case markers ("all caps hello"). Has no
+///   equivalent in the implementation this snapshot came from; it is modelled
+///   on macOS Dictation, which is the UX reference wherever parity does not
+///   bind. Off by default, so the snapshot's *behaviour* is unchanged.
+const RUST_ONLY_KEYS: &[&str] = &["recognition.gpu_device", "correction.case_control"];
 
 /// Compare two JSON values, collecting every difference as a dotted path.
 ///
