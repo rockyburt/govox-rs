@@ -211,6 +211,8 @@ pub struct CorrectionConfig {
     pub spoken_emoji: bool,
     #[serde(default)]
     pub number_formatting: bool,
+    #[serde(default)]
+    pub case_control: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]

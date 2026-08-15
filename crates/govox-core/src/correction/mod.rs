@@ -3,6 +3,7 @@
 //! Ported from `correction/pipeline.py`. The **stage order is load-bearing**
 //! and every constraint in `apply_rules` is justified where it is applied.
 
+pub mod casing;
 pub mod commands;
 pub mod dictionary;
 pub mod emoji;
@@ -160,9 +161,10 @@ pub fn apply_rules(
     // Outside prose, none of what follows applies: a capital and a closing full
     // stop are wrong in a URL bar, and so is a separating space. Spoken
     // punctuation still works — saying "dot" is an explicit instruction, not an
-    // assumption govox is making on the user's behalf.
+    // assumption govox is making on the user's behalf, and the same goes for
+    // spoken case.
     if !prose {
-        return normalized;
+        return case_control(&normalized, config);
     }
 
     // Continuing an unfinished sentence is not the same job as starting one.
@@ -176,7 +178,28 @@ pub fn apply_rules(
     if !continuing {
         normalized = ensure_terminal_punctuation(&normalized);
     }
+    // Last, and deliberately after both casing stages: they only ever *add*
+    // capitals, so a "no caps" applied before them would be undone at exactly
+    // the sentence start where it was most likely meant.
+    normalized = case_control(&normalized, config);
+    if normalized.is_empty() {
+        return normalized; // the utterance was nothing but markers
+    }
     format!("{}{normalized}", separator_for(preceding))
+}
+
+/// Spoken case control, when it is switched on.
+///
+/// A thin wrapper so the config check lives in one place: `apply_rules` calls
+/// this from two arms, and a stage that ran in only one of them would be a
+/// verbatim field silently behaving differently from a prose one.
+#[must_use]
+fn case_control(text: &str, config: &CorrectionConfig) -> String {
+    if config.case_control {
+        casing::apply_case_control(text)
+    } else {
+        text.to_owned()
+    }
 }
 
 /// Strip the capitals Whisper adds out of habit, where they are wrong.

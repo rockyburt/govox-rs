@@ -69,10 +69,14 @@ collapse_repeats = true
 # literally. "a"/"the" before the word already suppress it ("add a comma here").
 spoken_punctuation = true
 # Turn spoken emoji phrases into characters: "thumbs up" -> 👍. Off by default
-# on two counts. The phrases are ordinary English ("a thumbs up gesture"), and
-# whether an emoji reaches the screen depends on the injector: ydotool types by
-# emulating keycodes and there is no keycode for an emoji, so the clipboard
-# injector is the path most likely to work. See docs/reference/commands.md.
+# because the phrases are ordinary English ("a thumbs up gesture"), the same
+# reason `case_control` and `number_formatting` are off.
+#
+# Delivery is handled for you: ydotool types by emulating keycodes and there is
+# no keycode for an emoji, so an utterance containing one is routed through the
+# clipboard and pasted instead of typed. Run `govox commands` to see the
+# phrases. (Before 0.2.0 the emoji was typed and silently dropped, which made
+# this setting look broken when it was switched on.)
 spoken_emoji = false
 # Turn spoken numbers into digits, attaching currency and percent:
 # "twenty five dollars" -> "$25", "fifty percent" -> "50%". Off by default:
@@ -81,6 +85,18 @@ spoken_emoji = false
 # numbers ("twenty five") always compose. Dates, times and phone numbers are
 # deliberately not handled.
 number_formatting = false
+# Turn spoken case markers into case: "all caps hello" -> "HELLO". Also
+# "caps <word>" (capitalise) and "no caps <word>" (force lower case), each with
+# an "on"/"off" span form — "all caps on ... all caps off".
+#
+# Off by default for the same reason as the two settings above: "caps" is an
+# ordinary English word (bottle caps, knee caps, caps lock), and a marker that
+# fires inside prose does not merely fail — it eats the word after it.
+#
+# A marker only lasts for the utterance that opened it. A span left unclosed
+# ends when you stop speaking rather than following you into the next sentence,
+# so there is no mode to get stuck in.
+case_control = false
 
 [injection]
 method = "ydotool"

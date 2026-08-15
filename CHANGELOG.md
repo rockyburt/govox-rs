@@ -6,6 +6,32 @@ before 1.0.0, minor versions may change behaviour.
 
 ## [Unreleased]
 
+### Added
+
+- **Spoken symbol names**, so an email address or a path can be dictated at all:
+  "rocky at sign gmail dot com" → `rocky@gmail.com`, "usr forward slash local" →
+  `usr/local`. 21 phrases in total — `at sign`, `dot`, `slash`, `backslash`,
+  `underscore`, `ampersand`, `asterisk`, `tilde`, `hashtag`, braces, and the `<x> sign`
+  forms. Words that are also ordinary English (`at`, `plus`, `equals`, `star`, `pound`)
+  are deliberately **not** accepted bare.
+- **Spoken case control**, off by default under `[correction] case_control`:
+  "all caps hello" → `HELLO`, plus `caps <word>`, `no caps <word>`, and an on/off span
+  form. A span ends with the utterance that opened it, so there is no mode to get stuck in.
+- **`govox commands`**, which lists every phrase govox understands, says which groups are
+  switched on, and names the setting that would enable one that is off. Generated from the
+  grammar tables, so it cannot drift from the behaviour.
+
+### Fixed
+
+- **Spoken emoji reached the document.** `ydotool` types by emulating keycodes and no
+  keycode produces an emoji, so `ydotool type 👍` exited 0 and typed nothing — meaning
+  `[correction] spoken_emoji` looked broken whenever it was switched on. Text containing an
+  emoji is now put on the clipboard and pasted. Accented and non-Latin text is unaffected
+  and still typed.
+- Removed a pointer to `docs/reference/commands.md`, a file that never existed, from the
+  `spoken_emoji` comment in `config/default.toml`. `govox commands` is what it should have
+  pointed at.
+
 ### Changed
 
 - **Input devices are identified by their backend id rather than their label.**

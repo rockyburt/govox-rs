@@ -20,9 +20,11 @@ network once the model is cached.
   it does not — so it reaches Chrome, terminals and Electron apps alike.
 - **Shows the words as you speak them.** A streaming recogniser commits words once two
   successive decodes agree, so the on-screen text firms up instead of flickering.
-- **Corrects as it goes.** Spoken punctuation ("comma", "new paragraph"), numbers and
-  units ("twenty five dollars" → "$25"), spoken emoji, filler removal, sentence casing,
-  and a personal dictionary for names the model keeps mangling.
+- **Corrects as it goes.** Spoken punctuation ("comma", "new paragraph"), symbol names so
+  an address or a path can be dictated ("rocky at sign gmail dot com"), numbers and units
+  ("twenty five dollars" → "$25"), spoken emoji, spoken case ("all caps hello"), filler
+  removal, sentence casing, and a personal dictionary for names the model keeps mangling.
+  Run `govox commands` for the full list and what is switched on.
 - **Takes editing commands.** "delete that", "capitalize that", "undo" — and a command
   mode where nothing is typed unless it matches a command, so a misheard instruction
   cannot land in your document as text.
@@ -75,6 +77,7 @@ worse than one that refuses to start.
 govox doctor      # every subsystem, what is missing, and what would fix it
 govox devices     # microphones, as govox sees them
 govox keys        # prints key names as you press them, for [activation]
+govox commands    # every phrase govox understands, and which are switched on
 ```
 
 `doctor` is the fastest way to find a missing `ydotool` daemon or an inaccessible

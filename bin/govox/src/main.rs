@@ -3,6 +3,8 @@
 //! Subcommands mirror `govox-py`'s argparse surface so muscle memory and the
 //! systemd unit carry over unchanged.
 
+mod reference;
+
 use clap::{Parser, Subcommand};
 use govox_core::config::Config;
 
@@ -43,6 +45,8 @@ enum Command {
     Devices,
     /// Print key names as they are pressed, for configuring activation.
     Keys,
+    /// List every phrase govox understands, and which are switched on.
+    Commands,
 }
 
 fn main() -> std::process::ExitCode {
@@ -96,6 +100,10 @@ fn run(cli: &Cli) -> Result<(), Error> {
         Command::Doctor { machine } => doctor(&config, *machine),
         Command::Devices => devices(),
         Command::Keys => keys(),
+        Command::Commands => {
+            print!("{}", reference::render(&config));
+            Ok(())
+        }
     }
 }
 
@@ -292,12 +300,38 @@ mod tests {
         Cli::command().debug_assert();
     }
 
+    /// Subcommands govox-rs has that the reference did not, each with a row in
+    /// `docs/parity.md`. Declared rather than folded into the list below, so
+    /// the guard keeps catching an *accidental* addition — which is what it is
+    /// for. Muscle memory and the systemd unit depend on the shared four.
+    ///
+    /// - `commands` — prints the phrase listing, generated from the grammar
+    ///   tables. The reference documents its grammar only in source.
+    const ADDED_SUBCOMMANDS: &[&str] = &["commands"];
+
     #[test]
     fn subcommands_match_the_python_surface() {
-        let names: Vec<_> = Cli::command()
+        let names: Vec<String> = Cli::command()
+            .get_subcommands()
+            .map(|s| s.get_name().to_owned())
+            .filter(|name| !ADDED_SUBCOMMANDS.contains(&name.as_str()))
+            .collect();
+        assert_eq!(names, ["run", "doctor", "devices", "keys"]);
+    }
+
+    /// Guard the allowlist itself: an entry that no longer names a real
+    /// subcommand is dead weight that would mask the next genuine addition.
+    #[test]
+    fn every_declared_addition_is_really_a_subcommand() {
+        let names: Vec<String> = Cli::command()
             .get_subcommands()
             .map(|s| s.get_name().to_owned())
             .collect();
-        assert_eq!(names, ["run", "doctor", "devices", "keys"]);
+        for added in ADDED_SUBCOMMANDS {
+            assert!(
+                names.iter().any(|name| name == added),
+                "{added} is declared as an addition but is not a subcommand"
+            );
+        }
     }
 }
