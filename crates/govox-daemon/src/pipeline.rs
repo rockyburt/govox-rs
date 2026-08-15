@@ -1238,18 +1238,42 @@ mod about_tests {
     // --- version and licence ------------------------------------------------
 
     /// `CARGO_PKG_VERSION` is "0.1.0" for every commit since the tag, so it
-    /// cannot answer "which build is this?". `build.rs` supplies `git describe`
-    /// instead, which can.
+    /// cannot answer "which build is this?". `build.rs` attaches the commit as
+    /// semver build metadata, which can.
+    ///
+    /// The exact value depends on where the build happened — on the tag, past
+    /// it, or with no repository at all — so this pins the *shape*: the
+    /// manifest version, optionally followed by `+` and the commit.
     #[test]
-    fn the_version_is_the_builds_and_not_the_manifests() {
+    fn the_version_is_the_manifest_plus_the_commit() {
         let version = facts(UsedBackend::Ydotool).version;
-        assert!(!version.is_empty());
-        // In a git checkout this is a describe string; from a tarball it falls
-        // back to the manifest. Both are acceptable; an empty one is not.
         let manifest = env!("CARGO_PKG_VERSION");
+
+        let Some(metadata) = version.strip_prefix(manifest) else {
+            panic!("{version:?} does not start with the manifest version {manifest:?}");
+        };
+        match metadata {
+            // Standing on the release tag, or built without git.
+            "" => {}
+            // Anywhere else: `+`, then the commit, and nothing that would make
+            // this a *prerelease* — a leading `-` would sort the build below
+            // the release it comes after.
+            other => {
+                let commit = other
+                    .strip_prefix('+')
+                    .unwrap_or_else(|| panic!("{version:?} must separate metadata with '+'"));
+                assert!(
+                    !commit.is_empty()
+                        && commit
+                            .chars()
+                            .all(|c| c.is_ascii_alphanumeric() || c == '.'),
+                    "{commit:?} is not valid semver build metadata"
+                );
+            }
+        }
         assert!(
-            version.contains(manifest) || version.len() >= 7,
-            "{version:?} is neither a describe string nor the manifest version"
+            !version.contains(&format!("{manifest}-")),
+            "{version:?} uses a prerelease suffix, which sorts below {manifest}"
         );
     }
 

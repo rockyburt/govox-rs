@@ -29,13 +29,17 @@ pub mod feedback;
 pub mod pipeline;
 pub mod state;
 
-/// The version of *this build*, from `git describe`, falling back to the
-/// manifest where there is no repository.
+/// The version of *this build*: the manifest version, plus the commit as
+/// semver build metadata when this is not a tagged release.
 ///
-/// Exported so the CLI's `--version` and the tray's About read the same string.
-/// Two version surfaces that disagree are worse than one that is vague: the
-/// manifest version alone cannot tell the 0.1.0 release from a `develop` build
-/// thirteen commits later, and that is exactly when someone checks it. See this
+/// `0.1.0` on the tag, `0.1.0+14.a18ad6e` fourteen commits later, and plain
+/// `0.1.0` again where there is no repository to ask. Build metadata is ignored
+/// for precedence, so the longer form ranks *equal* to the release rather than
+/// below it — which `git describe`'s own `0.1.0-14-g…` shape would not, since
+/// everything after the first `-` is a prerelease and sorts under its release.
+///
+/// Exported so `--version` and the tray's About read the same string. Two
+/// version surfaces that disagree are worse than one that is vague. See this
 /// crate's `build.rs`.
 pub const BUILD_VERSION: &str = env!("GOVOX_BUILD_VERSION");
 
