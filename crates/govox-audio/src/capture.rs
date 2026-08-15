@@ -30,6 +30,13 @@ impl From<CaptureError> for govox_core::domain::GovoxError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceInfo {
     pub index: usize,
+    /// The backend's stable identifier — `default`, `pipewire`,
+    /// `hw:CARD=Microphones,DEV=0`. This is what `[audio] device` should hold:
+    /// it is unique, and it survives reboots and reconnections.
+    pub id: String,
+    /// The human label the backend reports. Neither unique nor stable — a
+    /// machine here shows five separate devices all called "Blue Microphones,
+    /// USB Audio" — so it is for reading, never for matching.
     pub name: String,
     pub channels: u16,
     pub default_sample_rate: u32,
@@ -44,10 +51,12 @@ pub struct DeviceInfo {
 #[must_use]
 pub fn list_devices() -> Vec<DeviceInfo> {
     let host = cpal::default_host();
-    let default_name = host
-        .default_input_device()
-        .and_then(|d| d.name().ok())
-        .unwrap_or_default();
+    // Identify the default by id, not by label. The same ALSA device renders
+    // one way when fetched directly ("Default Audio Device") and another way
+    // when enumerated ("Default ALSA Output (currently PipeWire Media
+    // Server)"), so comparing labels finds nothing — silently, with every
+    // device reported as non-default.
+    let default_id = host.default_input_device().and_then(|d| device_id(&d));
 
     let Ok(devices) = host.input_devices() else {
         return Vec::new();
@@ -56,17 +65,28 @@ pub fn list_devices() -> Vec<DeviceInfo> {
     devices
         .enumerate()
         .filter_map(|(index, device)| {
-            let name = device.name().ok()?;
+            let id = device_id(&device)?;
             let config = device.default_input_config().ok()?;
             Some(DeviceInfo {
                 index,
-                is_default: name == default_name,
-                name,
+                is_default: Some(&id) == default_id.as_ref(),
+                id,
+                name: device.to_string(),
                 channels: config.channels(),
-                default_sample_rate: config.sample_rate().0,
+                default_sample_rate: config.sample_rate(),
             })
         })
         .collect()
+}
+
+/// The backend's stable identifier for a device, e.g. `hw:CARD=Microphones,DEV=0`.
+///
+/// cpal 0.18 replaced the fallible `Device::name()` with `Display` for labels
+/// and `DeviceId` for identity, and only the latter is dependable: labels are
+/// duplicated across devices and differ between enumeration paths. cpal's own
+/// guidance is to persist a `DeviceId`.
+fn device_id<D: DeviceTrait>(device: &D) -> Option<String> {
+    device.id().ok().map(|id| id.id().to_owned())
 }
 
 /// A running capture. Dropping it stops the stream.
@@ -172,9 +192,15 @@ fn build_stream(
     let device = if device_name.is_empty() {
         host.default_input_device().ok_or(CaptureError::NoDevice)?
     } else {
+        // Match the id first, then fall back to the label. The id is the
+        // documented, unique key; the label fallback keeps a config written
+        // before this distinction existed working, at least where the label is
+        // unambiguous.
         host.input_devices()
             .map_err(|e| CaptureError::Stream(e.to_string()))?
-            .find(|d| d.name().is_ok_and(|n| n == device_name))
+            .find(|d| {
+                device_id(d).is_some_and(|id| id == device_name) || d.to_string() == device_name
+            })
             .ok_or_else(|| CaptureError::DeviceNotFound {
                 name: device_name.to_owned(),
             })?
@@ -183,7 +209,7 @@ fn build_stream(
     let default = device
         .default_input_config()
         .map_err(|e| CaptureError::UnsupportedConfig(e.to_string()))?;
-    let source_rate = default.sample_rate().0;
+    let source_rate = default.sample_rate();
     let channels = default.channels();
     let config: cpal::StreamConfig = default.into();
 
@@ -198,7 +224,7 @@ fn build_stream(
     let error_sink = errors.clone();
     let stream = device
         .build_input_stream(
-            &config,
+            config,
             move |data: &[f32], _: &cpal::InputCallbackInfo| {
                 pending.extend(normalize_to_mono(data, channels, source_rate, sample_rate));
 
@@ -260,5 +286,34 @@ mod tests {
         let devices = list_devices();
         assert!(!devices.is_empty(), "no input devices found");
         assert!(devices.iter().any(|d| d.is_default));
+    }
+
+    /// The cpal 0.18 migration's actual bug, kept as a test.
+    ///
+    /// Identity moved from a fallible `name()` to `DeviceId`, and matching on
+    /// the label instead compiles perfectly and quietly reports *every* device
+    /// as non-default: the same ALSA device renders as "Default Audio Device"
+    /// when fetched directly and "Default ALSA Output (currently PipeWire Media
+    /// Server)" when enumerated. Exactly one default, and ids unique, is what
+    /// distinguishes a working match from a vacuous one.
+    #[test]
+    #[ignore = "needs an input device"]
+    fn devices_are_identified_by_id_not_by_label() {
+        let devices = list_devices();
+        assert!(!devices.is_empty(), "no input devices found");
+
+        let defaults = devices.iter().filter(|d| d.is_default).count();
+        assert_eq!(defaults, 1, "expected exactly one default input device");
+
+        let mut ids: Vec<&str> = devices.iter().map(|d| d.id.as_str()).collect();
+        ids.sort_unstable();
+        let unique = ids.len();
+        ids.dedup();
+        assert_eq!(ids.len(), unique, "device ids must be unique");
+
+        assert!(
+            devices.iter().all(|d| !d.id.is_empty()),
+            "a device without an id cannot be named in [audio] device"
+        );
     }
 }
