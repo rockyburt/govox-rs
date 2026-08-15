@@ -47,6 +47,22 @@ pub fn contains_untypeable(text: &str) -> bool {
     text.chars().any(is_pictographic)
 }
 
+/// The same text with the untypeable characters removed.
+///
+/// Only for the case where there is no clipboard to route them through — the
+/// choice there is between typing most of the utterance and typing none of it.
+///
+/// Spacing is renormalised afterwards rather than left as the hole the removal
+/// makes: "Thanks 🙂." would otherwise become "Thanks ." — a space before a full
+/// stop, which is wrong in a way the user would have to go back and fix.
+/// `normalize_spacing` already collapses that, and reusing it keeps this from
+/// growing a second opinion about spacing.
+#[must_use]
+pub fn strip_untypeable(text: &str) -> String {
+    let kept: String = text.chars().filter(|c| !is_pictographic(*c)).collect();
+    govox_core::correction::normalize_spacing(&kept)
+}
+
 pub struct YdotoolInjector<R: Runner> {
     runner: R,
 }

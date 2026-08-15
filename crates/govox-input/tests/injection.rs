@@ -520,3 +520,156 @@ fn a_clipboard_only_session_is_recorded_at_selection() {
     );
     assert_eq!(report.last(), UsedBackend::Clipboard);
 }
+
+// --- No clipboard on the machine -------------------------------------------
+
+/// The bug: `ydotool` present, `wl-copy` absent, and an emoji in the text.
+///
+/// `UntypeableViaClipboard` routed every pictographic character to the
+/// clipboard without ever asking whether there was one, so this utterance
+/// failed outright on any machine without `wl-copy` instead of degrading.
+#[test]
+fn an_emoji_still_types_when_there_is_no_clipboard() {
+    let runner = Arc::new(RecordingRunner::new());
+    let report = InjectionReport::new();
+    let injector = select_injector(
+        &capabilities("ydotool", &["ydotool"]),
+        &default_config(),
+        Arc::clone(&runner),
+        SilentNotify,
+        report.clone(),
+    );
+
+    injector
+        .insert(&InsertionAction::Text("Thanks 🙂.".to_owned()))
+        .expect("the utterance is not lost to a missing clipboard");
+
+    // Typed without the emoji, and without the space it left behind: a space
+    // before a full stop is a thing the user would have to go back and fix.
+    assert_eq!(
+        runner.calls(),
+        vec![call(&["ydotool", "type", "Thanks."], None)]
+    );
+    assert_eq!(report.last(), UsedBackend::Ydotool);
+}
+
+#[test]
+fn dropping_characters_is_reported_every_time() {
+    let runner = Arc::new(RecordingRunner::new());
+    let notifications: Arc<std::sync::Mutex<Vec<(String, String)>>> = Arc::default();
+    let recorded = Arc::clone(&notifications);
+    let injector = select_injector(
+        &capabilities("ydotool", &["ydotool"]),
+        &default_config(),
+        Arc::clone(&runner),
+        move |title: &str, body: &str| {
+            recorded
+                .lock()
+                .expect("notifications poisoned")
+                .push((title.to_owned(), body.to_owned()));
+        },
+        InjectionReport::new(),
+    );
+
+    injector
+        .insert(&InsertionAction::Text("one 🙂".to_owned()))
+        .expect("types");
+    injector
+        .insert(&InsertionAction::Text("two ⭐".to_owned()))
+        .expect("types");
+
+    // Twice, not once: each utterance loses different characters, and a silent
+    // partial insertion is the failure this project refuses.
+    let sent = notifications
+        .lock()
+        .expect("notifications poisoned")
+        .clone();
+    assert_eq!(sent.len(), 2, "{sent:?}");
+    assert!(sent[0].1.contains('🙂'), "{sent:?}");
+    assert!(sent[1].1.contains('⭐'), "{sent:?}");
+}
+
+/// Ordinary text must not pay for the emoji path: no stripping, no notification.
+#[test]
+fn text_with_nothing_untypeable_is_passed_straight_through() {
+    let runner = Arc::new(RecordingRunner::new());
+    let injector = select_injector(
+        &capabilities("ydotool", &["ydotool"]),
+        &default_config(),
+        Arc::clone(&runner),
+        SilentNotify,
+        InjectionReport::new(),
+    );
+
+    injector
+        .insert(&InsertionAction::Text("Hello  world.".to_owned()))
+        .expect("types");
+
+    // Including the double space: renormalising here would silently edit text
+    // the correction pipeline already decided on.
+    assert_eq!(
+        runner.calls(),
+        vec![call(&["ydotool", "type", "Hello  world."], None)]
+    );
+}
+
+/// An utterance that is nothing but emoji has nothing left to type. It must not
+/// shell out with an empty string, and must not claim a backend delivered it.
+#[test]
+fn an_utterance_of_only_emoji_types_nothing_and_claims_nothing() {
+    let runner = Arc::new(RecordingRunner::new());
+    let report = InjectionReport::new();
+    let injector = select_injector(
+        &capabilities("ydotool", &["ydotool"]),
+        &default_config(),
+        Arc::clone(&runner),
+        SilentNotify,
+        report.clone(),
+    );
+
+    injector
+        .insert(&InsertionAction::Text("🙂".to_owned()))
+        .expect("not an error: there was simply nothing typeable");
+
+    assert!(runner.calls().is_empty(), "{:?}", runner.calls());
+    assert_eq!(report.last(), UsedBackend::NotYet);
+}
+
+/// With a clipboard present the original routing is untouched.
+#[test]
+fn an_emoji_still_goes_to_the_clipboard_when_there_is_one() {
+    let runner = Arc::new(RecordingRunner::new());
+    let injector = select_injector(
+        &capabilities("ydotool", &["ydotool", "clipboard"]),
+        &default_config(),
+        Arc::clone(&runner),
+        SilentNotify,
+        InjectionReport::new(),
+    );
+
+    injector
+        .insert(&InsertionAction::Text("Thanks 🙂.".to_owned()))
+        .expect("copied and pasted");
+
+    let calls = runner.calls();
+    assert_eq!(calls[0], call(&["wl-copy"], Some("Thanks 🙂.")));
+    assert_eq!(calls.len(), 2, "copy then paste: {calls:?}");
+}
+
+/// With no backend at all, nothing may claim to be the backend.
+#[test]
+fn no_backend_at_all_reports_no_backend() {
+    let runner = Arc::new(RecordingRunner::new());
+    let report = InjectionReport::new();
+    let _injector = select_injector(
+        &capabilities("", &[]),
+        &default_config(),
+        Arc::clone(&runner),
+        SilentNotify,
+        report.clone(),
+    );
+
+    // Previously recorded `Clipboard` up front, so the About menu named a
+    // working backend for a session that cannot type a character.
+    assert_eq!(report.last(), UsedBackend::NotYet);
+}

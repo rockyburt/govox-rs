@@ -124,6 +124,19 @@ where
         InjectionMethod::Ydotool | InjectionMethod::Auto
     );
 
+    // Asked before anything is wrapped in a clipboard path. `capabilities()`
+    // has always computed this — every arm below simply never consulted it, so
+    // a machine without `wl-copy` got injectors that shell out to it anyway.
+    let has_clipboard = caps.supports_injection("clipboard");
+
+    if prefers_ydotool && caps.supports_injection("ydotool") && !has_clipboard {
+        return Box::new(YdotoolOnly {
+            primary: YdotoolInjector::new(runner),
+            notify,
+            report,
+        });
+    }
+
     if prefers_ydotool && caps.supports_injection("ydotool") {
         // `ydotool` is available, so Ctrl+V is available, so the pasting
         // clipboard is a real option here — unlike the fallback below, which
@@ -141,8 +154,18 @@ where
     }
     // Nothing to discover here: with no `ydotool` there is one backend and it
     // is the one that will run. Recorded up front so the report is right from
-    // the first utterance rather than after it.
-    report.record(UsedBackend::Clipboard);
+    // the first utterance rather than after it — but only when that backend
+    // actually exists. With neither `ydotool` nor `wl-copy` there is nothing to
+    // inject with at all, and claiming "clipboard" would put a working backend
+    // in the About menu of a session that cannot type a character.
+    if has_clipboard {
+        report.record(UsedBackend::Clipboard);
+    } else {
+        tracing::error!(
+            "neither ydotool nor wl-copy is installed; dictation will recognise \
+             speech and be unable to insert it"
+        );
+    }
     Box::new(clipboard)
 }
 
@@ -181,6 +204,76 @@ where
             return result;
         }
         self.primary.insert(action)
+    }
+}
+
+/// `ydotool` with no clipboard behind it.
+///
+/// Chosen where `wl-copy` is not installed, which is the case every other arm
+/// here quietly assumed away: `UntypeableViaClipboard` routes emoji to the
+/// clipboard unconditionally, and `FallbackInjector` falls back to it on
+/// rejection, so without one an utterance containing a single emoji failed
+/// outright rather than degrading.
+///
+/// The choice here is between typing most of the utterance and typing none of
+/// it, so the untypeable characters are dropped and the rest is typed. The user
+/// is told **every** time, not once: each occurrence is different text losing
+/// different characters, and a silent partial insertion is precisely the
+/// failure mode this project refuses. There is no clipboard to point them at,
+/// so the message says what was lost rather than where to find it.
+pub struct YdotoolOnly<P, N> {
+    pub primary: P,
+    pub notify: N,
+    pub report: InjectionReport,
+}
+
+impl<P, N> Injector for YdotoolOnly<P, N>
+where
+    P: Injector,
+    N: Notify,
+{
+    fn insert(&self, action: &InsertionAction) -> Result<(), GovoxError> {
+        let InsertionAction::Text(text) = action else {
+            // Keystrokes and commands are ydotool's own business and contain
+            // nothing untypeable by construction.
+            return self.record(self.primary.insert(action));
+        };
+        if !crate::ydotool::contains_untypeable(text) {
+            return self.record(self.primary.insert(action));
+        }
+
+        let kept = crate::ydotool::strip_untypeable(text);
+        let dropped: String = text
+            .chars()
+            .filter(|c| crate::ydotool::is_pictographic(*c))
+            .collect();
+        tracing::warn!(
+            dropped = %dropped,
+            "no clipboard is available, so characters ydotool cannot type were dropped"
+        );
+        self.notify.notify(
+            "govox dropped some characters",
+            &format!("{dropped} could not be typed and no clipboard is available."),
+        );
+
+        if kept.is_empty() {
+            // The whole utterance was untypeable. Typing an empty string is a
+            // pointless subprocess, and reporting a backend that delivered
+            // nothing would be the overstatement the report exists to avoid.
+            return Ok(());
+        }
+        self.record(self.primary.insert(&InsertionAction::Text(kept)))
+    }
+}
+
+impl<P, N> YdotoolOnly<P, N> {
+    /// Record only on success, so the report never names a backend that
+    /// delivered nothing.
+    fn record(&self, result: Result<(), GovoxError>) -> Result<(), GovoxError> {
+        if result.is_ok() {
+            self.report.record(UsedBackend::Ydotool);
+        }
+        result
     }
 }
 

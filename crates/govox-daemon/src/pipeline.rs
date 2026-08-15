@@ -1150,8 +1150,21 @@ fn about_facts(
     // interesting case is when they disagree: `ydotool` selected, rejecting
     // every call, and the fallback quietly carrying the text over the
     // clipboard. Before this, the menu reported the choice and called it truth.
+    //
+    // The absent clipboard is named too. It is not a detail: with no `wl-copy`
+    // there is nothing behind ydotool if it starts rejecting calls, and emoji
+    // are dropped rather than pasted — so the row would otherwise read exactly
+    // like a machine where both of those still work.
+    let no_clipboard = !caps.supports_injection("clipboard");
     let injection = match used {
+        _ if selected == "clipboard" && no_clipboard => {
+            "nothing available (no ydotool, no wl-copy)".to_owned()
+        }
+        UsedBackend::NotYet if no_clipboard => {
+            format!("{selected} (selected, unused; no clipboard fallback)")
+        }
         UsedBackend::NotYet => format!("{selected} (selected, unused)"),
+        UsedBackend::Ydotool if no_clipboard => "ydotool (no clipboard fallback)".to_owned(),
         UsedBackend::Ydotool => "ydotool".to_owned(),
         UsedBackend::Clipboard if selected == "ydotool" => {
             "clipboard (ydotool did not carry it)".to_owned()
@@ -1335,6 +1348,43 @@ mod about_tests {
             false,
         );
         assert_eq!(row(&facts, "Injection"), "clipboard");
+    }
+
+    /// With no `wl-copy`, ydotool has nothing behind it and emoji are dropped
+    /// rather than pasted. The row must not read like a machine where both of
+    /// those still work.
+    #[test]
+    fn a_missing_clipboard_is_named() {
+        let facts = about_facts(
+            &recognition(),
+            &caps(&["ydotool"]),
+            InjectionMethod::Auto,
+            UsedBackend::Ydotool,
+            false,
+            false,
+            false,
+        );
+        assert_eq!(row(&facts, "Injection"), "ydotool (no clipboard fallback)");
+    }
+
+    /// The session that cannot type at all. Reporting "clipboard" here — which
+    /// is what the selector used to record up front — names a working backend
+    /// for a machine with none.
+    #[test]
+    fn no_backend_at_all_says_so() {
+        let facts = about_facts(
+            &recognition(),
+            &caps(&[]),
+            InjectionMethod::Auto,
+            UsedBackend::NotYet,
+            false,
+            false,
+            false,
+        );
+        assert_eq!(
+            row(&facts, "Injection"),
+            "nothing available (no ydotool, no wl-copy)"
+        );
     }
 
     // --- the rows that were already honest ----------------------------------
