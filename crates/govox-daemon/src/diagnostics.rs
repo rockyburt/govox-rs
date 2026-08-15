@@ -359,21 +359,42 @@ fn injection(config: &Config, probes: &Probes) -> Section {
 fn hotkeys(config: &Config, probes: &Probes) -> Section {
     let mut checks = Vec::new();
 
-    let key = &config.activation.toggle_key;
-    if govox_core::keycodes::KeyCode::named(key).is_some() || key.starts_with("KEY_") {
-        checks.push(Check::new(
-            "key_toggle",
-            "activation key",
-            Status::Ok,
-            key.clone(),
-        ));
-    } else {
+    // Every configured key is checked, not just the first: with two Controls
+    // bound, a typo in one of them would otherwise pass doctor and then fail
+    // only for whichever hand the user happened to use.
+    let keys = &config.activation.toggle_key;
+    let unknown: Vec<&String> = keys
+        .names()
+        .iter()
+        .filter(|key| {
+            govox_core::keycodes::KeyCode::named(key).is_none() && !key.starts_with("KEY_")
+        })
+        .collect();
+    if keys.is_empty() {
         checks.push(
             Check::new(
                 "key_toggle",
                 "activation key",
                 Status::Fail,
-                format!("{key:?} is not a key name evdev knows"),
+                "no activation key is configured".to_owned(),
+            )
+            .with_remedy(&["Set `[activation] toggle_key` to a key name, or a list of them."]),
+        );
+    } else if unknown.is_empty() {
+        checks.push(Check::new(
+            "key_toggle",
+            "activation key",
+            Status::Ok,
+            keys.describe(),
+        ));
+    } else {
+        let names: Vec<String> = unknown.iter().map(|k| format!("{k:?}")).collect();
+        checks.push(
+            Check::new(
+                "key_toggle",
+                "activation key",
+                Status::Fail,
+                format!("{} is not a key name evdev knows", names.join(", ")),
             )
             .with_remedy(&["Run `govox keys` and press the key you want; it prints the name."]),
         );

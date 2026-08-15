@@ -104,13 +104,22 @@ ydotool_socket = ""
 
 [activation]
 # govox observes activation keys without grabbing them, so the chosen key also
-# reaches the focused app. Toggle taps the key twice (harmless); push-to-talk
-# holds it for the whole utterance (a held modifier wrecks the focused app), so
-# toggle is the default. Defaults use keys with no modern function — run
-# `govox keys` to find the evdev name of a key that suits your keyboard.
-mode = "toggle"
+# reaches the focused app. Push-to-talk holds the key for the whole utterance,
+# and a held modifier wrecks the focused app, so it is never the default.
+#
+# Double-tap either Control, which is what macOS Dictation uses. The mode and
+# the key are one decision, not two: Control is a key you press constantly, so
+# "toggle" here would start dictation on every copy and paste. Double-tap is
+# what makes an everyday key safe to bind, and binding an everyday key is what
+# makes the shortcut reachable without hunting for Scroll Lock.
+#
+# Both Controls are listed because they are one key to the person pressing them.
+# They share a single timer, so left-then-right is a double tap. Any key accepts
+# either a name or a list of them; run `govox keys` and press a key to see its
+# evdev name.
+mode = "double_tap"
 push_to_talk_key = "KEY_PAUSE"
-toggle_key = "KEY_SCROLLLOCK"
+toggle_key = ["KEY_LEFTCTRL", "KEY_RIGHTCTRL"]
 queue_size = 8
 
 [editing]

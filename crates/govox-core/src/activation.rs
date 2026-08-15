@@ -17,7 +17,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::config::ActivationMode;
+use crate::config::{ActivationKeys, ActivationMode};
 
 /// Keys that turn typed characters into shortcuts.
 ///
@@ -91,8 +91,8 @@ impl Transition {
 #[derive(Debug)]
 pub struct ActivationController {
     pub mode: ActivationMode,
-    pub push_to_talk_key: String,
-    pub toggle_key: String,
+    pub push_to_talk_key: ActivationKeys,
+    pub toggle_key: ActivationKeys,
     pub double_tap_s: f64,
     listening: bool,
     toggle_active: bool,
@@ -107,8 +107,8 @@ impl ActivationController {
     #[must_use]
     pub fn new(
         mode: ActivationMode,
-        push_to_talk_key: impl Into<String>,
-        toggle_key: impl Into<String>,
+        push_to_talk_key: impl Into<ActivationKeys>,
+        toggle_key: impl Into<ActivationKeys>,
         double_tap_s: f64,
     ) -> Self {
         Self {
@@ -133,14 +133,14 @@ impl ActivationController {
         )
     }
 
-    /// The single key this controller acts on, given its mode.
+    /// The keys this controller acts on, given its mode.
     ///
-    /// Only one activation key is live at a time: govox observes evdev events
+    /// Only the active mode's keys are live: govox observes evdev events
     /// without grabbing them, so every watched key also reaches the focused
-    /// app. Watching only the mode's key keeps the inactive one from leaking,
-    /// and lets the daemon open just the keyboards that emit it.
+    /// app. Watching only the mode's keys keeps the inactive one from leaking,
+    /// and lets the daemon open just the keyboards that emit them.
     #[must_use]
-    pub fn active_key(&self) -> &str {
+    pub fn active_keys(&self) -> &ActivationKeys {
         match self.mode {
             ActivationMode::PushToTalk => &self.push_to_talk_key,
             _ => &self.toggle_key,
@@ -199,7 +199,7 @@ impl ActivationController {
 
     fn handle_toggle(&mut self, event: &KeyEvent) -> Option<Transition> {
         match event {
-            KeyEvent::Down(key) if *key == self.toggle_key => self.flip_toggle(),
+            KeyEvent::Down(key) if self.toggle_key.matches(key) => self.flip_toggle(),
             _ => None,
         }
     }
@@ -208,11 +208,27 @@ impl ActivationController {
     ///
     /// A single incidental press (Right Ctrl as part of a real shortcut) is
     /// ignored, so the activation key can be one used in everyday typing.
+    ///
+    /// Where several keys are configured they share one timer, so left Control
+    /// then right Control is a double tap. That is deliberate: the two Controls
+    /// are one key to the person pressing them, and requiring the same physical
+    /// key twice would make the gesture fail depending on which hand was free.
     fn handle_double_tap(&mut self, event: &KeyEvent, now_s: f64) -> Option<Transition> {
         let KeyEvent::Down(key) = event else {
             return None;
         };
-        if *key != self.toggle_key {
+        if !self.toggle_key.matches(key) {
+            // A pending tap is cancelled by any ordinary key pressed after it,
+            // because that makes the Control a *chord* rather than a tap.
+            // Without this, `Ctrl+C` twice in a terminal — two Control presses
+            // inside the window, with a C between them — starts dictation. That
+            // is not hypothetical: it is how you interrupt a running command.
+            //
+            // Modifiers do not cancel, so Ctrl+Shift stays a chord in progress
+            // rather than a cancelled tap.
+            if !is_modifier(key) {
+                self.last_tap_ts = None;
+            }
             return None;
         }
         match self.last_tap_ts {
@@ -229,8 +245,8 @@ impl ActivationController {
 
     fn handle_push_to_talk(&mut self, event: &KeyEvent) -> Option<Transition> {
         match event {
-            KeyEvent::Down(key) if *key == self.push_to_talk_key => self.set_listening(true),
-            KeyEvent::Up(key) if *key == self.push_to_talk_key => self.set_listening(false),
+            KeyEvent::Down(key) if self.push_to_talk_key.matches(key) => self.set_listening(true),
+            KeyEvent::Up(key) if self.push_to_talk_key.matches(key) => self.set_listening(false),
             _ => None,
         }
     }
@@ -290,9 +306,103 @@ mod tests {
 
     #[test]
     fn active_key_follows_the_mode() {
-        assert_eq!(controller(ActivationMode::PushToTalk).active_key(), PTT);
-        assert_eq!(controller(ActivationMode::Toggle).active_key(), TOGGLE);
-        assert_eq!(controller(ActivationMode::DoubleTap).active_key(), TOGGLE);
+        assert_eq!(
+            controller(ActivationMode::PushToTalk).active_keys().names(),
+            [PTT]
+        );
+        assert_eq!(
+            controller(ActivationMode::Toggle).active_keys().names(),
+            [TOGGLE]
+        );
+        assert_eq!(
+            controller(ActivationMode::DoubleTap).active_keys().names(),
+            [TOGGLE]
+        );
+    }
+
+    fn both_controls() -> ActivationController {
+        ActivationController::new(
+            ActivationMode::DoubleTap,
+            PTT,
+            vec!["KEY_LEFTCTRL".to_owned(), "KEY_RIGHTCTRL".to_owned()],
+            0.4,
+        )
+    }
+
+    /// The point of the change: whichever hand is free works.
+    #[test]
+    fn either_control_double_taps_on_its_own() {
+        for key in ["KEY_LEFTCTRL", "KEY_RIGHTCTRL"] {
+            let mut c = both_controls();
+            assert_eq!(c.handle_event_at(&down(key), 0.0), None, "{key} first tap");
+            assert_eq!(
+                c.handle_event_at(&down(key), 0.2),
+                Some(Transition::StartListening),
+                "{key} second tap"
+            );
+        }
+    }
+
+    /// The two Controls share one timer, because they are one key to the person
+    /// pressing them — requiring the same physical key twice would make the
+    /// gesture depend on which hand was free.
+    #[test]
+    fn left_then_right_control_is_one_double_tap() {
+        let mut c = both_controls();
+        assert_eq!(c.handle_event_at(&down("KEY_LEFTCTRL"), 0.0), None);
+        assert_eq!(
+            c.handle_event_at(&down("KEY_RIGHTCTRL"), 0.2),
+            Some(Transition::StartListening)
+        );
+    }
+
+    /// The guard that makes an everyday key safe to bind: one press must never
+    /// start dictation, or every copy-paste would.
+    #[test]
+    fn a_single_control_press_never_activates() {
+        let mut c = both_controls();
+        assert_eq!(c.handle_event_at(&down("KEY_LEFTCTRL"), 0.0), None);
+        assert_eq!(c.handle_event_at(&down("KEY_LEFTCTRL"), 5.0), None);
+        assert!(!c.listening());
+    }
+
+    /// The reason binding Control is safe at all. `Ctrl+C` twice in a terminal
+    /// is two Control presses inside the double-tap window with a `C` between
+    /// them; without the chord guard it starts dictation, which is how you
+    /// interrupt a running command.
+    #[test]
+    fn ctrl_c_twice_in_a_row_does_not_start_dictation() {
+        let mut c = both_controls();
+        // Ctrl+C
+        assert_eq!(c.handle_event_at(&down("KEY_LEFTCTRL"), 0.0), None);
+        assert_eq!(c.handle_event_at(&down("KEY_C"), 0.05), None);
+        c.handle_event_at(&up("KEY_C"), 0.06);
+        c.handle_event_at(&up("KEY_LEFTCTRL"), 0.07);
+        // Ctrl+C again, well inside the 400ms window
+        assert_eq!(c.handle_event_at(&down("KEY_LEFTCTRL"), 0.15), None);
+        assert_eq!(c.handle_event_at(&down("KEY_C"), 0.2), None);
+        assert!(!c.listening(), "a repeated shortcut is not a double tap");
+    }
+
+    /// The guard must not eat the real gesture: a modifier is part of a chord
+    /// in progress, not an ordinary key, so it does not cancel a pending tap.
+    #[test]
+    fn a_modifier_between_taps_does_not_cancel_them() {
+        let mut c = both_controls();
+        assert_eq!(c.handle_event_at(&down("KEY_LEFTCTRL"), 0.0), None);
+        assert_eq!(c.handle_event_at(&down("KEY_LEFTSHIFT"), 0.1), None);
+        assert_eq!(
+            c.handle_event_at(&down("KEY_RIGHTCTRL"), 0.2),
+            Some(Transition::StartListening)
+        );
+    }
+
+    #[test]
+    fn an_unlisted_key_is_still_ignored() {
+        let mut c = both_controls();
+        assert_eq!(c.handle_event_at(&down("KEY_LEFTSHIFT"), 0.0), None);
+        assert_eq!(c.handle_event_at(&down("KEY_LEFTSHIFT"), 0.1), None);
+        assert!(!c.listening());
     }
 
     #[test]
