@@ -9,6 +9,75 @@ use crate::clipboard::ClipboardInjector;
 use crate::runner::Runner;
 use crate::ydotool::YdotoolInjector;
 
+/// Which backend actually carried the most recent insertion.
+///
+/// Distinct from the one `select_injector` *chose*, which is all anything could
+/// report before this existed. The choice is made once from probed
+/// capabilities; what happens afterwards is not the same question. `ydotool`
+/// can be selected and then reject every call, and the fallback wrapper
+/// silently carries on over the clipboard — the exact "reports success and does
+/// nothing" shape this project keeps running into, one level up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UsedBackend {
+    /// Nothing has been injected yet, so only the *selection* is known.
+    NotYet,
+    Ydotool,
+    Clipboard,
+}
+
+impl UsedBackend {
+    const fn code(self) -> u8 {
+        match self {
+            Self::NotYet => 0,
+            Self::Ydotool => 1,
+            Self::Clipboard => 2,
+        }
+    }
+
+    const fn from_code(code: u8) -> Self {
+        match code {
+            1 => Self::Ydotool,
+            2 => Self::Clipboard,
+            _ => Self::NotYet,
+        }
+    }
+
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::NotYet => "not yet",
+            Self::Ydotool => "ydotool",
+            Self::Clipboard => "clipboard",
+        }
+    }
+}
+
+/// A shared note of the backend that last did the work.
+///
+/// An atomic rather than a channel so `govox-input` keeps its four
+/// dependencies: this crate is on the injection hot path and has no async
+/// runtime, and a watch channel would drag one in to publish a value that
+/// changes a handful of times a session.
+#[derive(Debug, Clone, Default)]
+pub struct InjectionReport(Arc<std::sync::atomic::AtomicU8>);
+
+impl InjectionReport {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn record(&self, backend: UsedBackend) {
+        self.0
+            .store(backend.code(), std::sync::atomic::Ordering::Relaxed);
+    }
+
+    #[must_use]
+    pub fn last(&self) -> UsedBackend {
+        UsedBackend::from_code(self.0.load(std::sync::atomic::Ordering::Relaxed))
+    }
+}
+
 /// Told when text went to the clipboard instead of the focused field.
 ///
 /// The user has to know: nothing was typed, and the text is one Ctrl+V away.
@@ -43,6 +112,7 @@ pub fn select_injector<R, N>(
     config: &Config,
     runner: Arc<R>,
     notify: N,
+    report: InjectionReport,
 ) -> Box<dyn Injector>
 where
     R: Runner + 'static,
@@ -63,10 +133,16 @@ where
                 primary: YdotoolInjector::new(Arc::clone(&runner)),
                 fallback: clipboard,
                 notify,
+                report: report.clone(),
             },
             clipboard: ClipboardInjector::new(runner, true),
+            report,
         });
     }
+    // Nothing to discover here: with no `ydotool` there is one backend and it
+    // is the one that will run. Recorded up front so the report is right from
+    // the first utterance rather than after it.
+    report.record(UsedBackend::Clipboard);
     Box::new(clipboard)
 }
 
@@ -84,6 +160,7 @@ where
 pub struct UntypeableViaClipboard<P, F> {
     pub primary: P,
     pub clipboard: F,
+    pub report: InjectionReport,
 }
 
 impl<P, F> Injector for UntypeableViaClipboard<P, F>
@@ -97,7 +174,11 @@ where
         {
             // No notification: unlike the clipboard *fallback*, this pastes for
             // the user, so there is nothing for them to do and nothing to say.
-            return self.clipboard.insert(action);
+            let result = self.clipboard.insert(action);
+            if result.is_ok() {
+                self.report.record(UsedBackend::Clipboard);
+            }
+            return result;
         }
         self.primary.insert(action)
     }
@@ -108,6 +189,7 @@ pub struct FallbackInjector<P, F, N> {
     pub primary: P,
     pub fallback: F,
     pub notify: N,
+    pub report: InjectionReport,
 }
 
 impl<P, F, N> Injector for FallbackInjector<P, F, N>
@@ -118,11 +200,17 @@ where
 {
     fn insert(&self, action: &InsertionAction) -> Result<(), GovoxError> {
         match self.primary.insert(action) {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                self.report.record(UsedBackend::Ydotool);
+                Ok(())
+            }
             Err(GovoxError::InjectionRejected(_)) => {
                 // A fallback failure propagates: both backends are gone, and
                 // pretending otherwise would drop the utterance silently.
                 self.fallback.insert(action)?;
+                // Recorded only on success, so the report never claims a
+                // backend that did not in fact deliver anything.
+                self.report.record(UsedBackend::Clipboard);
                 self.notify
                     .notify("govox clipboard fallback", "Text copied to clipboard.");
                 Ok(())
