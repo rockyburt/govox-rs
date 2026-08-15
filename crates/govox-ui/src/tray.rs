@@ -19,6 +19,25 @@ pub enum TrayCommand {
     Quit,
 }
 
+/// What the About submenu shows.
+///
+/// `rows` is deliberately opaque label/value pairs rather than named fields:
+/// the tray's job is to render, and which facts are worth showing is the
+/// daemon's to decide. Adding one is then a line in `pipeline.rs` and no change
+/// here at all.
+///
+/// The facts are *live* rather than static on purpose. A version string is the
+/// least useful thing this could show for a daemon whose failure modes are all
+/// "which backend actually got picked?" — the wrong GPU, a CPU build that was
+/// meant to be a GPU one, an IBus engine that never registered. Every value is
+/// already computed; before this it was only reachable by reading the journal.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AboutFacts {
+    pub version: String,
+    pub licence: String,
+    pub rows: Vec<(String, String)>,
+}
+
 /// The SNI item itself. `ksni` calls into this from its own task.
 struct GovoxTray {
     state: Arc<TrayState>,
@@ -33,6 +52,11 @@ struct TrayState {
     state: std::sync::Mutex<String>,
     /// Which pulse frame is showing; `usize::MAX` means "not pulsing".
     pulse_frame: AtomicUsize,
+    /// Filled in after construction: several of these facts are not known yet
+    /// when the tray registers. The injector is chosen and the accessibility
+    /// bus is dialled well after the icon has to appear, and delaying the icon
+    /// until they are ready would trade a visible tray for a tidier call.
+    about: std::sync::Mutex<AboutFacts>,
 }
 
 const NOT_PULSING: usize = usize::MAX;
@@ -70,7 +94,7 @@ impl ksni::Tray for GovoxTray {
     }
 
     fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
-        use ksni::menu::{MenuItem, StandardItem};
+        use ksni::menu::{MenuItem, StandardItem, SubMenu};
         let state = self.state.state.lock().expect("tray state poisoned");
         let label = state_presentation(&state).0.to_owned();
         drop(state);
@@ -100,8 +124,54 @@ impl ksni::Tray for GovoxTray {
                 ..Default::default()
             }
             .into(),
+            MenuItem::Separator,
+            MenuItem::SubMenu(SubMenu {
+                label: "About".into(),
+                // The submenu itself stays enabled while everything inside it
+                // is not: a disabled parent does not open in most panels, so
+                // disabling it would hide the contents rather than grey them.
+                submenu: about_items(&self.state.about.lock().expect("about poisoned")),
+                ..Default::default()
+            }),
         ]
     }
+}
+
+/// The About submenu's contents, as inert rows.
+///
+/// Nothing here is activatable. It is a readout, and a menu entry that looks
+/// clickable but does nothing is worse than one that plainly does not.
+fn about_items(facts: &AboutFacts) -> Vec<ksni::MenuItem<GovoxTray>> {
+    use ksni::menu::{MenuItem, StandardItem};
+
+    let inert = |label: String| {
+        MenuItem::Standard(StandardItem {
+            label,
+            enabled: false,
+            ..Default::default()
+        })
+    };
+
+    // Before `set_about` has run — a window of a second or two at startup —
+    // say so rather than showing a convincing but empty table.
+    if facts.version.is_empty() && facts.rows.is_empty() {
+        return vec![inert("Starting up…".to_owned())];
+    }
+
+    let mut items = vec![inert(format!("govox {}", facts.version))];
+    if !facts.licence.is_empty() {
+        items.push(inert(format!("{} licence", facts.licence)));
+    }
+    if !facts.rows.is_empty() {
+        items.push(MenuItem::Separator);
+        items.extend(
+            facts
+                .rows
+                .iter()
+                .map(|(label, value)| inert(format!("{label}: {value}"))),
+        );
+    }
+    items
 }
 
 /// The bus name a StatusNotifierItem has to register with to be shown.
@@ -140,6 +210,7 @@ impl Tray {
         let state = Arc::new(TrayState {
             state: std::sync::Mutex::new("idle".to_owned()),
             pulse_frame: AtomicUsize::new(NOT_PULSING),
+            about: std::sync::Mutex::new(AboutFacts::default()),
         });
 
         let handle: LateHandle = Arc::new(tokio::sync::RwLock::new(None));
@@ -174,6 +245,16 @@ impl Tray {
 
     pub fn set_state(&self, state: &str) {
         *self.state.state.lock().expect("tray state poisoned") = state.to_owned();
+        self.refresh();
+    }
+
+    /// Publish the facts the About submenu reads.
+    ///
+    /// Separate from construction because the tray icon has to appear before
+    /// the injector is chosen or the accessibility bus has answered. Calling it
+    /// again replaces the lot, so a reload that changes them stays truthful.
+    pub fn set_about(&self, facts: AboutFacts) {
+        *self.state.about.lock().expect("about poisoned") = facts;
         self.refresh();
     }
 
@@ -317,5 +398,73 @@ mod tests {
         // value the counter can reach in a session.
         assert!(NOT_PULSING > PULSE_FRAMES.len());
         assert_eq!(NOT_PULSING, usize::MAX);
+    }
+
+    // --- About submenu ------------------------------------------------------
+
+    /// The rendered labels, so the assertions read as what a user would see.
+    fn labels(facts: &AboutFacts) -> Vec<String> {
+        about_items(facts)
+            .iter()
+            .map(|item| match item {
+                ksni::MenuItem::Standard(item) => item.label.clone(),
+                ksni::MenuItem::Separator => "—".to_owned(),
+                _ => "?".to_owned(),
+            })
+            .collect()
+    }
+
+    fn sample() -> AboutFacts {
+        AboutFacts {
+            version: "0.1.0".to_owned(),
+            licence: "MIT".to_owned(),
+            rows: vec![
+                ("Model".to_owned(), "large-v3-turbo".to_owned()),
+                ("Backend".to_owned(), "vulkan · GPU 1".to_owned()),
+            ],
+        }
+    }
+
+    #[test]
+    fn the_submenu_renders_version_licence_and_rows() {
+        assert_eq!(
+            labels(&sample()),
+            [
+                "govox 0.1.0",
+                "MIT licence",
+                "—",
+                "Model: large-v3-turbo",
+                "Backend: vulkan · GPU 1",
+            ]
+        );
+    }
+
+    /// `set_about` runs a second or two after the icon appears. Until it does,
+    /// an empty table would look like a daemon that knows nothing about itself.
+    #[test]
+    fn before_the_facts_arrive_it_says_so() {
+        assert_eq!(labels(&AboutFacts::default()), ["Starting up…"]);
+    }
+
+    /// Every row is a readout. A menu entry that looks clickable and does
+    /// nothing is worse than one that is plainly inert.
+    #[test]
+    fn nothing_in_the_submenu_is_activatable() {
+        for item in about_items(&sample()) {
+            if let ksni::MenuItem::Standard(item) = item {
+                assert!(!item.enabled, "{:?} is activatable", item.label);
+            }
+        }
+    }
+
+    /// A missing licence should drop its line rather than render "` licence`".
+    #[test]
+    fn an_absent_licence_leaves_no_empty_row() {
+        let facts = AboutFacts {
+            version: "0.1.0".to_owned(),
+            licence: String::new(),
+            rows: Vec::new(),
+        };
+        assert_eq!(labels(&facts), ["govox 0.1.0"]);
     }
 }

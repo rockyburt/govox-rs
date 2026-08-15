@@ -27,4 +27,4 @@ pub mod tray;
 pub use chime::{Chime, PlaySink, RodioSink, SilentSink};
 pub use notify::{DesktopNotifier, LogNotifier, Notifier, NullNotifier};
 pub use overlay::{OverlayClient, OverlayCommand, OverlaySink};
-pub use tray::{Tray, TrayCommand};
+pub use tray::{AboutFacts, Tray, TrayCommand};
