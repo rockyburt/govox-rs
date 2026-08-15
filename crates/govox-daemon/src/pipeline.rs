@@ -77,12 +77,17 @@ pub async fn run(config: Config, cancel: CancellationToken) -> Result<(), Pipeli
     let dictionary = crate::load_dictionary(&config)?;
 
     let mut controller = ActivationController::from_config(&config.activation);
-    let key = controller.active_key().to_owned();
+    let keys = controller.active_keys().names().to_vec();
 
-    let devices = find_keyboard_devices(std::slice::from_ref(&key));
+    // Any one keyboard emitting any one of the keys is enough: a split or
+    // external keyboard may carry only the left Control.
+    let devices = find_keyboard_devices(&keys);
     if devices.is_empty() {
-        return Err(PipelineError::NoKeyboard { key });
+        return Err(PipelineError::NoKeyboard {
+            key: controller.active_keys().describe(),
+        });
     }
+    let key = keys.join(", ");
     tracing::info!(
         key = %key,
         mode = %config.activation.mode,

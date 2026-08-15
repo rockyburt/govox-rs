@@ -225,8 +225,8 @@ pub struct InjectionConfig {
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct ActivationConfig {
     pub mode: ActivationMode,
-    pub push_to_talk_key: String,
-    pub toggle_key: String,
+    pub push_to_talk_key: ActivationKeys,
+    pub toggle_key: ActivationKeys,
     pub queue_size: u32,
     #[serde(default = "default_double_tap_ms")]
     pub double_tap_ms: u32,
@@ -234,6 +234,76 @@ pub struct ActivationConfig {
 
 fn default_double_tap_ms() -> u32 {
     400
+}
+
+/// One activation key, or several that mean the same thing.
+///
+/// `toggle_key = "KEY_RIGHTCTRL"` and `toggle_key = ["KEY_LEFTCTRL",
+/// "KEY_RIGHTCTRL"]` are both accepted, because a keyboard's two Control keys
+/// are one key to the person pressing them — insisting on a side is an
+/// implementation detail leaking into the shortcut.
+///
+/// The scalar form is kept for the same reason the schema uses
+/// `deny_unknown_fields`: a config that worked must keep working, and single-key
+/// setups are the common case. Serialising always emits the list, so the shape
+/// on the way out is one thing rather than two.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct ActivationKeys(Vec<String>);
+
+impl ActivationKeys {
+    #[must_use]
+    pub fn names(&self) -> &[String] {
+        &self.0
+    }
+
+    /// Whether this key event is one of the configured keys.
+    #[must_use]
+    pub fn matches(&self, key: &str) -> bool {
+        self.0.iter().any(|k| k == key)
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// For messages that name the shortcut: `KEY_LEFTCTRL or KEY_RIGHTCTRL`.
+    #[must_use]
+    pub fn describe(&self) -> String {
+        match self.0.split_last() {
+            None => "<none>".to_owned(),
+            Some((last, [])) => last.clone(),
+            Some((last, rest)) => format!("{} or {last}", rest.join(", ")),
+        }
+    }
+}
+
+impl From<&str> for ActivationKeys {
+    fn from(key: &str) -> Self {
+        Self(vec![key.to_owned()])
+    }
+}
+
+impl From<Vec<String>> for ActivationKeys {
+    fn from(keys: Vec<String>) -> Self {
+        Self(keys)
+    }
+}
+
+impl<'de> Deserialize<'de> for ActivationKeys {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum OneOrMany {
+            One(String),
+            Many(Vec<String>),
+        }
+        Ok(match OneOrMany::deserialize(deserializer)? {
+            OneOrMany::One(key) => Self(vec![key]),
+            OneOrMany::Many(keys) => Self(keys),
+        })
+    }
 }
 
 /// Voice editing commands.
@@ -609,6 +679,20 @@ impl Config {
         );
         unit(self.vad.speech_threshold, "vad.speech_threshold");
         unit(self.vad.silence_threshold, "vad.silence_threshold");
+
+        // `toggle_key = []` parses happily and would leave govox watching for
+        // nothing — running, listening to no key, and no error to explain it.
+        // Only the active mode's key has to be present; the other is never read.
+        let (keys, name) = match self.activation.mode {
+            ActivationMode::PushToTalk => (
+                &self.activation.push_to_talk_key,
+                "activation.push_to_talk_key",
+            ),
+            _ => (&self.activation.toggle_key, "activation.toggle_key"),
+        };
+        if keys.is_empty() {
+            bad.push(name.to_owned());
+        }
 
         for (index, rule) in self.feedback.app_rules.iter().enumerate() {
             if rule.match_.is_empty() {
@@ -1177,7 +1261,14 @@ fallback_to_utterance = false
         // overrides. A key added upstream that this schema lacks fails here.
         let config = Config::load_from(None, &Environment::default()).unwrap();
         assert_eq!(config.audio.sample_rate, 16_000);
-        assert_eq!(config.activation.mode, ActivationMode::Toggle);
+        assert_eq!(config.activation.mode, ActivationMode::DoubleTap);
+        // The mode and the key are one decision: Control is safe to bind only
+        // because a single press does nothing. Asserted together so neither can
+        // be changed without the other being looked at.
+        assert_eq!(
+            config.activation.toggle_key.names(),
+            ["KEY_LEFTCTRL", "KEY_RIGHTCTRL"]
+        );
         assert_eq!(config.injection.method, InjectionMethod::Ydotool);
         assert!(config.indicator.enabled);
         assert_eq!(config.logging.style, LogStyle::Auto);
