@@ -30,6 +30,12 @@ before 1.0.0, minor versions may change behaviour.
 
 ### Fixed
 
+- **The HUD no longer sits under the desktop panel.** X11 reports a monitor as its full
+  physical rectangle, which takes no notice of panels, so the card was placed 24 px from the
+  top of the screen and the GNOME top bar — 45 px on the machine this was reported from —
+  covered the top 21 px of it. Placement now respects `_NET_WORKAREA`, which fixes both the
+  configured corner and the follow-the-caret position. Where no work area is published, or
+  it does not cover the monitor in question, the card falls back to its previous placement.
 - **Spoken emoji reached the document.** `ydotool` types by emulating keycodes and no
   keycode produces an emoji, so `ydotool type 👍` exited 0 and typed nothing — meaning
   `[correction] spoken_emoji` looked broken whenever it was switched on. Text containing an

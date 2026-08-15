@@ -275,6 +275,55 @@ impl Overlay {
         }
     }
 
+    /// The desktop work area — the screen minus panels and docks.
+    ///
+    /// `_NET_WORKAREA` is a list of `x, y, width, height` per virtual desktop;
+    /// only the first is read, because the card is placed for the desktop the
+    /// user is looking at and every desktop reserves the same struts in
+    /// practice.
+    ///
+    /// `None` on any failure, which the caller treats as "use the whole
+    /// monitor". A window manager that sets no work area is a normal thing to
+    /// meet, not an error: the property is a hint, and losing it costs a card
+    /// that sits where it always used to.
+    ///
+    /// Queried per placement, like [`Self::monitors`], rather than cached. A
+    /// panel can appear, hide or change size while govox runs, and a cached
+    /// answer would put the card under it until the next restart.
+    pub fn work_area(&self) -> Option<Rect> {
+        let root = self.connection.setup().roots[self.screen].root;
+        let atom = self
+            .connection
+            .intern_atom(false, b"_NET_WORKAREA")
+            .ok()?
+            .reply()
+            .ok()?
+            .atom;
+        let reply = self
+            .connection
+            .get_property(false, root, atom, xproto::AtomEnum::CARDINAL, 0, 4)
+            .ok()?
+            .reply()
+            .ok()?;
+
+        let mut values = reply.value32()?;
+        let x = values.next()?;
+        let y = values.next()?;
+        let width = values.next()?;
+        let height = values.next()?;
+        // A zero-sized work area is a malformed hint, not an instruction to
+        // place the card in a rectangle with no room in it.
+        if width == 0 || height == 0 {
+            return None;
+        }
+        Some(Rect::new(
+            i32::try_from(x).ok()?,
+            i32::try_from(y).ok()?,
+            i32::try_from(width).ok()?,
+            i32::try_from(height).ok()?,
+        ))
+    }
+
     /// Where the pointer is, for choosing the corner monitor.
     ///
     /// The pointer's monitor, not the primary one: "primary" is a fixed screen
