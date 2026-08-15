@@ -190,7 +190,10 @@ pub fn apply_case_control(text: &str) -> String {
 
     for (start, word) in word_spans(&cleaned) {
         out.push_str(&cleaned[cursor..start]);
-        while events.peek().is_some_and(|(position, _)| *position <= start) {
+        while events
+            .peek()
+            .is_some_and(|(position, _)| *position <= start)
+        {
             match events.next().expect("just peeked").1 {
                 Event::Span(mode) => span = mode,
                 Event::OneShot(mode) => one_shot = Some(mode),

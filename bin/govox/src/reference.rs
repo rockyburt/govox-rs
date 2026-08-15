@@ -111,7 +111,11 @@ pub fn render(config: &Config) -> String {
         bullet(
             &mut out,
             phrase,
-            if *enabling { "→ commands" } else { "→ dictation" },
+            if *enabling {
+                "→ commands"
+            } else {
+                "→ dictation"
+            },
         );
     }
 
@@ -151,11 +155,7 @@ pub fn render(config: &Config) -> String {
         };
         bullet(&mut out, &phrases.join(", "), &note);
     }
-    bullet(
-        &mut out,
-        "  suppressed after",
-        &DETERMINERS.join(", "),
-    );
+    bullet(&mut out, "  suppressed after", &DETERMINERS.join(", "));
 
     let emoji = config.correction.spoken_emoji;
     heading(
@@ -228,15 +228,15 @@ mod tests {
     fn every_table_reaches_the_listing() {
         let out = render(&defaults());
         for phrase in [
-            "scratch that",            // SIMPLE_EDITS
-            "extend selection",        // VERB_OPS
-            "paragraph",               // UNIT_WORDS
-            "new paragraph",           // COMMANDS
-            "start command mode",      // MODE_COMMANDS
-            "at sign",                 // SPOKEN_PUNCTUATION, the new symbols
-            "thumbs up",               // SPOKEN_EMOJI
-            "all caps <word>",         // CASE_MARKERS
-            "replace <phrase> with",   // phrase editing
+            "scratch that",          // SIMPLE_EDITS
+            "extend selection",      // VERB_OPS
+            "paragraph",             // UNIT_WORDS
+            "new paragraph",         // COMMANDS
+            "start command mode",    // MODE_COMMANDS
+            "at sign",               // SPOKEN_PUNCTUATION, the new symbols
+            "thumbs up",             // SPOKEN_EMOJI
+            "all caps <word>",       // CASE_MARKERS
+            "replace <phrase> with", // phrase editing
         ] {
             assert!(out.contains(phrase), "{phrase:?} missing from the listing");
         }
