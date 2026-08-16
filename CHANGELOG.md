@@ -46,6 +46,20 @@ before 1.0.0, minor versions may change behaviour.
   Listed keys share one double-tap timer, so left-then-right counts as a double tap.
 - **`--version` reports the build**, not the manifest: `0.1.0+14.a18ad6e` past a tag,
   `0.1.0` on one.
+- **The eval can score the streaming decode path**, which is the one dictation runs and
+  which nothing had ever measured. `GOVOX_EVAL_STREAMING=1` feeds each clip through
+  `OnlineProcessor` in frames and reproduces the daemon's duty-cycle throttle, reporting
+  decode count alongside decode time.
+
+  It is about **twice as bad as the published figures**. Same 29 clips, `model = "small"`:
+  the utterance path scores raw WER 0.124 and 24/27 term recall, the streaming path
+  **0.247 and 19/27** — and it drops whole words rather than mangling them. Every accuracy
+  number in this project until now described a code path the daemon does not take. This is
+  a measurement, not a fix; the LocalAgreement gap it exposes is still open.
+
+  `GOVOX_EVAL_CADENCE_S` pins the decode schedule so accuracy repeats between runs. Left
+  unpinned, GPU jitter changes how many decodes a clip gets and three identical runs scored
+  0.253, 0.247 and 0.248.
 
 ### Fixed
 
@@ -75,6 +89,21 @@ before 1.0.0, minor versions may change behaviour.
   `beem_size` silently did nothing while the docs said it would be reported.
 
 ### Changed
+
+- **The recogniser reuses one `WhisperState` instead of allocating per decode**, cutting a
+  streaming decode from 0.240 s to 0.215 s. Because captions cannot arrive faster than a
+  decode completes, that is visible as words keeping up rather than as a GPU statistic.
+
+  It is not behaviour-neutral. Given identical windows, 6 of 29 clips now decode to
+  different text — a small net gain here (raw WER 0.242 → 0.227, corrected 0.229 → 0.200,
+  term recall 20/27 → 19/27), reproducible run to run, but decode output now depends on
+  decode history. The worker also leaks the model at shutdown rather than freeing it:
+  freeing raced process exit and segfaulted inside the Vulkan driver.
+
+  Three other candidates were measured and **rejected**: `temperature_inc = 0.0` (~5%
+  faster, costs 0.035 WER and four terms), raising `n_threads` (no effect on a GPU build),
+  and scaling `audio_ctx` to the window — which gave no speedup at all and aborts the
+  process through whisper.cpp's DTW assert. See `docs/guides/accuracy-eval.md`.
 
 - **Double-tapping either Control is the default shortcut**, replacing `toggle` on
   `KEY_SCROLLLOCK`. The mode and the key are one decision: Control is pressed constantly,
