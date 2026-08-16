@@ -93,9 +93,7 @@ pub enum AsrError {
 
 impl From<AsrError> for GovoxError {
     fn from(error: AsrError) -> Self {
-        // Recognition failure is not injection failure, but the daemon's error
-        // surface is deliberately narrow; the message carries the detail.
-        Self::InjectionRejected(error.to_string())
+        Self::RecognitionFailed(error.to_string())
     }
 }
 
@@ -196,6 +194,23 @@ impl WhisperHandle {
             .await
             .map_err(|_| AsrError::Stopped)?;
         answer.await.map_err(|_| AsrError::Stopped)?
+    }
+}
+
+/// The streaming seam, satisfied by delegating to the inherent methods.
+///
+/// The inherent versions keep returning [`AsrError`] so that callers holding a
+/// concrete handle still get the specific variant; the trait widens to
+/// [`GovoxError`] because it is what `govox-core` can name.
+impl govox_core::domain::WordRecognizer for WhisperHandle {
+    async fn transcribe_words(&self, audio: &[f32]) -> Result<Vec<TimedWord>, GovoxError> {
+        WhisperHandle::transcribe_words(self, audio)
+            .await
+            .map_err(Into::into)
+    }
+
+    async fn warm_up(&self) -> Result<(), GovoxError> {
+        WhisperHandle::warm_up(self).await.map_err(Into::into)
     }
 }
 

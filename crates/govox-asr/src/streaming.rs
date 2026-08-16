@@ -7,9 +7,10 @@
 use std::collections::VecDeque;
 
 use govox_core::config::{BufferTrimming, StreamingConfig};
+use govox_core::domain::{GovoxError, WordRecognizer};
 use govox_core::streaming::{HypothesisBuffer, TimedWord, join_words, trim_point};
 
-use crate::whisper::{AsrError, WhisperHandle};
+use crate::whisper::WhisperHandle;
 
 /// What one chunk produced.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -33,9 +34,14 @@ impl StreamingUpdate {
     }
 }
 
-/// Feeds a growing window to Whisper and commits what two passes agree on.
-pub struct OnlineProcessor {
-    asr: WhisperHandle,
+/// Feeds a growing window to a recognizer and commits what two passes agree on.
+///
+/// Generic over [`WordRecognizer`] so the window management, trimming and
+/// offset arithmetic below can be tested against a scripted recognizer rather
+/// than a loaded model. The type parameter defaults to [`WhisperHandle`], so
+/// callers naming `OnlineProcessor` bare still get the Whisper processor.
+pub struct OnlineProcessor<R = WhisperHandle> {
+    asr: R,
     hypotheses: HypothesisBuffer,
     /// A ring rather than a `Vec`: `govox-py` uses `np.append`, which copies
     /// the whole buffer on every chunk — O(n) per 500 ms for the length of the
@@ -50,9 +56,9 @@ pub struct OnlineProcessor {
     trimming: BufferTrimming,
 }
 
-impl OnlineProcessor {
+impl<R: WordRecognizer> OnlineProcessor<R> {
     #[must_use]
-    pub fn new(asr: WhisperHandle, config: &StreamingConfig, sample_rate: u32) -> Self {
+    pub fn new(asr: R, config: &StreamingConfig, sample_rate: u32) -> Self {
         Self {
             asr,
             hypotheses: HypothesisBuffer::new(),
@@ -87,7 +93,7 @@ impl OnlineProcessor {
     ///
     /// # Errors
     /// If the model fails.
-    pub async fn process(&mut self) -> Result<StreamingUpdate, AsrError> {
+    pub async fn process(&mut self) -> Result<StreamingUpdate, GovoxError> {
         if self.audio.is_empty() {
             return Ok(StreamingUpdate::default());
         }
@@ -233,6 +239,32 @@ impl OnlineProcessor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use govox_core::config::StreamingEngine;
+    use govox_core::domain::ScriptedWordRecognizer;
+
+    const RATE: u32 = 16_000;
+
+    fn config(min_chunk_s: f64, limit_s: f64) -> StreamingConfig {
+        StreamingConfig {
+            enabled: true,
+            engine: StreamingEngine::WhisperStreaming,
+            min_chunk_size_s: min_chunk_s,
+            buffer_trimming: BufferTrimming::Segment,
+            buffer_trimming_sec: limit_s,
+            vad: true,
+            fallback_to_utterance: true,
+        }
+    }
+
+    /// Audio is never inspected by these tests — only its length matters, which
+    /// is the whole point of decoding through the trait.
+    fn audio(seconds: f64) -> Vec<f32> {
+        vec![0.0; (seconds * f64::from(RATE)) as usize]
+    }
+
+    fn word(start: f64, end: f64, text: &str) -> TimedWord {
+        TimedWord::new(start, end, text)
+    }
 
     #[test]
     fn an_update_joins_final_and_provisional_text() {
@@ -243,5 +275,128 @@ mod tests {
         assert_eq!(update.caption(), " Hello wor");
         assert!(!update.is_empty());
         assert!(StreamingUpdate::default().is_empty());
+    }
+
+    /// The model sees only the current window, so its timestamps restart at
+    /// zero after every trim. If the offset is not added back, a word decoded
+    /// after a trim looks *older* than the last commit and `HypothesisBuffer`
+    /// discards it as already-seen — the session silently drops words rather
+    /// than failing.
+    #[tokio::test]
+    async fn word_times_stay_in_session_time_across_a_trim() {
+        // Window-relative spans. After the trim the buffer origin moves to
+        // 0.5s, so "again" at 0.1 is really 0.6 in session time — ahead of the
+        // 0.5 commit point. Unshifted it would be behind it, and dropped.
+        let asr = ScriptedWordRecognizer::saying(vec![
+            vec![word(0.0, 0.5, "hello")],
+            vec![word(0.0, 0.5, "hello"), word(0.6, 1.2, "world")],
+            vec![word(0.1, 0.7, "again")],
+            vec![word(0.1, 0.7, "again")],
+        ]);
+        let mut processor = OnlineProcessor::new(asr, &config(1.0, 1.5), RATE);
+
+        processor.push(&audio(1.0));
+        assert_eq!(processor.process().await.unwrap().committed.trim(), "");
+
+        processor.push(&audio(1.0));
+        let update = processor.process().await.unwrap();
+        assert_eq!(update.committed.trim(), "hello");
+        // 2.0s buffered is over the 1.5s limit and "hello" ends at 0.5, so the
+        // first half-second is dropped and the origin moves with it.
+        assert!(
+            (processor.offset_s - 0.5).abs() < 1e-9,
+            "expected a 0.5s trim"
+        );
+
+        processor.push(&audio(1.0));
+        processor.process().await.unwrap();
+        let update = processor.process().await.unwrap();
+        assert_eq!(
+            update.caption().trim(),
+            "again",
+            "a word decoded after a trim was discarded as already-seen"
+        );
+    }
+
+    /// The pre-roll drop moves the buffer origin, and must not be allowed to
+    /// underflow into draining the whole buffer.
+    #[tokio::test]
+    async fn keeping_only_the_last_seconds_moves_the_origin() {
+        let asr = ScriptedWordRecognizer::saying(vec![vec![word(0.0, 0.2, "hi")]]);
+        let mut processor = OnlineProcessor::new(asr, &config(1.0, 10.0), RATE);
+
+        processor.push(&audio(3.0));
+        processor.keep_only_last(0.5);
+        assert!((processor.offset_s - 2.5).abs() < 1e-9);
+
+        // Shorter than the pre-roll: nothing to drop, and emphatically not a
+        // wrapped subtraction that drains everything.
+        processor.keep_only_last(4.0);
+        assert!((processor.offset_s - 2.5).abs() < 1e-9);
+
+        processor.process().await.unwrap();
+        assert_eq!(
+            processor.asr.windows(),
+            vec![8_000],
+            "the decode should see only the half-second that was kept"
+        );
+    }
+
+    /// A recognizer that returns nothing commits nothing, so there is no word
+    /// boundary to trim at — and Whisper re-decodes the whole window every
+    /// chunk, so an untrimmed window gets slower without bound.
+    #[tokio::test]
+    async fn an_uncommitted_window_is_still_bounded() {
+        let asr = ScriptedWordRecognizer::saying(vec![vec![], vec![]]);
+        let mut processor = OnlineProcessor::new(asr, &config(1.0, 1.0), RATE);
+
+        processor.push(&audio(3.0));
+        processor.process().await.unwrap();
+
+        assert!(
+            (processor.offset_s - 2.0).abs() < 1e-9,
+            "the backstop should have cut back to the limit"
+        );
+        processor.process().await.unwrap();
+        assert_eq!(
+            processor.asr.windows(),
+            vec![48_000, 16_000],
+            "the second decode should see a window bounded by the limit"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_empty_buffer_is_not_decoded() {
+        let asr = ScriptedWordRecognizer::saying(vec![vec![word(0.0, 0.5, "never")]]);
+        let mut processor = OnlineProcessor::new(asr, &config(1.0, 10.0), RATE);
+
+        assert!(processor.process().await.unwrap().is_empty());
+        assert_eq!(processor.asr.calls(), 0, "decoded an empty window");
+    }
+
+    /// A stumble on the final decode must not cost the user the words already
+    /// agreed — `finish` degrades to them rather than propagating the error.
+    #[tokio::test]
+    async fn a_failed_final_decode_keeps_what_was_agreed() {
+        let asr = ScriptedWordRecognizer::failing_nth(
+            vec![
+                vec![word(0.0, 0.5, "hello")],
+                vec![word(0.0, 0.5, "hello"), word(0.6, 1.2, "world")],
+            ],
+            3,
+        );
+        let mut processor = OnlineProcessor::new(asr, &config(1.0, 10.0), RATE);
+
+        processor.push(&audio(1.0));
+        processor.process().await.unwrap();
+        processor.push(&audio(1.0));
+        assert_eq!(processor.process().await.unwrap().committed.trim(), "hello");
+
+        assert_eq!(processor.finish(true).await.trim(), "world");
+        assert_eq!(
+            processor.asr.calls(),
+            3,
+            "the tail should have been decoded"
+        );
     }
 }
