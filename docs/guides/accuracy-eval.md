@@ -31,42 +31,69 @@ answers two questions:
 It does **not** answer whether `large-v3-turbo` is worth its cost. That needs a sweep
 across models, which the harness is shaped for but does not yet do.
 
-## The first baseline
+## The baseline
 
-Recorded 2026-08-16 on the reference machine, `large-v3-turbo` on Vulkan, 29 clips.
+`large-v3-turbo` on Vulkan, 29 clips, reference machine.
 
-| | |
-|---|---|
-| Raw WER | **0.124** |
-| Corrected WER | **0.094** |
-| Closed by correction + dictionary | **0.030** |
-| Term recall | **20 / 27** |
-| Mean decode | 0.80 s |
+| | 2026-08-16 first run | after the dictionary audit |
+|---|---|---|
+| Raw WER | 0.124 | 0.128 |
+| Corrected WER | 0.094 | **0.075** |
+| Term recall | 20 / 27 | **22 / 27** |
 
-Two things fell out of it that no aggregate would have shown.
+### Bias is the lever that works
 
-**The dictionary earns its place, but several of its rules are dead.** It closes three
-points of WER — visible on `rentals dot ca` → `rentals.ca` and `rentals API` →
-`Rentals-API`, which go from wrong to exact. Yet `Lewisporte`, `Rentsync`, `Jira` and
-`Appleton` were all missed, and the raw output says why:
+Measured by ablation — the same corpus with `bias_prompt_token_budget = 0`:
 
-| Expected | `large-v3-turbo` produced |
-|---|---|
-| Lewisporte | "Losort" |
-| Rentsync | "Durant Sink-Tipoli" |
-| Jira | "Jiriborg" |
-| Appleton | "Hamilton" |
+| | bias on | bias off |
+|---|---|---|
+| Raw WER | 0.124 | 0.155 |
+| Term recall | **20 / 27** | **10 / 27** |
 
-The `replace` rules map *specific* manglings — `rent sync` → Rentsync, `jurl` → Jira —
-recorded when a different model was configured. This model fails differently, so those
-rules never fire. A dictionary is tuned to a model, and swapping the model silently
-retires part of it. That is worth re-deriving from this output rather than assuming the
-rules still work.
+Twillingate, Glovertown, Gambo, Notre Dame Bay, Newfoundland, Labrador, Rentsync,
+Rentals-API and Domum are recognised *only* because they are biased. Run this ablation
+after any model change: it is the cheapest way to find out whether the word list still
+earns the prompt space it takes from the streaming context.
 
-**One miss is the scorer's fault, not the model's.** `ultra filtered milk` came back as
-"ultra-filtered milk" — hyphenated, and arguably better English than the reference. Term
-matching is whole-word, so the hyphen defeats it. Real recall is 21/27; the genuine
-failure is the other clip's "ultra-fizzled milk".
+### Every `replace` rule was dead
+
+Not one of the eleven fired on any clip. They were written as *predictions* of how Whisper
+would mangle these words, under a different model; the words they targeted now come out
+correctly on their own because they are biased. Ten were deleted. The survivor, `lol`, is
+a casing fix rather than a mis-hearing fix and no clip exercises it.
+
+**Do not read a raw-versus-corrected gap as the dictionary earning its place.** `raw` is
+scored against `say` — the words literally spoken — and `corrected` against `expect`. When
+Whisper writes "Rentals.ca" for the spoken "rentals dot ca", that scores as a raw error and
+a corrected success without any rule firing. The honest measure of the dictionary is the
+ablation above.
+
+### What the model still gets wrong
+
+| Expected | produced | rule? |
+|---|---|---|
+| Lewisporte | "Losort" | no — the whole sentence collapsed; "the ferry" became "the prairie" |
+| Rentsync | "Durant Sink deploy" | no — recognised correctly in the *other* Rentsync clip |
+| Jira | "Jiriborg" | no |
+| Gander | "Ganner" | no |
+| Appleton | "Hamilton" | **never** — Hamilton is a real place, and the rule would corrupt honest uses |
+
+Each was seen once, and a rule built on a single observation of a non-deterministic model
+is a guess wearing evidence's clothes. The standard is the same thing wrong the same way
+more than once.
+
+### The one fix that worked
+
+`ultra filtered milk` — the phrase that prompted this whole exercise, arriving as
+"ultra-fiddle" — had never been *biased*, only guessed at with a replacement. Adding it to
+`bias` took both its clips from failing to exact:
+
+| Clip | before | after |
+|---|---|---|
+| `ultra-filtered-milk` | "ultra-filtered milk" (0.250) | **0.000** |
+| `ultra-filtered-milk-long` | "ultra-fizzled milk" (0.182) | **0.000** |
+
+Which is the loop this corpus exists for: change one thing, re-run, watch the number move.
 
 ## Running it
 
