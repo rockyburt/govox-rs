@@ -8,58 +8,67 @@ before 1.0.0, minor versions may change behaviour.
 
 ### Added
 
-- **An About submenu in the tray**, reporting the version and licence alongside the facts
-  that actually decide how govox behaves: model, backend and GPU index, injector, preedit
-  and field reading. Each says whether the feature is *in effect*, not merely configured —
-  so a GPU build running on the integrated card, an IBus engine that never registered, or a
-  failed AT-SPI connection is now visible in the menu instead of only in the journal.
-  Built from `ksni`, which was already a dependency: no new crate, no second process, and
-  no GLib main loop.
-- **Spoken symbol names**, so an email address or a path can be dictated at all:
-  "rocky at sign gmail dot com" → `rocky@gmail.com`, "usr forward slash local" →
-  `usr/local`. 21 phrases in total — `at sign`, `dot`, `slash`, `backslash`,
-  `underscore`, `ampersand`, `asterisk`, `tilde`, `hashtag`, braces, and the `<x> sign`
-  forms. Words that are also ordinary English (`at`, `plus`, `equals`, `star`, `pound`)
-  are deliberately **not** accepted bare.
-- **Spoken case control**, off by default under `[correction] case_control`:
-  "all caps hello" → `HELLO`, plus `caps <word>`, `no caps <word>`, and an on/off span
-  form. A span ends with the utterance that opened it, so there is no mode to get stuck in.
-- **`govox commands`**, which lists every phrase govox understands, says which groups are
-  switched on, and names the setting that would enable one that is off. Generated from the
-  grammar tables, so it cannot drift from the behaviour.
+- **An About submenu in the tray** — version, licence, model, backend and GPU index,
+  injector, preedit, field reading. Each row reports what is *in effect*, not what is
+  configured, so an IBus engine that never registered is visible in the menu.
+- **Spoken symbol names**: "rocky at sign gmail dot com" → `rocky@gmail.com`, "usr forward
+  slash local" → `usr/local`. 21 phrases. Words that are also ordinary English are not
+  accepted bare.
+- **Spoken case control**, off by default under `[correction] case_control`: "all caps
+  hello" → `HELLO`, plus `caps`, `no caps`, and an on/off span that ends with its
+  utterance, so no mode can stick.
+- **`govox commands`**, listing every phrase govox understands and the setting that enables
+  one that is off. Generated from the grammar tables, so it cannot drift.
+- **An accuracy eval.** `tools/record-eval.sh` records a 29-clip corpus;
+  `cargo test -p govox-asr --test eval -- --ignored` scores the configured model for word
+  error rate, per-term recall, and the raw-versus-corrected gap — what the personal
+  dictionary is worth. The clips come from transcriptions that actually failed. Recordings
+  stay out of git; scores are tracked. **No figure is published yet.** See
+  [docs/guides/accuracy-eval.md](docs/guides/accuracy-eval.md).
+- **Activation keys accept a list**: `toggle_key = ["KEY_LEFTCTRL", "KEY_RIGHTCTRL"]`.
+  Listed keys share one double-tap timer, so left-then-right counts as a double tap.
+- **`--version` reports the build**, not the manifest: `0.1.0+14.a18ad6e` past a tag,
+  `0.1.0` on one.
 
 ### Fixed
 
-- **The HUD no longer sits under the desktop panel.** X11 reports a monitor as its full
-  physical rectangle, which takes no notice of panels, so the card was placed 24 px from the
-  top of the screen and the GNOME top bar — 45 px on the machine this was reported from —
-  covered the top 21 px of it. Placement now respects `_NET_WORKAREA`, which fixes both the
-  configured corner and the follow-the-caret position. Where no work area is published, or
-  it does not cover the monitor in question, the card falls back to its previous placement.
-- **Spoken emoji reached the document.** `ydotool` types by emulating keycodes and no
-  keycode produces an emoji, so `ydotool type 👍` exited 0 and typed nothing — meaning
-  `[correction] spoken_emoji` looked broken whenever it was switched on. Text containing an
-  emoji is now put on the clipboard and pasted. Accented and non-Latin text is unaffected
-  and still typed.
-- Removed a pointer to `docs/reference/commands.md`, a file that never existed, from the
-  `spoken_emoji` comment in `config/default.toml`. `govox commands` is what it should have
-  pointed at.
+- **Two utterances into a terminal no longer run together** — `…it does now.this is fun!`.
+  One flag governed both prose rules and utterance joining. A terminal needs prose rules
+  off but the space kept; a URL bar needs neither, so `example` + `dot com` still makes
+  `example.com`.
+- **`Ctrl+C` twice in a terminal no longer starts dictation.** Double-tap counted any two
+  presses inside the window, so a repeated shortcut read as the gesture. An ordinary key
+  now cancels a pending tap; modifiers do not.
+- **An emoji no longer fails the utterance where `wl-copy` is absent.** The router used the
+  clipboard without checking there was one. A ydotool-only session now types what it can,
+  drops what it cannot, and says so. With neither backend the About row reads
+  `nothing available`.
+- **The About submenu says what is true.** The licence comes from the manifest; the
+  injection row names the backend that carried the text, not the one chosen; the GPU index
+  is labelled `requested`, because whisper.cpp reports nothing back.
+- **The HUD no longer sits under the desktop panel.** The GNOME top bar covered its top
+  21 px, because X11 reports a monitor as its full rectangle. Placement now respects
+  `_NET_WORKAREA`.
+- **Spoken emoji reach the document.** No keycode produces an emoji, so `ydotool type 👍`
+  exited 0 and typed nothing. Emoji now go by the clipboard.
+- Removed a pointer to `docs/reference/commands.md`, a file that never existed, from
+  `config/default.toml`.
 
 ### Changed
 
-- **Input devices are identified by their backend id rather than their label.**
-  `govox devices` now prints the id in brackets — `hw:CARD=Microphones,DEV=0` — and
-  `[audio] device` prefers it. Labels turned out to be neither unique nor stable: one
-  machine lists five devices all called "Blue Microphones, USB Audio". A label is still
-  accepted where it is unambiguous, so existing configs keep working.
-- `govox devices` lists considerably more entries than before, because the audio backend
-  now enumerates every ALSA PCM variant rather than a summarised set. The bracketed id is
-  what tells them apart.
+- **Double-tapping either Control is the default shortcut**, replacing `toggle` on
+  `KEY_SCROLLLOCK`. The mode and the key are one decision: Control is pressed constantly,
+  so `toggle` on it would start dictation on every copy. Existing configs are unaffected.
+- **Input devices are identified by backend id rather than label.** `govox devices` prints
+  the id — `hw:CARD=Microphones,DEV=0` — and `[audio] device` prefers it, because labels
+  are neither unique nor stable. An unambiguous label still works. The listing is longer
+  now: the backend enumerates every ALSA PCM variant, and the id tells them apart.
 
 ### Internal
 
-- Migrated to cpal 0.18, which split the old `Device::name()` into `Display` for labels and
-  `DeviceId` for identity.
+- Migrated to cpal 0.18, which split `Device::name()` into `Display` and `DeviceId`.
+- **Tests run under `cargo nextest`**, as CI does. The golden corpus is 144 s of a 146 s
+  run, so `GOVOX_GOLDEN_SAMPLE=50` gives a ~6 s inner loop.
 
 ## [0.1.0] — 2026-08-14
 
