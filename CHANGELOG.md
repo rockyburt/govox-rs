@@ -106,7 +106,8 @@ before 1.0.0, minor versions may change behaviour.
   The sweep also overturned two claims in the model guide: bigger is not monotonically
   better (`base.en` is worse than `tiny.en`, `medium.en` worse than `small`), and the
   `.en` builds are not reliably better than their multilingual twins — plain `small` beats
-  `small.en` on accuracy *and* speed. Both claims were inherited rather than measured.
+  `small.en` on accuracy at identical decode cost. Both claims were inherited rather than
+  measured.
 - **The recognition bias prompt is a sentence, not a word list.** Whisper reads
   `initial_prompt` as the transcript preceding the audio, and `Newfoundland Labrador Gander
   Gambo …` is unlike anything it was trained on. The same terms wrapped in a sentence take

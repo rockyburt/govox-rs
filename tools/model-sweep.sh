@@ -29,6 +29,26 @@ if (( ${#models[@]} == 0 )); then
   models=(tiny.en base.en small.en small medium.en large-v3-turbo)
 fi
 
+# A model's first decode after a download or a cold cache carries warm-up, and
+# that lands in the mean. It is not a small effect: the first sweep timed
+# `small.en` at 0.38s and a cached re-run gave 0.23s, which is what it must be —
+# it is the same size as `small`. Accuracy is unaffected (decoding is
+# deterministic at temperature 0 with beam size 1), so only the timings lie.
+# Warn per model rather than silently reporting a number that cannot be right.
+cache="${HF_HOME:-$HOME/.cache/huggingface}/hub"
+cold=()
+for model in "${models[@]}"; do
+  if ! find "$cache" -name "ggml-${model}.bin" -print -quit 2>/dev/null | grep -q .; then
+    cold+=("$model")
+  fi
+done
+if (( ${#cold[@]} )); then
+  echo "note: not yet cached — their decode times will include warm-up and read high:" >&2
+  echo "      ${cold[*]}" >&2
+  echo "      Re-run the sweep once everything is cached and trust the second pass." >&2
+  echo >&2
+fi
+
 results=()
 for model in "${models[@]}"; do
   echo "── $model" >&2
