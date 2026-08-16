@@ -1454,8 +1454,11 @@ version = "0.1.0"
 dependencies = [
  "govox-core",
  "hf-hub",
+ "serde",
+ "serde_json",
  "thiserror 2.0.20",
  "tokio",
+ "toml",
  "tracing",
  "whisper-rs",
 ]

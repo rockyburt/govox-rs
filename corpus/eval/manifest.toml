@@ -1,0 +1,221 @@
+# The accuracy eval corpus.
+#
+# One entry per recorded clip. This file is the **script** — read `say` aloud to
+# record `<id>.wav` — and it is also the reference the result is scored against.
+#
+# ## Two fields, because there are two questions
+#
+# `say`    what you read aloud. Also the reference for the **raw** recogniser
+#          output, since it is literally what was spoken.
+# `expect` what should end up in the document after correction and the personal
+#          dictionary. Defaults to `say`, and is only written out where the two
+#          genuinely differ.
+#
+# They differ exactly where govox is meant to be doing work. You say "rentals
+# dot ca" and the document should read "rentals.ca"; you say "comma" and a comma
+# should appear. Scoring both against one string would either mark correct
+# behaviour as an error or hide the dictionary doing its job — and the gap
+# between the two scores is precisely what the dictionary is worth.
+#
+# ## Why these clips
+#
+# Nothing here is invented. Every `term` is a word that has actually been
+# mis-recognised on this machine — each has a matching `replace` rule in the
+# personal dictionary, which is a logbook of real failures:
+#
+#   twilling gate / twiddling gate -> Twillingate
+#   bona vista                     -> Bonavista
+#   glover town                    -> Glovertown
+#   lewis port                     -> Lewisporte
+#   rent sync                      -> Rentsync
+#   jurl                           -> Jira
+#   rentals dot ca / dot c a       -> rentals.ca
+#
+# `terms` are what the clip must get right, scored separately from word error
+# rate and mattering more: WER over a six-word sentence moves in 16% steps,
+# whereas "did Twillingate survive" is a fact. They are checked against the
+# corrected text, so a term rescued by a dictionary rule counts as a hit — that
+# is the rule earning its place.
+#
+# The audio is **not** in git (see .gitignore). This file and the scores are, so
+# the numbers stay reviewable without publishing the recordings.
+#
+# ## Recording
+#
+#   tools/record-eval.sh                     # every clip with no audio yet
+#   tools/record-eval.sh twillingate-drive   # re-record just one
+#
+# Read at a normal dictation pace. Do not over-enunciate: the corpus is only
+# useful if it sounds like ordinary use.
+
+# --- Newfoundland place names ------------------------------------------------
+# The largest cluster of known failures, and what the bias list was written for.
+
+[[clip]]
+id = "twillingate-drive"
+say = "We drove out to Twillingate on Saturday afternoon."
+terms = ["Twillingate"]
+
+[[clip]]
+id = "twillingate-bonavista"
+say = "Twillingate and Bonavista are both worth the trip."
+terms = ["Twillingate", "Bonavista"]
+
+[[clip]]
+id = "glovertown-appleton"
+say = "The road to Glovertown runs past Appleton."
+terms = ["Glovertown", "Appleton"]
+
+[[clip]]
+id = "lewisporte-ferry"
+say = "The ferry leaves from Lewisporte in the morning."
+terms = ["Lewisporte"]
+
+[[clip]]
+id = "gander-gambo"
+say = "It is about half an hour from Gander to Gambo."
+terms = ["Gander", "Gambo"]
+
+[[clip]]
+id = "notre-dame-bay"
+say = "There was ice in Notre Dame Bay well into June."
+terms = ["Notre Dame Bay"]
+
+[[clip]]
+id = "newfoundland-labrador"
+say = "Newfoundland and Labrador is the full name of the province."
+terms = ["Newfoundland", "Labrador"]
+
+[[clip]]
+id = "avalon-drive"
+say = "We are driving down to the Avalon next weekend."
+terms = ["Avalon"]
+
+# --- Work vocabulary ---------------------------------------------------------
+# Several of these are the two-field case: the spoken form and the written form
+# are different strings, and turning one into the other is the dictionary's job.
+
+[[clip]]
+id = "rentsync-deploy"
+say = "The Rentsync deploy finished about an hour ago."
+terms = ["Rentsync"]
+
+[[clip]]
+id = "rentsync-jira"
+say = "I moved the Rentsync ticket in Jira this morning."
+terms = ["Rentsync", "Jira"]
+
+[[clip]]
+id = "rentals-ca-listing"
+say = "The listing is live on rentals dot ca now."
+expect = "The listing is live on rentals.ca now."
+terms = ["rentals.ca"]
+
+[[clip]]
+id = "rentals-api-timeout"
+say = "The rentals API call timed out twice in a row."
+expect = "The Rentals-API call timed out twice in a row."
+terms = ["Rentals-API"]
+
+[[clip]]
+id = "jira-standup"
+say = "I will pull the Jira board up before standup."
+terms = ["Jira"]
+
+[[clip]]
+id = "cloudflare-cache"
+say = "Cloudflare is still serving the cached version."
+terms = ["Cloudflare"]
+
+[[clip]]
+id = "github-gitlab"
+say = "The mirror is on GitHub but the pipeline runs in GitLab."
+terms = ["GitHub", "GitLab"]
+
+[[clip]]
+id = "buildingstack-domum"
+say = "BuildingStack and Domum are both on the integration list."
+terms = ["BuildingStack", "Domum"]
+
+[[clip]]
+id = "govox-dictation"
+say = "I am dictating this into Govox right now."
+terms = ["Govox"]
+
+[[clip]]
+id = "slack-thread"
+say = "I replied in the slack thread rather than the channel."
+terms = ["slack"]
+
+# --- The complaint that changed the model ------------------------------------
+# "ultra filtered milk" arriving as "ultra-fiddle" is why the configured model
+# moved from small to large-v3-turbo on 2026-08-14. It has no dictionary rule,
+# so it scores the recogniser directly with nothing to rescue it.
+
+[[clip]]
+id = "ultra-filtered-milk"
+say = "Pick up a carton of ultra filtered milk."
+terms = ["ultra filtered milk"]
+
+[[clip]]
+id = "ultra-filtered-milk-long"
+say = "The ultra filtered milk lasts a lot longer in the fridge."
+terms = ["ultra filtered milk"]
+
+# --- Ordinary prose ----------------------------------------------------------
+# Without these the corpus is all hard words, and a model that got worse at
+# plain English would still score well. These carry no `terms`: their whole job
+# is word error rate on sentences with nothing unusual in them.
+
+[[clip]]
+id = "prose-meeting"
+say = "Let us push the meeting back to the middle of next week."
+terms = []
+
+[[clip]]
+id = "prose-weather"
+say = "It looks like the rain is going to hold off until this evening."
+terms = []
+
+[[clip]]
+id = "prose-groceries"
+say = "I need to stop at the store on the way home for bread and eggs."
+terms = []
+
+[[clip]]
+id = "prose-longer"
+say = "The thing I keep running into is that the first attempt works and the second one quietly fails."
+terms = []
+
+[[clip]]
+id = "prose-numbers"
+say = "There were about fifteen people there and it went on for two hours."
+terms = []
+
+[[clip]]
+id = "prose-question"
+say = "Do you know whether anyone has looked at that ticket yet?"
+terms = []
+
+# --- Spoken punctuation ------------------------------------------------------
+# The correction pipeline's own work. `say` is the spoken form, `expect` is what
+# should land, and the distance between the raw and corrected scores here is
+# entirely `apply_spoken_punctuation` doing its job.
+
+[[clip]]
+id = "spoken-punctuation-comma"
+say = "First we test comma then we ship period"
+expect = "First we test, then we ship."
+terms = []
+
+[[clip]]
+id = "spoken-punctuation-question"
+say = "Is that ready yet question mark"
+expect = "Is that ready yet?"
+terms = []
+
+[[clip]]
+id = "spoken-email"
+say = "Send it to rocky at sign gmail dot com"
+expect = "Send it to rocky@gmail.com"
+terms = []
