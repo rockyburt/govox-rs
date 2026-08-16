@@ -32,8 +32,8 @@ Never bless to make a red test green without reading what moved.
 1. **`govox-core` must never depend on `tokio`, an OS binding, or a sibling crate.** CI
    enforces this. It is what keeps the golden harness fast enough to run on every save.
 2. **Record behavioural decisions in `docs/parity.md`** in the same change.
-   It explains *why* the pipeline behaves as it does — including three cases where an API
-   reports success and does nothing — and is the first place to look when something is
+   It explains *why* the pipeline behaves as it does — including the several cases where an
+   API reports success and does nothing — and is the first place to look when something is
    surprising. An unexplained behaviour change is a bug; an explained one is a decision.
 3. **Prior work.** govox grew out of an earlier, unpublished Python implementation, which is
    where the golden corpora and much of the reasoning in `docs/parity.md` originally came
@@ -116,10 +116,11 @@ CI needing a microphone.
   code-point index, and AT-SPI reports characters too. Use `CharIdx` and `chars().count()`;
   `str::len()` on user text is a bug.
 - **Optional capabilities are trait methods with default impls**, not runtime probes.
-- **Make failure modes unrepresentable where the API allows it.** Three desktop APIs here
-  *report success and do nothing*; each is encoded as a type that cannot express the
-  mistake, with the negative test kept as documentation of why. See the "silent success"
-  entries in `docs/parity.md`.
+- **Make failure modes unrepresentable where the API allows it.** Several APIs here
+  *report success and do nothing* — five numbered traps in the IBus path alone, plus
+  `ydotool key <name>` and `ydotool type <emoji>`. Where the API allows it each is encoded
+  as a type that cannot express the mistake; where it does not, the guard is a test. See
+  the "silent success" entries in `docs/parity.md`.
 - **No GLib main loops.** The tray, IBus and AT-SPI are all reached over D-Bus, which is
   the single largest simplification the rewrite buys. Do not reintroduce one.
 - **The overlay stays a separate process**, so that a crash in the least-tested code in
