@@ -4,7 +4,7 @@
       "corrected": "We drove out to Twillingate on Saturday afternoon.",
       "corrected_wer": 0.0,
       "id": "twillingate-drive",
-      "raw": "We drove out to Twillingate on Saturday afternoon",
+      "raw": "We drove out to Twillingate on Saturday afternoon.",
       "raw_wer": 0.0,
       "terms": {
         "Twillingate": true
@@ -14,7 +14,7 @@
       "corrected": "Twillingate and Bonavista are both worth the trip.",
       "corrected_wer": 0.0,
       "id": "twillingate-bonavista",
-      "raw": "Twillingate and Bonavista are both worth the trip",
+      "raw": "Twillingate and Bonavista are both worth the trip.",
       "raw_wer": 0.0,
       "terms": {
         "Bonavista": true,
@@ -25,7 +25,7 @@
       "corrected": "The road to Glovertown runs past Hamilton.",
       "corrected_wer": 0.143,
       "id": "glovertown-appleton",
-      "raw": "The road to Glovertown runs past Hamilton",
+      "raw": "The road to Glovertown runs past Hamilton.",
       "raw_wer": 0.143,
       "terms": {
         "Appleton": false,
@@ -46,7 +46,7 @@
       "corrected": "It is about half an hour from Ganner to Gambo.",
       "corrected_wer": 0.1,
       "id": "gander-gambo",
-      "raw": "It is about half an hour from Ganner to Gambo",
+      "raw": "It is about half an hour from Ganner to Gambo.",
       "raw_wer": 0.1,
       "terms": {
         "Gambo": true,
@@ -67,7 +67,7 @@
       "corrected": "Newfoundland Labrador is the name of the province.",
       "corrected_wer": 0.2,
       "id": "newfoundland-labrador",
-      "raw": "Newfoundland Labrador is the name of the province",
+      "raw": "Newfoundland Labrador is the name of the province.",
       "raw_wer": 0.2,
       "terms": {
         "Labrador": true,
@@ -78,18 +78,18 @@
       "corrected": "We are driving down to Avalon next weekend.",
       "corrected_wer": 0.111,
       "id": "avalon-drive",
-      "raw": "We are driving down to Avalon next weekend",
+      "raw": "We are driving down to Avalon next weekend.",
       "raw_wer": 0.111,
       "terms": {
         "Avalon": true
       }
     },
     {
-      "corrected": "Durant Sink deploy finished about an hour ago.",
-      "corrected_wer": 0.25,
+      "corrected": "The Rancink deploy finished about an hour ago.",
+      "corrected_wer": 0.125,
       "id": "rentsync-deploy",
-      "raw": "Durant Sink deploy finished about an hour ago",
-      "raw_wer": 0.25,
+      "raw": "The Rancink deploy finished about an hour ago.",
+      "raw_wer": 0.125,
       "terms": {
         "Rentsync": false
       }
@@ -98,7 +98,7 @@
       "corrected": "I moved the RentSync ticket in JIRA this morning.",
       "corrected_wer": 0.0,
       "id": "rentsync-jira",
-      "raw": "I moved the RentSync ticket in JIRA this morning",
+      "raw": "I moved the RentSync ticket in JIRA this morning.",
       "raw_wer": 0.0,
       "terms": {
         "Jira": true,
@@ -109,7 +109,7 @@
       "corrected": "The listing is live on Rentals.Ca now.",
       "corrected_wer": 0.0,
       "id": "rentals-ca-listing",
-      "raw": "The listing is live on Rentals.ca now",
+      "raw": "The listing is live on Rentals.ca now.",
       "raw_wer": 0.333,
       "terms": {
         "rentals.ca": true
@@ -119,7 +119,7 @@
       "corrected": "The Rentals-API call timed out twice in a row.",
       "corrected_wer": 0.0,
       "id": "rentals-api-timeout",
-      "raw": "The Rentals-API call timed out twice in a row",
+      "raw": "The Rentals-API call timed out twice in a row.",
       "raw_wer": 0.2,
       "terms": {
         "Rentals-API": true
@@ -129,7 +129,7 @@
       "corrected": "I will pull the jiribor up before stand up.",
       "corrected_wer": 0.444,
       "id": "jira-standup",
-      "raw": "I will pull the jiribor up before stand up",
+      "raw": "I will pull the jiribor up before stand up.",
       "raw_wer": 0.444,
       "terms": {
         "Jira": false
@@ -139,7 +139,7 @@
       "corrected": "Cloudflare is still serving the cached version.",
       "corrected_wer": 0.0,
       "id": "cloudflare-cache",
-      "raw": "Cloudflare is still serving the cached version",
+      "raw": "Cloudflare is still serving the cached version.",
       "raw_wer": 0.0,
       "terms": {
         "Cloudflare": true
@@ -149,7 +149,7 @@
       "corrected": "Demer is on GitHub but the pipeline runs in GitLab.",
       "corrected_wer": 0.182,
       "id": "github-gitlab",
-      "raw": "Demer is on GitHub but the pipeline runs in GitLab",
+      "raw": "Demer is on GitHub but the pipeline runs in GitLab.",
       "raw_wer": 0.182,
       "terms": {
         "GitHub": true,
@@ -160,7 +160,7 @@
       "corrected": "BuildingStack and Domum are both on the integration list.",
       "corrected_wer": 0.0,
       "id": "buildingstack-domum",
-      "raw": "BuildingStack and Domum are both on the integration list",
+      "raw": "BuildingStack and Domum are both on the integration list.",
       "raw_wer": 0.0,
       "terms": {
         "BuildingStack": true,
@@ -171,18 +171,18 @@
       "corrected": "I am dictating this into Govox right now.",
       "corrected_wer": 0.0,
       "id": "govox-dictation",
-      "raw": "I am dictating this into Govox right now",
+      "raw": "I am dictating this into Govox right now.",
       "raw_wer": 0.0,
       "terms": {
         "Govox": true
       }
     },
     {
-      "corrected": "I replied in slack thread rather than the channel.",
-      "corrected_wer": 0.1,
+      "corrected": "I replied in the slack thread rather than the channel.",
+      "corrected_wer": 0.0,
       "id": "slack-thread",
-      "raw": "I replied in slack thread rather than the channel",
-      "raw_wer": 0.1,
+      "raw": "I replied in the slack thread rather than the channel.",
+      "raw_wer": 0.0,
       "terms": {
         "slack": true
       }
@@ -191,7 +191,7 @@
       "corrected": "Pick up a carton of ultra filtered milk.",
       "corrected_wer": 0.0,
       "id": "ultra-filtered-milk",
-      "raw": "Pick up a carton of ultra filtered milk",
+      "raw": "Pick up a carton of ultra filtered milk.",
       "raw_wer": 0.0,
       "terms": {
         "ultra filtered milk": true
@@ -201,7 +201,7 @@
       "corrected": "The ultra filtered milk lasts a lot longer in the fridge.",
       "corrected_wer": 0.0,
       "id": "ultra-filtered-milk-long",
-      "raw": "The ultra filtered milk lasts a lot longer in the fridge",
+      "raw": "The ultra filtered milk lasts a lot longer in the fridge.",
       "raw_wer": 0.0,
       "terms": {
         "ultra filtered milk": true
@@ -211,7 +211,7 @@
       "corrected": "Let us push up the meeting back to the middle of next week.",
       "corrected_wer": 0.083,
       "id": "prose-meeting",
-      "raw": "Let us push up the meeting back to the middle of next week",
+      "raw": "Let us push up the meeting back to the middle of next week.",
       "raw_wer": 0.083,
       "terms": {}
     },
@@ -227,7 +227,7 @@
       "corrected": "I need to stop at the store on the way home for bread and eggs.",
       "corrected_wer": 0.0,
       "id": "prose-groceries",
-      "raw": "I need to stop at the store on the way home for bread and eggs",
+      "raw": "I need to stop at the store on the way home for bread and eggs.",
       "raw_wer": 0.0,
       "terms": {}
     },
@@ -243,7 +243,7 @@
       "corrected": "There were about 15 people there and it went on for two hours.",
       "corrected_wer": 0.077,
       "id": "prose-numbers",
-      "raw": "There were about 15 people there and it went on for two hours",
+      "raw": "There were about 15 people there and it went on for two hours.",
       "raw_wer": 0.077,
       "terms": {}
     },
@@ -272,15 +272,15 @@
       "terms": {}
     },
     {
-      "corrected": "Send it to rocky@gmail.Com.",
+      "corrected": "Send it to Rocky@gmail.Com.",
       "corrected_wer": 0.0,
       "id": "spoken-email",
-      "raw": "send it to rocky@gmail.com",
-      "raw_wer": 0.667,
+      "raw": "Send it to Rocky at sign gmail dot com.",
+      "raw_wer": 0.0,
       "terms": {}
     }
   ],
-  "corrected_wer": 0.075,
+  "corrected_wer": 0.067,
   "model": "large-v3-turbo",
-  "raw_wer": 0.128
+  "raw_wer": 0.097
 }

@@ -44,15 +44,30 @@ pub fn bias_prompt(bias_terms: &[String], token_budget: u32) -> String {
     }
     let budget = token_budget as usize;
     let mut tokens: Vec<&str> = Vec::new();
-    for term in bias_terms {
+    'terms: for term in bias_terms {
         for token in term.split_whitespace() {
             if tokens.len() >= budget {
-                return tokens.join(" ");
+                break 'terms;
             }
             tokens.push(token);
         }
     }
-    tokens.join(" ")
+    if tokens.is_empty() {
+        return String::new();
+    }
+    // The frame is the point. Whisper conditions `initial_prompt` as if it were
+    // the transcript *preceding* this audio, so a bare word list is unnatural
+    // input — nothing in its training looks like "Newfoundland Labrador Gander
+    // Gambo". Wrapping the same words in a sentence measurably helps: raw WER
+    // 0.128 -> 0.097 on the eval corpus, two clips better and none worse, with
+    // term recall unchanged. Commas between the terms undo the gain and cost a
+    // term, so the list stays space-joined inside the sentence. See
+    // docs/guides/accuracy-eval.md.
+    //
+    // The four framing words are not charged against `token_budget`: the budget
+    // exists to stop the term list crowding out the streaming context, and it
+    // is documented as a ceiling rather than a target.
+    format!("This transcript mentions {}.", tokens.join(" "))
 }
 
 /// Map the config value to what Whisper expects.
@@ -120,10 +135,28 @@ mod tests {
     #[test]
     fn the_bias_prompt_is_truncated_at_the_word_budget() {
         let bias = terms(&["Rocky Burt", "Kubernetes", "govox"]);
-        assert_eq!(bias_prompt(&bias, 10), "Rocky Burt Kubernetes govox");
-        assert_eq!(bias_prompt(&bias, 3), "Rocky Burt Kubernetes");
+        assert_eq!(
+            bias_prompt(&bias, 10),
+            "This transcript mentions Rocky Burt Kubernetes govox."
+        );
+        assert_eq!(
+            bias_prompt(&bias, 3),
+            "This transcript mentions Rocky Burt Kubernetes."
+        );
         // The budget cuts mid-term, matching govox-py: terms are not atomic.
-        assert_eq!(bias_prompt(&bias, 1), "Rocky");
+        assert_eq!(bias_prompt(&bias, 1), "This transcript mentions Rocky.");
+    }
+
+    /// The words are wrapped in a sentence rather than handed over as a list.
+    /// Whisper reads `initial_prompt` as preceding transcript text, and a bare
+    /// word list is unlike anything it was trained on.
+    #[test]
+    fn the_bias_prompt_reads_as_a_sentence() {
+        let prompt = bias_prompt(&terms(&["Twillingate", "Lewisporte"]), 100);
+        assert_eq!(prompt, "This transcript mentions Twillingate Lewisporte.");
+        assert!(prompt.ends_with('.'));
+        // Not comma-separated: measured worse, and it cost a term.
+        assert!(!prompt.contains(','));
     }
 
     #[test]
