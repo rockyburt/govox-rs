@@ -185,6 +185,24 @@ fn streaming_mode() -> bool {
     std::env::var("GOVOX_EVAL_STREAMING").is_ok_and(|v| v == "1")
 }
 
+/// A fixed decode cadence, in seconds of audio, from `GOVOX_EVAL_CADENCE_S`.
+///
+/// Without it the schedule follows measured decode times, which is what the
+/// daemon does — and which makes accuracy **irreproducible**: GPU jitter
+/// changes how many decodes a clip gets, that changes the windows, and that
+/// changes what LocalAgreement commits. Three identical baseline runs scored
+/// 0.253, 0.247 and 0.248 with term recall 20, 19 and 21.
+///
+/// Pinning the cadence decouples the two questions. Accuracy is then exact and
+/// comparable between builds, and decode *time* is still measured and reported
+/// — it just no longer feeds back into the schedule. Compare accuracy with this
+/// set, and speed with it unset.
+fn fixed_cadence_s() -> Option<f64> {
+    std::env::var("GOVOX_EVAL_CADENCE_S")
+        .ok()
+        .and_then(|v| v.parse().ok())
+}
+
 /// Run one clip through the streaming path the way the daemon runs it.
 ///
 /// Returns the recognised text, the seconds spent decoding, and the number of
@@ -230,7 +248,7 @@ async fn stream_clip(
             seconds += took;
             decodes += 1;
             text.push_str(&update.committed);
-            next_decode_s = clock_s + 2.0 * took;
+            next_decode_s = clock_s + fixed_cadence_s().unwrap_or(2.0 * took);
         }
     }
 
@@ -443,6 +461,12 @@ fn report(config: &Config, scored: &[Scored]) {
             "utterance (transcribe)"
         }
     );
+    if let Some(cadence) = fixed_cadence_s() {
+        eprintln!(
+            "decode cadence pinned at {cadence:.2}s of audio: accuracy is reproducible, \
+             decode times are still real but do not drive the schedule"
+        );
+    }
     eprintln!(
         "\n{:<28} {:>8} {:>10} {:>8} {:>5}  terms",
         "clip", "raw wer", "corr. wer", "secs", "dec"

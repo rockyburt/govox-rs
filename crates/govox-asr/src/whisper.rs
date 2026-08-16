@@ -18,6 +18,7 @@ use govox_core::streaming::TimedWord;
 use tokio::sync::{mpsc, oneshot};
 use whisper_rs::{
     DtwMode, DtwParameters, FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters,
+    WhisperState,
 };
 
 use crate::model::{self, ModelError};
@@ -305,6 +306,19 @@ struct Worker {
 }
 
 struct Loaded {
+    /// One state, reused across decodes.
+    ///
+    /// `create_state` allocates the KV caches; at a 0.25 s chunk size the
+    /// streaming path was doing that several times a second. The state holds
+    /// its own `Arc` on the context, so it can be stored beside it.
+    ///
+    /// **Declared before `context` on purpose.** Struct fields drop in
+    /// declaration order, and freeing the context's GPU backend before the
+    /// state that is still holding buffers on it segfaults on teardown.
+    state: WhisperState,
+    /// Kept alive alongside the state, and needed to build a fresh one if the
+    /// reused state ever has to be replaced.
+    #[allow(dead_code, reason = "owns the loaded model; the state is what decodes")]
     context: WhisperContext,
 }
 
@@ -323,10 +337,33 @@ impl Worker {
                 }
             }
         }
+
+        // Leak the model rather than free it.
+        //
+        // `WhisperRecognizer::drop` deliberately does not join this thread (see
+        // the comment there: joining deadlocks, because a handle held by the
+        // pipeline keeps the channel open). So this runs concurrently with the
+        // process exiting, and freeing GPU buffers underneath a main thread
+        // that is already unmapping segfaults inside the Vulkan driver:
+        //
+        //   whisper_free_state -> ggml_backend_sched_free -> vk::Device::freeMemory
+        //   -> libnvidia-glcore, while thread 1 sits in munmap
+        //
+        // The loop only ends when the recognizer is going away, which in this
+        // codebase means the process is going away too, and the kernel reclaims
+        // both the mapping and the device allocations on exit. That was already
+        // the effective behaviour — the comment on `Drop` says the process
+        // reclaims the context regardless — this just stops us racing to do it
+        // by hand. Costs nothing at runtime and makes shutdown faster.
+        //
+        // Freeing properly needs a shutdown that waits for this thread, which
+        // needs the handle lifetime problem solved first.
+        std::mem::forget(self.loaded.take());
+
         tracing::debug!("recognition thread stopped");
     }
 
-    fn ensure_loaded(&mut self) -> Result<&Loaded, AsrError> {
+    fn ensure_loaded(&mut self) -> Result<&mut Loaded, AsrError> {
         if self.loaded.is_none() {
             let resolved = model::resolve(&self.config)?;
             tracing::info!(
@@ -361,9 +398,12 @@ impl Worker {
                 elapsed_s = started.elapsed().as_secs_f64(),
                 "whisper model loaded"
             );
-            self.loaded = Some(Loaded { context });
+            let state = context
+                .create_state()
+                .map_err(|e| AsrError::Load(e.to_string()))?;
+            self.loaded = Some(Loaded { context, state });
         }
-        Ok(self.loaded.as_ref().expect("just loaded"))
+        Ok(self.loaded.as_mut().expect("just loaded"))
     }
 
     fn transcribe(&mut self, audio: &[f32]) -> Result<String, AsrError> {
@@ -378,13 +418,10 @@ impl Worker {
         // Load first and drop the mutable borrow, so the params (which borrow
         // the prompt) and the context can be held at the same time.
         self.ensure_loaded()?;
-        let loaded = self.loaded.as_ref().expect("ensure_loaded succeeded");
         let params = Self::full_params_for(&self.config, &self.prompt);
-
-        let mut state = loaded
-            .context
-            .create_state()
-            .map_err(|e| AsrError::Transcribe(e.to_string()))?;
+        // Disjoint field borrows: `params` holds `config` and `prompt`, this
+        // holds `loaded`.
+        let state = &mut self.loaded.as_mut().expect("ensure_loaded succeeded").state;
         state
             .full(params, audio)
             .map_err(|e| AsrError::Transcribe(e.to_string()))?;
@@ -422,16 +459,12 @@ impl Worker {
         let no_speech_threshold = self.config.advanced.no_speech_threshold;
 
         self.ensure_loaded()?;
-        let loaded = self.loaded.as_ref().expect("ensure_loaded succeeded");
         let mut params = Self::full_params_for(&self.config, &self.prompt);
         params.set_token_timestamps(true);
         params.set_max_len(1);
         params.set_split_on_word(true);
 
-        let mut state = loaded
-            .context
-            .create_state()
-            .map_err(|e| AsrError::Transcribe(e.to_string()))?;
+        let state = &mut self.loaded.as_mut().expect("ensure_loaded succeeded").state;
         state
             .full(params, audio)
             .map_err(|e| AsrError::Transcribe(e.to_string()))?;
@@ -473,12 +506,22 @@ impl Worker {
 
         params.set_language(whisper_language(&config.language));
         params.set_temperature(advanced.temperature as f32);
+        // `temperature_inc` is deliberately left at whisper.cpp's 0.2. Turning
+        // the fallback off was measured on the streaming corpus and is a bad
+        // trade: raw WER 0.247 -> 0.283 and term recall 20/27 -> 16/27, to save
+        // about 5% of a decode. See docs/guides/accuracy-eval.md.
         params.set_logprob_thold(advanced.log_prob_threshold as f32);
         // Approximate, not equivalent: whisper.cpp's entropy threshold is not
         // faster-whisper's compression ratio. Recorded in docs/parity.md.
         params.set_entropy_thold(advanced.compression_ratio_threshold as f32);
         // Inverted: whisper.cpp asks whether to DROP context.
         params.set_no_context(!advanced.condition_on_previous_text);
+
+        // `n_threads` is left at whisper.cpp's default of min(4, cores). Raising
+        // it was measured on the streaming corpus and does nothing here: 8
+        // threads decode in 0.235s against the default's 0.235s, and 16 threads
+        // are slower at 0.243s. The decode is GPU-bound, so extra host threads
+        // only contend. On a CPU build the answer would differ.
 
         if !prompt.is_empty() {
             params.set_initial_prompt(prompt);
