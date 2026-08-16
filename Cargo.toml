@@ -40,7 +40,7 @@ govox-daemon = { path = "crates/govox-daemon" }
 
 anyhow = "1"
 arc-swap = "1.9"
-cpal = "0.16"
+cpal = "0.18"
 evdev = "0.13"
 ksni = "0.3"
 notify-rust = "4.18"

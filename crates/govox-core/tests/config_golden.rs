@@ -34,7 +34,11 @@ const GOLDEN: &str = include_str!("../../../corpus/config-defaults.json");
 ///   implementation this snapshot came from, which always took whatever the
 ///   driver enumerated first. On a laptop with switchable graphics that is the
 ///   integrated GPU, measured here at 2.4x slower.
-const RUST_ONLY_KEYS: &[&str] = &["recognition.gpu_device"];
+/// - `correction.case_control` — spoken case markers ("all caps hello"). Has no
+///   equivalent in the implementation this snapshot came from; it is modelled
+///   on macOS Dictation, which is the UX reference wherever parity does not
+///   bind. Off by default, so the snapshot's *behaviour* is unchanged.
+const RUST_ONLY_KEYS: &[&str] = &["recognition.gpu_device", "correction.case_control"];
 
 /// Compare two JSON values, collecting every difference as a dotted path.
 ///
@@ -192,7 +196,23 @@ fn bless_the_config_golden() {
 
     let config = Config::load_from(None, &Environment::default())
         .expect("the shipped default.toml must load on its own");
-    let value: serde_json::Value = serde_json::to_value(&config).expect("config serialises");
+    let mut value: serde_json::Value = serde_json::to_value(&config).expect("config serialises");
+
+    // The declared additions are stripped back out before writing.
+    //
+    // Without this, blessing quietly folds them into the snapshot: the value is
+    // the *whole* Rust schema, allowlist included. The snapshot would then no
+    // longer mean "the defaults as the earlier implementation had them", and
+    // `every_declared_addition_is_really_an_addition` would fail on the next run
+    // — the allowlist and this test would be describing different files.
+    for key in RUST_ONLY_KEYS {
+        let (section, leaf) = key.split_once('.').expect("allowlist keys are dotted");
+        value
+            .get_mut(section)
+            .and_then(serde_json::Value::as_object_mut)
+            .and_then(|section| section.remove(leaf))
+            .unwrap_or_else(|| panic!("{key} is on the allowlist but not in the schema"));
+    }
 
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),

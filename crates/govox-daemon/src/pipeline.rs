@@ -77,12 +77,17 @@ pub async fn run(config: Config, cancel: CancellationToken) -> Result<(), Pipeli
     let dictionary = crate::load_dictionary(&config)?;
 
     let mut controller = ActivationController::from_config(&config.activation);
-    let key = controller.active_key().to_owned();
+    let keys = controller.active_keys().names().to_vec();
 
-    let devices = find_keyboard_devices(std::slice::from_ref(&key));
+    // Any one keyboard emitting any one of the keys is enough: a split or
+    // external keyboard may carry only the left Control.
+    let devices = find_keyboard_devices(&keys);
     if devices.is_empty() {
-        return Err(PipelineError::NoKeyboard { key });
+        return Err(PipelineError::NoKeyboard {
+            key: controller.active_keys().describe(),
+        });
     }
+    let key = keys.join(", ");
     tracing::info!(
         key = %key,
         mode = %config.activation.mode,
@@ -102,6 +107,16 @@ pub async fn run(config: Config, cancel: CancellationToken) -> Result<(), Pipeli
     let frame_ms = config.audio.frame_ms;
     let device = config.audio.device.clone();
     let vad_config = config.vad.clone();
+    let recognition_config = config.recognition.clone();
+
+    // Probed once and shared. `select_injector` needs it to choose a backend,
+    // and the About submenu needs to report the same choice — deriving that
+    // from a second probe would let the two disagree.
+    let caps = probe_capabilities();
+
+    // Shared with the injector so the About menu can report the backend that
+    // actually carried the text, not merely the one chosen at startup.
+    let injection_report = govox_input::InjectionReport::new();
 
     let recognizer = WhisperRecognizer::start(&config.recognition, &dictionary, queue_size)?;
     let asr = recognizer.handle();
@@ -162,17 +177,53 @@ pub async fn run(config: Config, cancel: CancellationToken) -> Result<(), Pipeli
     // Reading the focused field is an enhancement, never a dependency: an
     // accessibility bus that will not answer leaves the dictation buffer,
     // which is a complete implementation of the default configuration.
-    let text_model: Arc<dyn TextModel> = if read_focused_field {
+    // The flag records which of the two was actually built. Asking the trait
+    // object afterwards is not possible, and `read_focused_field` alone would
+    // claim AT-SPI even when the connection failed and the buffer was used —
+    // which is exactly the "configured but not in effect" case the About
+    // submenu exists to expose.
+    let (text_model, field_reading): (Arc<dyn TextModel>, bool) = if read_focused_field {
         match govox_a11y::AtspiTextModel::connect(ttl_s).await {
-            Ok(model) => Arc::new(model),
+            Ok(model) => (Arc::new(model), true),
             Err(error) => {
                 tracing::info!(%error, "continuing without field reading");
-                Arc::new(DictationBuffer::new(ttl_s))
+                (Arc::new(DictationBuffer::new(ttl_s)), false)
             }
         }
     } else {
-        Arc::new(DictationBuffer::new(ttl_s))
+        (Arc::new(DictationBuffer::new(ttl_s)), false)
     };
+
+    // One closure, called now and again at the end of every session. The facts
+    // it reads are not all fixed: the injector's is only known once something
+    // has been injected, so publishing once at startup would freeze a value
+    // that is still "unused" at the time.
+    let about: crate::feedback::AboutRefresh = {
+        let recognition = recognition_config.clone();
+        let caps = caps.clone();
+        let method = shared.config.load().injection.method;
+        let report = injection_report.clone();
+        let preedit_active = preedit.is_some();
+        let streaming_enabled = streaming_config.enabled;
+        Arc::new(move || {
+            about_facts(
+                &recognition,
+                &caps,
+                method,
+                report.last(),
+                preedit_active,
+                field_reading,
+                streaming_enabled,
+            )
+        })
+    };
+
+    // Published here rather than at `Tray::start`, because half of it is not
+    // known until now: the accessibility bus has only just answered, and the
+    // input method either registered or did not.
+    if let Some(tray) = tray.as_ref() {
+        tray.set_about(about());
+    }
 
     // Started now rather than on the first `show`, so the first session does
     // not wait for a process launch it can see.
@@ -181,13 +232,16 @@ pub async fn run(config: Config, cancel: CancellationToken) -> Result<(), Pipeli
     }
 
     let loop_feedback = feedback_config.clone();
-    let announcer = Arc::new(FeedbackChannel::new(
-        feedback_config,
-        tray,
-        chime,
-        overlay,
-        Box::new(DesktopNotifier::new()),
-    ));
+    let announcer = Arc::new(
+        FeedbackChannel::new(
+            feedback_config,
+            tray,
+            chime,
+            overlay,
+            Box::new(DesktopNotifier::new()),
+        )
+        .with_about(about),
+    );
 
     let (utterances_tx, utterances) = mpsc::channel::<Job>(queue_size);
     let (events_tx, events) = mpsc::channel::<Event>(256);
@@ -227,10 +281,11 @@ pub async fn run(config: Config, cancel: CancellationToken) -> Result<(), Pipeli
             shared: Arc::clone(&shared),
             transcriber: WhisperTranscriber(asr),
             injector: govox_input::select_injector(
-                &probe_capabilities(),
+                &caps,
                 &shared.config.load(),
                 Arc::new(ProcessRunner),
                 SilentNotify,
+                injection_report.clone(),
             ),
             text_model: Arc::clone(&text_model),
             announcer: Box::new(SharedAnnouncer(Arc::clone(&announcer))),
@@ -1009,6 +1064,108 @@ fn spawn_capture(
     });
 }
 
+/// The facts the tray's About submenu reports.
+///
+/// Pure, so it can be checked without a desktop, a tray or a model — which is
+/// the only way the interesting cases get tested at all. Each row answers a
+/// question that currently requires reading the journal, and every one of them
+/// distinguishes *configured* from *in effect*: a GPU build running on the
+/// integrated card, an IBus engine that never registered, an AT-SPI connection
+/// that failed and silently left the dictation buffer in charge.
+fn about_facts(
+    recognition: &govox_core::config::RecognitionConfig,
+    caps: &govox_core::domain::Capabilities,
+    injection: govox_core::config::InjectionMethod,
+    used: govox_input::UsedBackend,
+    preedit: bool,
+    field_reading: bool,
+    streaming: bool,
+) -> govox_ui::AboutFacts {
+    use govox_core::config::InjectionMethod;
+    use govox_input::UsedBackend;
+
+    let backend = govox_asr::Backend::compiled();
+    // `unwrap_or(false)` covers the one error case — `device = "cuda"` on a CPU
+    // build — which the daemon has already refused to start on, so reporting
+    // "not on a GPU" here is unreachable rather than wrong.
+    let on_gpu = govox_asr::whisper::resolve_gpu(recognition.device, backend).unwrap_or(false);
+    let backend = if on_gpu {
+        // "requested", not a bare index. Whether ggml honoured it cannot be
+        // asked: whisper.cpp takes `gpu_device` and reports nothing back, and
+        // the only evidence is the `ggml_vulkan: N = <name>` lines it prints at
+        // startup. Naming the index without that qualifier would claim a
+        // verification this cannot perform — the exact overstatement this
+        // change exists to remove.
+        format!(
+            "{} · GPU {} requested",
+            backend.name(),
+            recognition.gpu_device
+        )
+    } else {
+        backend.name().to_owned()
+    };
+
+    // Mirrors `select_injector`'s own rule rather than restating it loosely:
+    // ydotool is used when it is preferred *and* available, else the clipboard.
+    let prefers_ydotool = matches!(injection, InjectionMethod::Ydotool | InjectionMethod::Auto);
+    let selected = if prefers_ydotool && caps.supports_injection("ydotool") {
+        "ydotool"
+    } else {
+        "clipboard"
+    };
+    // What was chosen and what has actually run are different facts, and the
+    // interesting case is when they disagree: `ydotool` selected, rejecting
+    // every call, and the fallback quietly carrying the text over the
+    // clipboard. Before this, the menu reported the choice and called it truth.
+    //
+    // The absent clipboard is named too. It is not a detail: with no `wl-copy`
+    // there is nothing behind ydotool if it starts rejecting calls, and emoji
+    // are dropped rather than pasted — so the row would otherwise read exactly
+    // like a machine where both of those still work.
+    let no_clipboard = !caps.supports_injection("clipboard");
+    let injection = match used {
+        _ if selected == "clipboard" && no_clipboard => {
+            "nothing available (no ydotool, no wl-copy)".to_owned()
+        }
+        UsedBackend::NotYet if no_clipboard => {
+            format!("{selected} (selected, unused; no clipboard fallback)")
+        }
+        UsedBackend::NotYet => format!("{selected} (selected, unused)"),
+        UsedBackend::Ydotool if no_clipboard => "ydotool (no clipboard fallback)".to_owned(),
+        UsedBackend::Ydotool => "ydotool".to_owned(),
+        UsedBackend::Clipboard if selected == "ydotool" => {
+            "clipboard (ydotool did not carry it)".to_owned()
+        }
+        UsedBackend::Clipboard => "clipboard".to_owned(),
+    };
+
+    let yes_no = |on: bool, name: &str| {
+        if on {
+            name.to_owned()
+        } else {
+            "off".to_owned()
+        }
+    };
+
+    govox_ui::AboutFacts {
+        // The build, not the manifest. `CARGO_PKG_VERSION` is "0.1.0" for every
+        // commit since the tag, so it cannot answer the question the menu is
+        // opened to answer. See this crate's `build.rs`.
+        version: env!("GOVOX_BUILD_VERSION").to_owned(),
+        // Read from the manifest rather than written out again here, so
+        // relicensing cannot leave the menu asserting the old one.
+        licence: env!("CARGO_PKG_LICENSE").to_owned(),
+        rows: vec![
+            ("Model".to_owned(), recognition.model.clone()),
+            ("Backend".to_owned(), backend),
+            ("Injection".to_owned(), injection),
+            ("Preedit".to_owned(), yes_no(preedit, "IBus")),
+            ("Field reading".to_owned(), yes_no(field_reading, "AT-SPI")),
+            ("Streaming".to_owned(), yes_no(streaming, "on")),
+        ],
+    }
+}
+
 /// What this session can do, as far as the pipeline needs to know.
 ///
 /// The real probe — `/dev/uinput`, `$WAYLAND_DISPLAY`, `$PATH` — is `doctor`'s
@@ -1019,4 +1176,229 @@ fn probe_capabilities() -> govox_core::domain::Capabilities {
     // the diagnostic reports cannot disagree — which was the whole point of
     // there being a diagnostic.
     crate::diagnostics::capabilities(&crate::diagnostics::Probes::default())
+}
+
+#[cfg(test)]
+mod about_tests {
+    use super::about_facts;
+    use govox_core::config::{Config, Environment, InjectionMethod};
+    use govox_core::domain::Capabilities;
+    use govox_input::UsedBackend;
+
+    fn recognition() -> govox_core::config::RecognitionConfig {
+        Config::load_from(None, &Environment::default())
+            .expect("defaults load")
+            .recognition
+    }
+
+    fn row<'a>(facts: &'a govox_ui::AboutFacts, label: &str) -> &'a str {
+        facts
+            .rows
+            .iter()
+            .find(|(key, _)| key == label)
+            .map(|(_, value)| value.as_str())
+            .unwrap_or_else(|| panic!("no {label} row"))
+    }
+
+    fn caps(injection: &[&str]) -> Capabilities {
+        Capabilities {
+            injection_strategies: injection.iter().map(|s| (*s).to_owned()).collect(),
+            ..Default::default()
+        }
+    }
+
+    /// The common case: ydotool available, and it did the work.
+    fn facts(used: UsedBackend) -> govox_ui::AboutFacts {
+        about_facts(
+            &recognition(),
+            &caps(&["ydotool", "clipboard"]),
+            InjectionMethod::Auto,
+            used,
+            false,
+            false,
+            false,
+        )
+    }
+
+    // --- version and licence ------------------------------------------------
+
+    /// `CARGO_PKG_VERSION` is "0.1.0" for every commit since the tag, so it
+    /// cannot answer "which build is this?". `build.rs` attaches the commit as
+    /// semver build metadata, which can.
+    ///
+    /// The exact value depends on where the build happened — on the tag, past
+    /// it, or with no repository at all — so this pins the *shape*: the
+    /// manifest version, optionally followed by `+` and the commit.
+    #[test]
+    fn the_version_is_the_manifest_plus_the_commit() {
+        let version = facts(UsedBackend::Ydotool).version;
+        let manifest = env!("CARGO_PKG_VERSION");
+
+        let Some(metadata) = version.strip_prefix(manifest) else {
+            panic!("{version:?} does not start with the manifest version {manifest:?}");
+        };
+        match metadata {
+            // Standing on the release tag, or built without git.
+            "" => {}
+            // Anywhere else: `+`, then the commit, and nothing that would make
+            // this a *prerelease* — a leading `-` would sort the build below
+            // the release it comes after.
+            other => {
+                let commit = other
+                    .strip_prefix('+')
+                    .unwrap_or_else(|| panic!("{version:?} must separate metadata with '+'"));
+                assert!(
+                    !commit.is_empty()
+                        && commit
+                            .chars()
+                            .all(|c| c.is_ascii_alphanumeric() || c == '.'),
+                    "{commit:?} is not valid semver build metadata"
+                );
+            }
+        }
+        assert!(
+            !version.contains(&format!("{manifest}-")),
+            "{version:?} uses a prerelease suffix, which sorts below {manifest}"
+        );
+    }
+
+    /// Read from the manifest, so relicensing cannot leave this asserting the
+    /// old licence.
+    #[test]
+    fn the_licence_comes_from_the_manifest() {
+        assert_eq!(
+            facts(UsedBackend::Ydotool).licence,
+            env!("CARGO_PKG_LICENSE")
+        );
+        assert_eq!(facts(UsedBackend::Ydotool).licence, "MIT");
+    }
+
+    // --- injection: chosen versus used --------------------------------------
+
+    /// Before anything is injected only the *choice* is known, and the row says
+    /// so rather than implying the backend has been exercised.
+    #[test]
+    fn nothing_injected_yet_is_reported_as_unused() {
+        assert_eq!(
+            row(&facts(UsedBackend::NotYet), "Injection"),
+            "ydotool (selected, unused)"
+        );
+    }
+
+    #[test]
+    fn the_backend_that_did_the_work_is_what_is_reported() {
+        assert_eq!(row(&facts(UsedBackend::Ydotool), "Injection"), "ydotool");
+    }
+
+    /// The case the whole change exists for: ydotool was chosen, rejected every
+    /// call, and the clipboard quietly carried the text. The menu used to
+    /// report "ydotool" here.
+    #[test]
+    fn a_silent_fallback_to_the_clipboard_is_visible() {
+        assert_eq!(
+            row(&facts(UsedBackend::Clipboard), "Injection"),
+            "clipboard (ydotool did not carry it)"
+        );
+    }
+
+    /// Where the clipboard was the choice, using it is not a fallback and must
+    /// not be dressed up as one.
+    #[test]
+    fn the_clipboard_by_choice_is_not_reported_as_a_fallback() {
+        let facts = about_facts(
+            &recognition(),
+            &caps(&["clipboard"]),
+            InjectionMethod::Clipboard,
+            UsedBackend::Clipboard,
+            false,
+            false,
+            false,
+        );
+        assert_eq!(row(&facts, "Injection"), "clipboard");
+    }
+
+    /// With no `wl-copy`, ydotool has nothing behind it and emoji are dropped
+    /// rather than pasted. The row must not read like a machine where both of
+    /// those still work.
+    #[test]
+    fn a_missing_clipboard_is_named() {
+        let facts = about_facts(
+            &recognition(),
+            &caps(&["ydotool"]),
+            InjectionMethod::Auto,
+            UsedBackend::Ydotool,
+            false,
+            false,
+            false,
+        );
+        assert_eq!(row(&facts, "Injection"), "ydotool (no clipboard fallback)");
+    }
+
+    /// The session that cannot type at all. Reporting "clipboard" here — which
+    /// is what the selector used to record up front — names a working backend
+    /// for a machine with none.
+    #[test]
+    fn no_backend_at_all_says_so() {
+        let facts = about_facts(
+            &recognition(),
+            &caps(&[]),
+            InjectionMethod::Auto,
+            UsedBackend::NotYet,
+            false,
+            false,
+            false,
+        );
+        assert_eq!(
+            row(&facts, "Injection"),
+            "nothing available (no ydotool, no wl-copy)"
+        );
+    }
+
+    // --- the rows that were already honest ----------------------------------
+
+    #[test]
+    fn a_failed_atspi_connection_reads_as_off() {
+        let facts = about_facts(
+            &recognition(),
+            &caps(&["ydotool"]),
+            InjectionMethod::Auto,
+            UsedBackend::Ydotool,
+            false,
+            // read_focused_field was true in the config, but connect() failed
+            false,
+            false,
+        );
+        assert_eq!(row(&facts, "Field reading"), "off");
+    }
+
+    #[test]
+    fn active_surfaces_are_named() {
+        let facts = about_facts(
+            &recognition(),
+            &caps(&["ydotool"]),
+            InjectionMethod::Auto,
+            UsedBackend::Ydotool,
+            true,
+            true,
+            true,
+        );
+        assert_eq!(row(&facts, "Preedit"), "IBus");
+        assert_eq!(row(&facts, "Field reading"), "AT-SPI");
+        assert_eq!(row(&facts, "Streaming"), "on");
+    }
+
+    /// The GPU index is what was *asked for*. whisper.cpp takes `gpu_device`
+    /// and reports nothing back, so claiming it verified would be the same
+    /// overstatement this change removes.
+    #[test]
+    fn the_gpu_index_is_marked_as_requested() {
+        let backend = row(&facts(UsedBackend::Ydotool), "Backend").to_owned();
+        let compiled = govox_asr::Backend::compiled();
+        assert!(backend.starts_with(compiled.name()), "{backend}");
+        if compiled.is_gpu() {
+            assert!(backend.contains("requested"), "{backend}");
+        } else {
+            assert_eq!(backend, compiled.name());
+        }
+    }
 }

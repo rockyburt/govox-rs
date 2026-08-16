@@ -34,7 +34,8 @@ use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use govox_core::config::CorrectionConfig;
 use govox_core::correction::{
-    self, Context, CorrectionPipeline, commands, dictionary, emoji, grammar, numbers, punctuation,
+    self, Context, CorrectionPipeline, casing, commands, dictionary, emoji, grammar, numbers,
+    punctuation,
 };
 use govox_core::domain::{
     EditAction, FieldSnapshot, InsertionAction, PersonalDictionary, PipelineAction, TextModel, Unit,
@@ -143,6 +144,39 @@ fn correction_config(args: &Value) -> CorrectionConfig {
         spoken_punctuation: args["spoken_punctuation"].as_bool().unwrap(),
         spoken_emoji: args["spoken_emoji"].as_bool().unwrap(),
         number_formatting: args["number_formatting"].as_bool().unwrap(),
+        // Absent from every record written before spoken case control existed.
+        // Defaulting to false is what makes those records replay unchanged:
+        // the stage is a no-op unless a record explicitly asked for it.
+        case_control: args
+            .get("case_control")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+    }
+}
+
+fn rules_name(rules: correction::FieldRules) -> &'static str {
+    match rules {
+        correction::FieldRules::Prose => "prose",
+        correction::FieldRules::SingleToken => "single_token",
+        correction::FieldRules::SpacedWords => "spaced_words",
+    }
+}
+
+/// The field rules a record asks for.
+///
+/// Records written before verbatim fields were split in two carry a `prose`
+/// boolean instead. `false` maps to `SingleToken`, which is exactly what the
+/// pipeline did when those answers were recorded — one arm for every verbatim
+/// purpose, and no separating space in any of them. Mapping it to `SpacedWords`
+/// would silently re-record a behaviour those inputs never described.
+fn field_rules_from(args: &Value) -> correction::FieldRules {
+    match args.get("rules").and_then(Value::as_str) {
+        Some("prose") => correction::FieldRules::Prose,
+        Some("single_token") => correction::FieldRules::SingleToken,
+        Some("spaced_words") => correction::FieldRules::SpacedWords,
+        Some(other) => panic!("unknown field rules {other}"),
+        None if args["prose"].as_bool().unwrap() => correction::FieldRules::Prose,
+        None => correction::FieldRules::SingleToken,
     }
 }
 
@@ -188,6 +222,7 @@ fn evaluate(stage: &str, args: &Value) -> Option<Value> {
         }
         "attach_units_to_digits" => json!(numbers::attach_units_to_digits(&text(args, "text"))),
         "apply_spoken_emoji" => json!(emoji::apply_spoken_emoji(&text(args, "text"))),
+        "apply_case_control" => json!(casing::apply_case_control(&text(args, "text"))),
         "normalize_command_text" => {
             json!(commands::normalize_command_text(&text(args, "text")))
         }
@@ -229,8 +264,11 @@ fn evaluate(stage: &str, args: &Value) -> Option<Value> {
             &text(args, "text"),
             &correction_config(&args["config"]),
             optional(args, "preceding").as_deref(),
-            args["prose"].as_bool().unwrap(),
+            field_rules_from(args),
         )),
+        "field_rules" => json!(rules_name(correction::field_rules(
+            optional(args, "purpose").as_deref()
+        ))),
         "pipeline_correct" => {
             // Memoised on the config: constructing a pipeline compiles the
             // dictionary's patterns, and the corpus holds ~100k records across
@@ -568,6 +606,20 @@ fn table_driven_inputs() -> Vec<(&'static str, String)> {
             out.push(("apply_spoken_punctuation", text));
         }
     }
+    for (marker, _) in casing::CASE_MARKERS {
+        for text in [
+            format!("{marker} hello world"),
+            format!("say {marker} hello there"),
+            format!("hello {marker}"),
+            format!("{marker} on hello there {marker} off world"),
+            format!("{marker} on hello there"),
+            format!("{} hello", marker.to_uppercase()),
+            format!("{marker} on one\ntwo"),
+        ] {
+            out.push(("apply_case_control", text));
+        }
+    }
+
     for determiner in punctuation::DETERMINERS {
         out.push((
             "apply_spoken_punctuation",
@@ -593,6 +645,72 @@ fn table_driven_inputs() -> Vec<(&'static str, String)> {
             format!("twenty {symbol}"),
         ] {
             out.push(("apply_number_formatting", text));
+        }
+    }
+
+    out
+}
+
+/// Every table-driven record, as `(stage, args)`.
+///
+/// [`table_driven_inputs`] covers the lookup tables, whose records are all a
+/// bare `text`. The rest are written here because they are argument *matrices*
+/// rather than tables: the field-rules cases below need a purpose or a
+/// preceding-text alongside the text, which that shape cannot express.
+fn table_driven_records() -> Vec<(&'static str, Value)> {
+    let mut out: Vec<(&'static str, Value)> = table_driven_inputs()
+        .into_iter()
+        .map(|(stage, text)| (stage, json!({ "text": text })))
+        .collect();
+
+    // Every purpose govox knows about, plus one it does not and the absent
+    // case, so a purpose moving between the two verbatim sets shows up as a
+    // diff rather than as silence.
+    for purpose in correction::VERBATIM_PURPOSES
+        .iter()
+        .copied()
+        .chain(["FREE_FORM", "NAME", ""])
+    {
+        out.push(("field_rules", json!({ "purpose": purpose })));
+        out.push(("is_prose_field", json!({ "purpose": purpose })));
+    }
+    out.push(("field_rules", json!({})));
+
+    // The matrix that was missing, and with it the bug: the corpus recorded
+    // verbatim fields only ever at an empty caret, so nothing ever asked what
+    // happens when a second utterance lands against existing text. Every
+    // combination of rules and caret is now pinned.
+    let config = json!({
+        "enabled": true,
+        "drop_fillers": true,
+        "filler_words": ["um", "uh"],
+        "collapse_repeats": true,
+        "spoken_punctuation": true,
+        "spoken_emoji": true,
+        "number_formatting": true,
+        "case_control": true,
+    });
+    for rules in ["prose", "single_token", "spaced_words"] {
+        for text in ["list files", "dot com", "all caps hello"] {
+            for preceding in [
+                Value::Null,
+                json!(""),
+                json!("ls -la"),
+                json!("ls "),
+                json!("example"),
+                json!("Hello."),
+                json!("one\n"),
+            ] {
+                let mut args = json!({
+                    "text": text,
+                    "config": config,
+                    "rules": rules,
+                });
+                if let Some(preceding) = preceding.as_str() {
+                    args["preceding"] = json!(preceding);
+                }
+                out.push(("apply_rules", args));
+            }
         }
     }
 
@@ -649,8 +767,7 @@ fn bless_the_golden_corpus() {
     }
 
     let mut added: BTreeMap<String, usize> = BTreeMap::new();
-    for (stage, text) in table_driven_inputs() {
-        let args = json!({ "text": text });
+    for (stage, args) in table_driven_records() {
         if !seen.insert(format!("{stage}\u{0}{args}")) {
             continue;
         }

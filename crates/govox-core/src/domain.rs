@@ -363,20 +363,46 @@ pub enum GovoxError {
     MicrophoneUnavailable(String),
     #[error("injection rejected: {0}")]
     InjectionRejected(String),
+    /// Recognition failed. Distinct from [`Self::InjectionRejected`] because a
+    /// decode that fails has produced no text to inject — reporting it as an
+    /// injection failure sends a reader looking at `ydotool` for a fault that
+    /// is in the model.
+    #[error("speech could not be recognised: {0}")]
+    RecognitionFailed(String),
     #[error("this desktop cannot support dictation injection: {0}")]
     UnsupportedCompositor(String),
 }
 
-/// Turns a complete utterance into text.
-pub trait Recognizer: Send {
-    fn transcribe(&mut self, audio: &AudioBuffer) -> Result<String, GovoxError>;
+/// Turns a window of audio into words with timings.
+///
+/// This is the seam the streaming processor decodes through, so that its window
+/// management, trimming and offset arithmetic can be tested against a scripted
+/// recognizer instead of a loaded model — and so that a second engine is an
+/// added implementation rather than an edit to `OnlineProcessor`.
+///
+/// Takes `&[f32]` rather than an [`AudioBuffer`]: the streaming window is a
+/// slice of a ring buffer that is re-decoded whole on every chunk, and it
+/// carries no timestamps of its own — the caller owns session time and shifts
+/// the returned spans by its own offset.
+///
+/// The future is `Send` because the daemon drives the processor from a spawned
+/// task. Written as an explicit `impl Future` for that bound rather than as
+/// `async fn`, which is the same shape `govox_daemon::Transcriber` uses, and
+/// keeps `govox-core` free of an async runtime or an `async-trait` dependency.
+#[allow(async_fn_in_trait)]
+pub trait WordRecognizer: Send + Sync {
+    /// Decode one window. Spans are relative to the *window*, not the session.
+    fn transcribe_words(
+        &self,
+        audio: &[f32],
+    ) -> impl std::future::Future<Output = Result<Vec<crate::streaming::TimedWord>, GovoxError>> + Send;
 
     /// Load and warm the model so the first real utterance is not slow.
     ///
     /// A default no-op, which is what replaces `govox-py`'s
     /// `getattr(recognizer, "warm_up", None)` duck-typing.
-    fn warm_up(&mut self) -> Result<(), GovoxError> {
-        Ok(())
+    fn warm_up(&self) -> impl std::future::Future<Output = Result<(), GovoxError>> + Send {
+        async { Ok(()) }
     }
 }
 
@@ -493,6 +519,80 @@ pub trait PreeditSink: Send + Sync {
     /// Where the caret is on screen, if the focused client reports it.
     fn cursor_location(&self) -> Option<CaretRect> {
         None
+    }
+}
+
+/// A [`WordRecognizer`] that returns canned hypotheses instead of decoding.
+///
+/// Lives in the library rather than in `tests/` so that `govox-asr` and the
+/// daemon's own tests can share it, exactly as [`crate::domain`]'s sibling
+/// fakes are shared elsewhere in the workspace.
+///
+/// Each call to [`WordRecognizer::transcribe_words`] pops the next scripted
+/// hypothesis. Running past the end yields an empty hypothesis rather than
+/// panicking — a processor that decodes more often than the test scripted for
+/// is a legitimate thing to assert about, not a crash.
+#[derive(Debug, Default)]
+pub struct ScriptedWordRecognizer {
+    /// Hypotheses to hand out, in order. Reversed on construction so a pop is
+    /// from the front.
+    script: std::sync::Mutex<Vec<Vec<crate::streaming::TimedWord>>>,
+    /// The length of every window handed to us, so a test can assert on what
+    /// the processor actually decoded rather than only on what came back.
+    windows: std::sync::Mutex<Vec<usize>>,
+    /// Make the Nth call (1-based) fail, to drive the degrade-not-die path.
+    fail_nth: Option<usize>,
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+impl ScriptedWordRecognizer {
+    /// A recognizer that returns these hypotheses, one per decode.
+    #[must_use]
+    pub fn saying(script: Vec<Vec<crate::streaming::TimedWord>>) -> Self {
+        let mut script = script;
+        script.reverse();
+        Self {
+            script: std::sync::Mutex::new(script),
+            ..Self::default()
+        }
+    }
+
+    /// As [`Self::saying`], but the Nth decode (1-based) returns an error.
+    #[must_use]
+    pub fn failing_nth(script: Vec<Vec<crate::streaming::TimedWord>>, nth: usize) -> Self {
+        Self {
+            fail_nth: Some(nth),
+            ..Self::saying(script)
+        }
+    }
+
+    /// How many decodes were asked for.
+    #[must_use]
+    pub fn calls(&self) -> usize {
+        self.calls.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// The sample count of every window handed over, in order.
+    #[must_use]
+    pub fn windows(&self) -> Vec<usize> {
+        self.windows.lock().unwrap().clone()
+    }
+}
+
+impl WordRecognizer for ScriptedWordRecognizer {
+    fn transcribe_words(
+        &self,
+        audio: &[f32],
+    ) -> impl std::future::Future<Output = Result<Vec<crate::streaming::TimedWord>, GovoxError>> + Send
+    {
+        let nth = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        self.windows.lock().unwrap().push(audio.len());
+        let result = if self.fail_nth == Some(nth) {
+            Err(GovoxError::RecognitionFailed("scripted failure".to_owned()))
+        } else {
+            Ok(self.script.lock().unwrap().pop().unwrap_or_default())
+        };
+        async move { result }
     }
 }
 

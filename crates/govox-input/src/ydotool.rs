@@ -17,6 +17,52 @@ fn command_chords(name: &str) -> Option<&'static [&'static str]> {
     }
 }
 
+/// Is this a character `ydotool type` has no way to produce?
+///
+/// `ydotool` types by emulating a keyboard, so a character reaches the screen
+/// only if some keycode produces it. Emoji have none, which is why
+/// `[correction] spoken_emoji` could be switched on and still put nothing in the
+/// document — the phrase became 👍 and 👍 was then silently dropped.
+///
+/// The test is deliberately **narrow**: pictographic ranges only, not "non-ASCII".
+/// Accented and non-Latin text is alphabetic, is typed today, and must keep
+/// going down the same path — rerouting every non-English utterance through the
+/// clipboard would be a far larger change than the one being made here. The two
+/// non-ASCII marks govox itself produces, `—` (U+2014) and `…` (U+2026), sit
+/// below every range listed and so are also untouched.
+#[must_use]
+pub fn is_pictographic(character: char) -> bool {
+    matches!(character as u32,
+        0x2600..=0x27BF      // miscellaneous symbols and dingbats: ⚠ ✅ ❌ ❤
+        | 0x2B00..=0x2BFF    // miscellaneous symbols and arrows: ⭐
+        | 0x1F000..=0x1FAFF  // emoticons, pictographs, transport, supplements
+        | 0xFE0F             // variation selector-16, the "render as emoji" mark
+        | 0x200D             // zero-width joiner, for composed sequences
+    )
+}
+
+/// Does this text contain anything `ydotool` cannot type?
+#[must_use]
+pub fn contains_untypeable(text: &str) -> bool {
+    text.chars().any(is_pictographic)
+}
+
+/// The same text with the untypeable characters removed.
+///
+/// Only for the case where there is no clipboard to route them through — the
+/// choice there is between typing most of the utterance and typing none of it.
+///
+/// Spacing is renormalised afterwards rather than left as the hole the removal
+/// makes: "Thanks 🙂." would otherwise become "Thanks ." — a space before a full
+/// stop, which is wrong in a way the user would have to go back and fix.
+/// `normalize_spacing` already collapses that, and reusing it keeps this from
+/// growing a second opinion about spacing.
+#[must_use]
+pub fn strip_untypeable(text: &str) -> String {
+    let kept: String = text.chars().filter(|c| !is_pictographic(*c)).collect();
+    govox_core::correction::normalize_spacing(&kept)
+}
+
 pub struct YdotoolInjector<R: Runner> {
     runner: R,
 }

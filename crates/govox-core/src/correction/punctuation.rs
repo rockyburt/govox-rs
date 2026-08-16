@@ -31,6 +31,15 @@ pub enum Attach {
     /// "Hello.\nworld". The sentence really did end; the break is not replacing
     /// its full stop.
     Break,
+    /// Stands alone with a space on each side: "Tom ampersand Jerry" →
+    /// "Tom & Jerry".
+    ///
+    /// The symbols people say by name divide into two shapes, and getting them
+    /// the same way round is wrong for one of them. A symbol inside an
+    /// identifier closes up (`Tight`) — "rocky at sign gmail" is one token. A
+    /// symbol standing in for a word does not: "&" read aloud as "and" is a
+    /// word in the sentence and is spaced like one.
+    Spaced,
 }
 
 /// Spoken phrase → (mark, attachment).
@@ -63,6 +72,45 @@ pub const SPOKEN_PUNCTUATION: &[(&str, &str, Attach)] = &[
     ("close paren", ")", Attach::Left),
     ("open bracket", "[", Attach::Right),
     ("close bracket", "]", Attach::Left),
+    ("open brace", "{", Attach::Right),
+    ("close brace", "}", Attach::Left),
+    // Symbol names, so an address or a path can be dictated at all.
+    //
+    // Almost every one is suffixed "sign" or is a word with no other everyday
+    // use, because the bare word is usually ordinary English: "at", "plus",
+    // "equals", "less than", "star" and "pound" are all sentences waiting to
+    // happen. None of those is accepted bare.
+    //
+    // "dot" is the deliberate exception, and it earns it: "dot com" is simply
+    // how an address is said, and without it the address case this section
+    // exists for still does not work. Its false-positive cost ("using dot
+    // product") is real but strictly smaller than that of "period", which has
+    // shipped since the beginning — "the Victorian period" is a likelier
+    // sentence than any bare "dot". The determiner guard covers "a dot" and
+    // "the dot", and `\b` means the plural "dots" never matches.
+    ("at sign", "@", Attach::Tight),
+    ("dot", ".", Attach::Tight),
+    ("dollar sign", "$", Attach::Right),
+    ("percent sign", "%", Attach::Left),
+    ("hashtag", "#", Attach::Right),
+    ("number sign", "#", Attach::Spaced),
+    ("pound sign", "#", Attach::Spaced),
+    ("hash sign", "#", Attach::Spaced),
+    ("plus sign", "+", Attach::Spaced),
+    ("equals sign", "=", Attach::Spaced),
+    ("less than sign", "<", Attach::Spaced),
+    ("greater than sign", ">", Attach::Spaced),
+    ("vertical bar", "|", Attach::Spaced),
+    ("ampersand", "&", Attach::Spaced),
+    ("asterisk", "*", Attach::Spaced),
+    ("tilde", "~", Attach::Spaced),
+    ("underscore", "_", Attach::Tight),
+    // "forward slash" must precede "slash": alternation is ordered, and the
+    // bare phrase would otherwise match first and leave "forward" behind as a
+    // prefix word. "backslash" needs no such care — `\b` cannot split a word.
+    ("forward slash", "/", Attach::Tight),
+    ("backslash", "\\", Attach::Tight),
+    ("slash", "/", Attach::Tight),
     ("new paragraph", "\n\n", Attach::Break),
     ("new line", "\n", Attach::Break),
 ];
@@ -167,6 +215,21 @@ pub fn apply_spoken_punctuation(text: &str) -> String {
                 let lead = prefix.map_or_else(|| lead_mark.unwrap_or("").to_owned(), str::to_owned);
                 (lead, "")
             }
+            Attach::Spaced => {
+                // A space on each side. The pattern consumed the prefix's own
+                // space, so it has to be re-emitted, exactly as `Right` does.
+                let lead = if let Some(prefix) = prefix {
+                    format!("{prefix} ")
+                } else if lead_mark.is_some() {
+                    " ".to_owned()
+                } else {
+                    String::new()
+                };
+                // At the end of the utterance there is no trailing whitespace to
+                // keep; emitting one anyway is harmless, since `normalize_spacing`
+                // strips it, and saves a second branch here.
+                (lead, if suffix.is_empty() { " " } else { suffix })
+            }
             Attach::Tight => (prefix.unwrap_or("").to_owned(), ""),
             Attach::Left => (prefix.unwrap_or("").to_owned(), suffix),
         };
@@ -218,4 +281,60 @@ pub fn capitalize_after_terminators(text: &str) -> String {
         out.push(char);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::apply_spoken_punctuation as punct;
+
+    #[test]
+    fn an_address_can_be_dictated() {
+        assert_eq!(punct("rocky at sign gmail dot com"), "rocky@gmail.com");
+    }
+
+    #[test]
+    fn a_path_can_be_dictated() {
+        assert_eq!(punct("usr forward slash local slash bin"), "usr/local/bin");
+    }
+
+    /// `\b` cannot split a word, so the bare "slash" entry must not reach
+    /// inside "backslash" however the alternation is ordered.
+    #[test]
+    fn backslash_survives_the_bare_slash_entry() {
+        assert_eq!(punct("c backslash temp"), "c\\temp");
+    }
+
+    #[test]
+    fn prose_symbols_keep_a_space_on_each_side() {
+        assert_eq!(punct("Tom ampersand Jerry"), "Tom & Jerry");
+        assert_eq!(punct("one plus sign two"), "one + two");
+    }
+
+    #[test]
+    fn a_hashtag_leads_the_word_it_labels() {
+        assert_eq!(punct("hashtag rust"), "#rust");
+    }
+
+    #[test]
+    fn a_percent_sign_closes_up_behind_its_number() {
+        assert_eq!(punct("fifty percent sign"), "fifty%");
+    }
+
+    #[test]
+    fn braces_pair_like_the_other_brackets() {
+        assert_eq!(punct("open brace x close brace"), "{x}");
+    }
+
+    #[test]
+    fn a_determiner_still_blocks_a_symbol_name() {
+        assert_eq!(punct("add a slash here"), "add a slash here");
+        assert_eq!(punct("the dot product"), "the dot product");
+    }
+
+    /// The plural is a different word, and `\b` keeps it that way. This is the
+    /// guard that makes the bare "dot" entry defensible.
+    #[test]
+    fn the_plural_of_dot_is_not_a_mark() {
+        assert_eq!(punct("connect the dots"), "connect the dots");
+    }
 }

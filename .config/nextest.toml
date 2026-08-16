@@ -1,0 +1,33 @@
+# nextest configuration.
+#
+# One test dominates this workspace. `correction_matches_the_golden_corpus`
+# replays ~239k recorded calls and takes ~144 s of a ~146 s run, so 99% of the
+# wall clock is a single test and there is nothing for parallelism to work with.
+# The only lever is the corpus's own strided sampling, and it is chosen per run
+# rather than here:
+#
+#   GOVOX_GOLDEN_SAMPLE=50 cargo nextest run --workspace   ~6 s   the inner loop
+#   cargo nextest run --workspace                        ~146 s   every record
+#
+# It is not set in this file on purpose. nextest 0.9.102 ignores an `[env]`
+# section outright — it warns and carries on — so a value written here would
+# look like it applied while doing nothing, which is the failure mode this
+# project least wants near the corpus. Keeping it on the command line also
+# leaves the *default* run complete: a sampled pass must never be mistaken for
+# the whole corpus, and a passing run prints nothing to distinguish them.
+
+[profile.default]
+# Report every failure rather than stopping at the first. A stage that broke
+# wholesale shows as a pattern across stages, and finding that one run at a time
+# is miserable — the corpus test tallies failures per stage for the same reason.
+fail-fast = false
+
+# Reporting only, with no `terminate-after`. The corpus test legitimately runs
+# for minutes, and a kill threshold would turn a slower machine into a spurious
+# failure. Everything else here is milliseconds, so anything else crossing this
+# is worth a look.
+slow-timeout = { period = "60s" }
+
+# Failures inline as they happen and again in a final summary, so a long run
+# does not have to be scrolled back through.
+failure-output = "immediate-final"

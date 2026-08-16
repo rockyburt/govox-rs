@@ -1,10 +1,15 @@
 {
   "activation": {
     "double_tap_ms": 400,
-    "mode": "toggle",
-    "push_to_talk_key": "KEY_PAUSE",
+    "mode": "double_tap",
+    "push_to_talk_key": [
+      "KEY_PAUSE"
+    ],
     "queue_size": 8,
-    "toggle_key": "KEY_SCROLLLOCK"
+    "toggle_key": [
+      "KEY_LEFTCTRL",
+      "KEY_RIGHTCTRL"
+    ]
   },
   "audio": {
     "device": "",
