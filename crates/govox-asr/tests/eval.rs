@@ -25,6 +25,24 @@
 //! "rentals.ca", "comma" becomes "," — so the gap between the two scores is the
 //! correction pipeline and the dictionary, measured rather than assumed.
 //!
+//! # Two decode paths
+//!
+//! By default this scores [`WhisperHandle::transcribe`] — one decode over the
+//! whole clip. That is not what dictation runs. Set `GOVOX_EVAL_STREAMING=1` to
+//! score the streaming path instead: an [`OnlineProcessor`] fed in frames,
+//! decoding a growing window through `transcribe_words`, committing on
+//! LocalAgreement-2. It is a different code path with different accuracy and
+//! very different cost, and until this existed it was unmeasured.
+//!
+//! The streaming mode also reports **how many decodes** a clip took, because
+//! the daemon's cadence is set by decode duration: `pipeline.rs` throttles to a
+//! ~50% duty cycle, so a change that halves decode time does not halve total
+//! cost — it doubles the number of decodes and halves the time between
+//! captions. Both numbers are needed to read the trade.
+//!
+//! Streaming runs deliberately leave `corpus/eval/baseline.json` alone; that
+//! file is the utterance-path record.
+//!
 //! # Ignored, and single-test
 //!
 //! `#[ignore]` because it needs a model and a recorded corpus, matching
@@ -35,8 +53,9 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use govox_asr::whisper::WhisperRecognizer;
-use govox_core::config::Config;
+use govox_asr::streaming::OnlineProcessor;
+use govox_asr::whisper::{WhisperHandle, WhisperRecognizer};
+use govox_core::config::{Config, StreamingConfig};
 use govox_core::correction::{Context, CorrectionPipeline};
 use govox_core::domain::{AudioBuffer, PersonalDictionary};
 use govox_core::eval;
@@ -157,6 +176,72 @@ struct Scored {
     corrected_wer: f64,
     terms: Vec<(String, bool)>,
     seconds: f64,
+    /// Decodes the clip cost. Always 1 on the utterance path.
+    decodes: usize,
+}
+
+/// Whether to score the streaming path instead of the whole-utterance one.
+fn streaming_mode() -> bool {
+    std::env::var("GOVOX_EVAL_STREAMING").is_ok_and(|v| v == "1")
+}
+
+/// Run one clip through the streaming path the way the daemon runs it.
+///
+/// Returns the recognised text, the seconds spent decoding, and the number of
+/// decodes.
+///
+/// The daemon does not decode on every frame: `pipeline.rs` awaits each decode
+/// on the event loop and then skips further decodes for as long again, a ~50%
+/// duty cycle that keeps a slow decode from starving the key that ends the
+/// session. Reproducing that matters, because it is what makes decode *count* a
+/// function of decode *speed* — decode twice as fast and the clip takes twice
+/// as many decodes, each on a shorter window. Ignoring it would measure a
+/// cadence no user ever sees.
+///
+/// It is modelled in **virtual audio time** rather than by sleeping: audio
+/// reaches the daemon in real time, so seconds of audio pushed is the clock. A
+/// decode starting at `t` and taking `took` blocks the next until `t + 2×took`.
+///
+/// The pre-speech gates (`MIN_VOICED_S`, the pre-roll) are not modelled. They
+/// decide *when the first decode happens*, not how fast one is, and the corpus
+/// clips are already trimmed to speech.
+async fn stream_clip(
+    handle: &WhisperHandle,
+    streaming: &StreamingConfig,
+    audio: &AudioBuffer,
+) -> (String, f64, usize) {
+    let mut processor = OnlineProcessor::new(handle.clone(), streaming, audio.sample_rate);
+    // 20 ms, the granularity capture delivers at.
+    let frame = (audio.sample_rate as usize / 50).max(1);
+
+    let mut text = String::new();
+    let mut clock_s = 0.0_f64;
+    let mut next_decode_s = 0.0_f64;
+    let mut seconds = 0.0_f64;
+    let mut decodes = 0_usize;
+
+    for chunk in audio.samples.chunks(frame) {
+        processor.push(chunk);
+        clock_s += chunk.len() as f64 / f64::from(audio.sample_rate);
+        if processor.ready() && clock_s >= next_decode_s {
+            let started = std::time::Instant::now();
+            let update = processor.process().await.expect("streaming decode");
+            let took = started.elapsed().as_secs_f64();
+            seconds += took;
+            decodes += 1;
+            text.push_str(&update.committed);
+            next_decode_s = clock_s + 2.0 * took;
+        }
+    }
+
+    // `decode_tail` is true because a corpus clip ends on the last word rather
+    // than on the silence of someone reaching for a key.
+    let started = std::time::Instant::now();
+    text.push_str(&processor.finish(true).await);
+    seconds += started.elapsed().as_secs_f64();
+    decodes += 1;
+
+    (text, seconds, decodes)
 }
 
 #[tokio::test]
@@ -206,9 +291,13 @@ async fn scores_the_configured_model_against_the_eval_corpus() {
     let mut scored = Vec::new();
     for clip in &manifest.clip {
         let audio = load_wav(&audio_dir().join(format!("{}.wav", clip.id)));
-        let started = std::time::Instant::now();
-        let raw = handle.transcribe(&audio).await.expect("transcribes");
-        let seconds = started.elapsed().as_secs_f64();
+        let (raw, seconds, decodes) = if streaming_mode() {
+            stream_clip(&handle, &config.streaming, &audio).await
+        } else {
+            let started = std::time::Instant::now();
+            let raw = handle.transcribe(&audio).await.expect("transcribes");
+            (raw, started.elapsed().as_secs_f64(), 1)
+        };
 
         // Default context: no field purpose and no preceding text, which is the
         // prose path — the same one an ordinary dictation into a document takes.
@@ -225,11 +314,19 @@ async fn scores_the_configured_model_against_the_eval_corpus() {
             raw,
             corrected,
             seconds,
+            decodes,
         });
     }
 
     report(&config, &scored);
-    write_baseline(&config, &scored);
+    if streaming_mode() {
+        eprintln!(
+            "baseline.json not written: it is the utterance-path record, and this was a \
+             streaming run.\n"
+        );
+    } else {
+        write_baseline(&config, &scored);
+    }
 }
 
 /// The manifest is checked in, so it can be wrong in git without anyone
@@ -337,13 +434,18 @@ fn load_dictionary(config: &Config) -> PersonalDictionary {
 
 fn report(config: &Config, scored: &[Scored]) {
     eprintln!(
-        "\nmodel={}  clips={}",
+        "\nmodel={}  clips={}  path={}",
         config.recognition.model,
-        scored.len()
+        scored.len(),
+        if streaming_mode() {
+            "streaming (transcribe_words)"
+        } else {
+            "utterance (transcribe)"
+        }
     );
     eprintln!(
-        "\n{:<28} {:>8} {:>10} {:>8}  terms",
-        "clip", "raw wer", "corr. wer", "secs"
+        "\n{:<28} {:>8} {:>10} {:>8} {:>5}  terms",
+        "clip", "raw wer", "corr. wer", "secs", "dec"
     );
     for s in scored {
         let terms = if s.terms.is_empty() {
@@ -356,8 +458,8 @@ fn report(config: &Config, scored: &[Scored]) {
                 .join(" ")
         };
         eprintln!(
-            "{:<28} {:>8.3} {:>10.3} {:>8.2}  {terms}",
-            s.id, s.raw_wer, s.corrected_wer, s.seconds
+            "{:<28} {:>8.3} {:>10.3} {:>8.2} {:>5}  {terms}",
+            s.id, s.raw_wer, s.corrected_wer, s.seconds, s.decodes
         );
         // The text only when it did not come out clean: a clean run should be
         // readable at a glance, and a wall of correct transcriptions hides the
@@ -371,12 +473,24 @@ fn report(config: &Config, scored: &[Scored]) {
     let hits: Vec<&(String, bool)> = scored.iter().flat_map(|s| s.terms.iter()).collect();
     let recalled = hits.iter().filter(|(_, hit)| *hit).count();
 
+    let total_decodes: usize = scored.iter().map(|s| s.decodes).sum();
     eprintln!(
-        "\naggregate: raw WER {:.3}   corrected WER {:.3}   mean decode {:.2}s",
+        "\naggregate: raw WER {:.3}   corrected WER {:.3}   mean decode time {:.2}s per clip",
         mean(|s| s.raw_wer),
         mean(|s| s.corrected_wer),
         mean(|s| s.seconds)
     );
+    if streaming_mode() {
+        // Per-decode cost is the number the daemon's caption cadence follows;
+        // per-clip cost is the number a GPU bill follows. They move in opposite
+        // directions when the window shrinks, so print both.
+        eprintln!(
+            "decodes: {total_decodes} over {} clips ({:.1} per clip, {:.3}s each)",
+            scored.len(),
+            total_decodes as f64 / scored.len() as f64,
+            scored.iter().map(|s| s.seconds).sum::<f64>() / total_decodes as f64,
+        );
+    }
     if hits.is_empty() {
         eprintln!("term recall: no terms declared");
     } else {
