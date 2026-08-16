@@ -86,18 +86,16 @@ It is not blocked, but it is not free either, and the cheap version does not exi
 1. **Keep both, shared-linked.** Proven to work. Costs the self-contained binary, adds a
    packaging step, and carries two ONNX Runtimes (1.28.0 and ~1.24) in one process — twice
    the runtime, and two sets of global state.
-2. **Drop `silero`, use sherpa-onnx's own Silero VAD.** One runtime, static linking back on
-   the table, self-contained binary preserved. But `docs/parity.md` records the VAD as a
-   verified parity surface — 44/47 windows bit-identical, 3 differing by 1e-6 — and
-   whisper.cpp's built-in VAD was already **dropped** for exactly this reason: *"the VAD
-   decides where utterances split, so swapping it silently re-tunes segmentation and the
-   ported VAD tests stop being parity tests."* Since sherpa runs the same Silero model, the
-   probabilities may well match; that is a measurable question and the obvious next spike.
+2. ~~**Drop `silero`, use sherpa-onnx's own Silero VAD.**~~ **Ruled out by
+   [m-2b](m-2b-sherpa-vad-parity.md).** It looked like the one route preserving the
+   self-contained binary. It is not: sherpa's VAD exposes no per-window probability at all
+   (so the parity comparison cannot even be run), its single `threshold` cannot express the
+   speech/silence hysteresis `[vad]` is tuned with, and it needs `silero_vad.onnx` on the
+   install path — losing the self-contained binary regardless.
 3. **Do nothing.** The trait seam from the `WordRecognizer` work means this stays additive
    whenever it is picked up.
 
-Option 2 is the only route that keeps what the current design bought. It should be decided
-by measuring sherpa's VAD probabilities against the existing fixtures, not by argument.
+With option 2 gone, a Parakeet backend costs the self-contained binary or does not happen.
 
 ## Reproducing
 
