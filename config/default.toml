@@ -12,15 +12,23 @@ device = ""
 
 [recognition]
 engine = "local"
+# Conservative on purpose, and smaller than what this project's author runs.
+# `small` is ~500 MB and decodes fast enough on a CPU; `large-v3-turbo` is
+# ~1.6 GB and roughly 5.5x the decode cost, which is a real choice to make on
+# unknown hardware rather than one to make for someone. See
+# docs/guides/models.md for how to pick, and change this once you know.
 model = "small"
 # Language code, or "auto" to let Whisper detect it from the audio. Detection
 # runs per utterance, so it switches between utterances, never mid-sentence,
 # and costs a little accuracy when you only ever speak one language.
 language = "en"
 device = "auto"
-compute_type = "int8"
 beam_size = 1
 bias_prompt_token_budget = 180
+# Offline by default: govox never reaches the network unless you say so, which
+# is the same promise as the audio never leaving the machine. A missing model
+# is an error naming the command that fetches it, not a silent download.
+# "cache_first" checks the cache then the network; "allow" always checks.
 download_policy = "offline"
 model_dir = ""
 # Which GPU to run on, by device index. Only consulted on a GPU build.
@@ -42,7 +50,12 @@ no_speech_threshold = 0.6
 condition_on_previous_text = false
 
 [streaming]
-enabled = false
+# Show words as provisional text while you are still speaking, instead of
+# waiting for the whole utterance. On by default: it costs no download and no
+# extra model, it is what makes dictation feel like macOS Dictation rather than
+# a transcription job, and turning it off is one line. Set to false if you would
+# rather see nothing until the sentence is finished.
+enabled = true
 engine = "whisper_streaming"
 min_chunk_size_s = 1.0
 buffer_trimming = "segment"

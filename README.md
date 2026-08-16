@@ -123,8 +123,10 @@ enabled = true            # show words while you speak, rather than only at the 
 enabled = true            # underlined provisional text instead of typed-then-corrected
 ```
 
-Unknown keys are rejected at startup rather than ignored, so a typo tells you immediately
-instead of silently doing nothing.
+An unknown **section** is rejected at startup, so `[recogniton]` tells you immediately. An
+unknown **key inside a known section** is accepted and ignored, so `beem_size = 4` does
+nothing and says nothing — check spelling against `config/default.toml`. Keys that govox
+itself retired are the exception: those are named in a startup warning.
 
 ### Choosing a model
 
