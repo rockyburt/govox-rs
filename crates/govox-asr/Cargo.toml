@@ -38,3 +38,10 @@ thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 whisper-rs.workspace = true
+
+# Test-only, for the accuracy eval: it reads corpus/eval/manifest.toml and
+# writes corpus/eval/baseline.json. None of this reaches the shipped binary.
+[dev-dependencies]
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true

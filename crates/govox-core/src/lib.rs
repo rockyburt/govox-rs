@@ -19,6 +19,7 @@ pub mod config;
 pub mod correction;
 pub mod domain;
 pub mod editing;
+pub mod eval;
 pub mod feedback;
 pub mod keycodes;
 pub mod logging;

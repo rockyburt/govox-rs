@@ -27,3 +27,9 @@ spikes/*/Cargo.lock
 # Release binaries built by tools/build-release.sh. Reproducible from a tag, and
 # far too large to track.
 dist/
+
+# Eval corpus audio: recordings of the author's voice, and this repository is
+# public. The manifest that scripts them and the scores they produce are both
+# tracked, so the numbers stay reviewable without publishing the recordings —
+# reconstitute the audio with tools/record-eval.sh.
+corpus/eval/audio/
