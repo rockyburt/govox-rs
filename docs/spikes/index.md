@@ -1,14 +1,16 @@
 ---
-last_verified: 2026-08-14
+last_verified: 2026-08-16
 owner: rockyburt
 type: Index
 ---
 
-# M-1 spikes
+# Feasibility spikes
 
-Three feasibility probes run before any implementation code, each gating a decision that
-would have been expensive to discover late. The probe crates themselves are in `spikes/`;
-these are the written results.
+Probes run before any implementation code, each gating a decision that would have been
+expensive to discover late. The probe crates themselves are in `spikes/`; these are the
+written results.
+
+## M-1 — before the port
 
 - **[m-1a-whisper-rs.md](m-1a-whisper-rs.md)** — whether whisper-rs can supply per-word
   timestamps (`dtw_token_timestamps`, per-model `dtw_aheads` presets) and `no_speech_prob`,
@@ -22,3 +24,13 @@ these are the written results.
 - **[m-1c-silero-vad.md](m-1c-silero-vad.md)** — reproducing the Python wrapper's
   probability sequence to 1e-4 with Silero v5's explicit `state` tensor carried between
   calls, and the ONNX Runtime linking story that decides whether a `.deb` is shippable.
+
+## M-2 — a second recognition engine
+
+- **[m-2a-sherpa-onnx-coexistence.md](m-2a-sherpa-onnx-coexistence.md)** — whether
+  `sherpa-onnx` (the route to NVIDIA Parakeet) can share a binary with the `silero` VAD.
+  It does **not** use `ort`, so the two carry separate ONNX Runtimes: 1.28.0 against
+  ~1.24. Static linking dies on duplicate `onnx::*` protobuf symbols; `features =
+  ["shared"]` links and runs, at the cost of `libsherpa-onnx-c-api.so` on the install path
+  and a 193 MB prebuilt fetch — giving up the self-contained binary the current design
+  bought.
