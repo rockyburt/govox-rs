@@ -4,7 +4,7 @@
       "corrected": "We drove out to Twillingate on Saturday afternoon.",
       "corrected_wer": 0.0,
       "id": "twillingate-drive",
-      "raw": "We drove out to Twillingate on Saturday afternoon.",
+      "raw": "We drove out to Twillingate on Saturday afternoon",
       "raw_wer": 0.0,
       "terms": {
         "Twillingate": true
@@ -85,11 +85,11 @@
       }
     },
     {
-      "corrected": "Durant Sink-Tipoli finished about an hour ago.",
-      "corrected_wer": 0.375,
+      "corrected": "Durant Sink deploy finished about an hour ago.",
+      "corrected_wer": 0.25,
       "id": "rentsync-deploy",
-      "raw": "Durant Sink-Tipoli finished about an hour ago",
-      "raw_wer": 0.375,
+      "raw": "Durant Sink deploy finished about an hour ago",
+      "raw_wer": 0.25,
       "terms": {
         "Rentsync": false
       }
@@ -109,7 +109,7 @@
       "corrected": "The listing is live on Rentals.Ca now.",
       "corrected_wer": 0.0,
       "id": "rentals-ca-listing",
-      "raw": "The listing is live on Rentals.ca now.",
+      "raw": "The listing is live on Rentals.ca now",
       "raw_wer": 0.333,
       "terms": {
         "rentals.ca": true
@@ -119,17 +119,17 @@
       "corrected": "The Rentals-API call timed out twice in a row.",
       "corrected_wer": 0.0,
       "id": "rentals-api-timeout",
-      "raw": "The Rentals-API call timed out twice in a row.",
+      "raw": "The Rentals-API call timed out twice in a row",
       "raw_wer": 0.2,
       "terms": {
         "Rentals-API": true
       }
     },
     {
-      "corrected": "I will pull the Jiriborg up before stand up.",
+      "corrected": "I will pull the jiribor up before stand up.",
       "corrected_wer": 0.444,
       "id": "jira-standup",
-      "raw": "I will pull the Jiriborg up before stand up.",
+      "raw": "I will pull the jiribor up before stand up",
       "raw_wer": 0.444,
       "terms": {
         "Jira": false
@@ -171,47 +171,47 @@
       "corrected": "I am dictating this into Govox right now.",
       "corrected_wer": 0.0,
       "id": "govox-dictation",
-      "raw": "I am dictating this into Govox right now.",
+      "raw": "I am dictating this into Govox right now",
       "raw_wer": 0.0,
       "terms": {
         "Govox": true
       }
     },
     {
-      "corrected": "I replied in Slack thread rather than the channel.",
+      "corrected": "I replied in slack thread rather than the channel.",
       "corrected_wer": 0.1,
       "id": "slack-thread",
-      "raw": "I replied in Slack thread rather than the channel.",
+      "raw": "I replied in slack thread rather than the channel",
       "raw_wer": 0.1,
       "terms": {
         "slack": true
       }
     },
     {
-      "corrected": "Pick up a carton of ultra-filtered milk.",
-      "corrected_wer": 0.25,
+      "corrected": "Pick up a carton of ultra filtered milk.",
+      "corrected_wer": 0.0,
       "id": "ultra-filtered-milk",
-      "raw": "Pick up a carton of ultra-filtered milk.",
-      "raw_wer": 0.25,
+      "raw": "Pick up a carton of ultra filtered milk",
+      "raw_wer": 0.0,
       "terms": {
-        "ultra filtered milk": false
+        "ultra filtered milk": true
       }
     },
     {
-      "corrected": "The ultra-fizzled milk lasts a lot longer in the fridge.",
-      "corrected_wer": 0.182,
+      "corrected": "The ultra filtered milk lasts a lot longer in the fridge.",
+      "corrected_wer": 0.0,
       "id": "ultra-filtered-milk-long",
-      "raw": "The ultra-fizzled milk lasts a lot longer in the fridge.",
-      "raw_wer": 0.182,
+      "raw": "The ultra filtered milk lasts a lot longer in the fridge",
+      "raw_wer": 0.0,
       "terms": {
-        "ultra filtered milk": false
+        "ultra filtered milk": true
       }
     },
     {
       "corrected": "Let us push up the meeting back to the middle of next week.",
       "corrected_wer": 0.083,
       "id": "prose-meeting",
-      "raw": "Let us push up the meeting back to the middle of next week.",
+      "raw": "Let us push up the meeting back to the middle of next week",
       "raw_wer": 0.083,
       "terms": {}
     },
@@ -227,7 +227,7 @@
       "corrected": "I need to stop at the store on the way home for bread and eggs.",
       "corrected_wer": 0.0,
       "id": "prose-groceries",
-      "raw": "I need to stop at the store on the way home for bread and eggs.",
+      "raw": "I need to stop at the store on the way home for bread and eggs",
       "raw_wer": 0.0,
       "terms": {}
     },
@@ -243,7 +243,7 @@
       "corrected": "There were about 15 people there and it went on for two hours.",
       "corrected_wer": 0.077,
       "id": "prose-numbers",
-      "raw": "There were about 15 people there and it went on for two hours.",
+      "raw": "There were about 15 people there and it went on for two hours",
       "raw_wer": 0.077,
       "terms": {}
     },
@@ -272,15 +272,15 @@
       "terms": {}
     },
     {
-      "corrected": "Send it to Rocky@gmail.Com.",
+      "corrected": "Send it to rocky@gmail.Com.",
       "corrected_wer": 0.0,
       "id": "spoken-email",
-      "raw": "Send it to Rocky at sign gmail dot com",
-      "raw_wer": 0.0,
+      "raw": "send it to rocky@gmail.com",
+      "raw_wer": 0.667,
       "terms": {}
     }
   ],
-  "corrected_wer": 0.094,
+  "corrected_wer": 0.075,
   "model": "large-v3-turbo",
-  "raw_wer": 0.124
+  "raw_wer": 0.128
 }

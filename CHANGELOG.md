@@ -28,11 +28,16 @@ before 1.0.0, minor versions may change behaviour.
   term recall 20/27, mean decode 0.80 s. This supersedes 0.1.0's "word error rate is not
   measured" limitation.
 
-  It also showed that **several personal-dictionary rules are dead**: they map specific
-  mis-transcriptions recorded under a different model, and `large-v3-turbo` fails
-  differently — `Lewisporte` arrives as "Losort" and `Rentsync` as "Durant Sink-Tipoli",
-  which no existing rule matches. A dictionary is tuned to a model.
-  See [docs/guides/accuracy-eval.md](docs/guides/accuracy-eval.md).
+  It also showed that **every personal-dictionary `replace` rule was dead** — not one
+  fired on any clip. They were predictions of how a *different* model would mangle these
+  words; the words now come out correctly on their own because they are biased. An
+  ablation (`bias_prompt_token_budget = 0`) puts a number on which lever matters: term
+  recall falls from 20/27 to 10/27 without bias.
+
+  Acting on that took corrected WER from 0.094 to **0.075** and recall from 20/27 to
+  **22/27** — mostly by biasing "ultra filtered milk", the phrase that prompted the eval
+  in the first place, which had never been biased at all. Both its clips went from wrong
+  to exact. See [docs/guides/accuracy-eval.md](docs/guides/accuracy-eval.md).
 - **`tools/cut-take.py`**, for recording the eval corpus where `record-eval.sh` cannot
   run. That script prompts per clip, so it needs a TTY and exits immediately without one.
   This splits one continuous recording into clips instead, refusing to write unless every
