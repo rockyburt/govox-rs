@@ -68,8 +68,6 @@ pub enum ConfigError {
     },
 }
 
-// --- Enumerations ---------------------------------------------------------
-
 macro_rules! str_enum {
     ($(#[$meta:meta])* $name:ident { $($variant:ident => $text:literal),+ $(,)? }) => {
         $(#[$meta])*
@@ -123,8 +121,6 @@ str_enum!(LogStyle {
     Auto => "auto",
 });
 
-// --- Sections -------------------------------------------------------------
-//
 // Deliberately no `deny_unknown_fields` on any of these; see the module docs.
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -472,8 +468,6 @@ fn normalise_level(value: &str) -> Option<String> {
     }
 }
 
-// --- Root -----------------------------------------------------------------
-
 /// The whole configuration.
 ///
 /// `deny_unknown_fields` is on this struct **and on no section struct**, which
@@ -636,8 +630,6 @@ impl Config {
     }
 }
 
-// --- Environment ----------------------------------------------------------
-
 /// The process environment, injected so tests stay independent.
 #[derive(Debug, Clone, Default)]
 pub struct Environment {
@@ -739,8 +731,6 @@ fn parse_env_value(value: &str) -> toml::Value {
     toml::Value::String(value.to_owned())
 }
 
-// --- TOML plumbing --------------------------------------------------------
-
 fn read_toml(path: &Path) -> Result<toml::Table, ConfigError> {
     let text = std::fs::read_to_string(path).map_err(|source| ConfigError::Io {
         path: path.to_path_buf(),
@@ -805,8 +795,6 @@ mod tests {
         dir
     }
 
-    // --- defaults ---------------------------------------------------------
-
     #[test]
     fn defaults_load_without_a_user_file() {
         let dir = scratch("defaults");
@@ -852,8 +840,6 @@ mod tests {
         assert!(config.feedback.silence_auto_stop);
         assert_eq!(config.feedback.silence_timeout_s, 60.0);
     }
-
-    // --- layering ---------------------------------------------------------
 
     #[test]
     fn user_file_overrides_default() {
@@ -934,8 +920,6 @@ mod tests {
         assert_eq!(config.correction.filler_words, ["nope"]);
     }
 
-    // --- tuning options ---------------------------------------------------
-
     #[test]
     fn loads_recognition_tuning_options() {
         let dir = scratch("tuning");
@@ -997,8 +981,6 @@ fallback_to_utterance = false
         assert!(!config.streaming.vad);
         assert!(!config.streaming.fallback_to_utterance);
     }
-
-    // --- rejection --------------------------------------------------------
 
     fn expect_invalid(dir: &Path, body: &str, needle: &str) {
         let path = dir.join("bad.toml");
@@ -1079,8 +1061,6 @@ fallback_to_utterance = false
         );
     }
 
-    // --- the unknown-field asymmetry -------------------------------------
-
     #[test]
     fn unknown_section_is_rejected() {
         expect_invalid(&scratch("unknown-section"), "[bogus]\nx = 1\n", "bogus");
@@ -1098,8 +1078,6 @@ fallback_to_utterance = false
         let config = Config::load_from(Some(&path), &env_with_config_home(&dir)).unwrap();
         assert_eq!(config.audio.sample_rate, 16_000);
     }
-
-    // --- environment coercion --------------------------------------------
 
     #[test]
     fn env_values_are_coerced_by_shape() {
@@ -1165,8 +1143,6 @@ fallback_to_utterance = false
             PathBuf::from("/home/x/.config/govox/config.toml")
         );
     }
-
-    // --- the shipped defaults themselves ---------------------------------
 
     #[test]
     fn embedded_default_toml_is_valid_on_its_own() {

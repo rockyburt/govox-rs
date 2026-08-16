@@ -17,8 +17,6 @@ use govox_core::textmodel::DictationBuffer;
 use govox_daemon::daemon::{Announcer, Daemon, Transcriber};
 use govox_daemon::state::SharedState;
 
-// --- Fakes -----------------------------------------------------------------
-
 /// Returns a canned transcript, or an error, and records what it was asked.
 struct FakeTranscriber {
     result: Mutex<Result<String, String>>,
@@ -155,8 +153,6 @@ impl Announcer for SharedAnnouncer {
     }
 }
 
-// --- Fixtures --------------------------------------------------------------
-
 fn defaults() -> Config {
     Config::load_from(None, &Environment::default()).expect("defaults are valid")
 }
@@ -263,8 +259,6 @@ fn harness(said: &str) -> Harness {
     )
 }
 
-// --- The happy path --------------------------------------------------------
-
 #[tokio::test]
 async fn a_spoken_phrase_is_corrected_and_typed() {
     let mut h = harness("hello world period");
@@ -304,8 +298,6 @@ async fn what_was_typed_is_remembered_for_delete_that() {
     );
 }
 
-// --- Failures must not end the daemon --------------------------------------
-
 #[tokio::test]
 async fn a_transcription_failure_is_survived() {
     let mut h = harness_with(
@@ -333,8 +325,6 @@ async fn an_injection_failure_is_survived() {
 
     assert_eq!(h.announcer.states(), ["transcribing", "idle"]);
 }
-
-// --- Command mode ----------------------------------------------------------
 
 #[tokio::test]
 async fn entering_command_mode_is_loud() {
@@ -421,8 +411,6 @@ async fn a_non_command_in_command_mode_is_discarded_not_typed() {
     );
 }
 
-// --- Edit routing ----------------------------------------------------------
-
 #[tokio::test]
 async fn delete_that_backspaces_the_remembered_span_then_forgets_it() {
     let mut h = harness("hello");
@@ -492,8 +480,6 @@ async fn a_named_command_is_injected_without_being_remembered() {
     // A newline is not text govox can later backspace over meaningfully.
     assert_eq!(h.daemon.text_model.last_insertion(), None);
 }
-
-// --- Waiting for modifiers -------------------------------------------------
 
 #[tokio::test]
 async fn injection_does_not_wait_when_no_modifier_is_held() {
@@ -573,8 +559,6 @@ async fn a_full_utterance_waits_for_modifiers_before_typing() {
     );
 }
 
-// --- Reload ----------------------------------------------------------------
-
 #[tokio::test]
 async fn a_failed_reload_keeps_the_running_configuration() {
     // Unlike a failed startup, a failed reload is not fatal: there is a
@@ -622,8 +606,6 @@ fn publishing_a_reload_swaps_every_dictionary_consumer_at_once() {
     );
     assert!(!shared.corrector.load().config.enabled);
 }
-
-// --- The input method ------------------------------------------------------
 
 /// The whole point of knowing a field is a password field.
 ///

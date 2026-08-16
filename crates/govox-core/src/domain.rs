@@ -367,8 +367,6 @@ pub enum GovoxError {
     UnsupportedCompositor(String),
 }
 
-// --- Traits (the `Protocol`s in domain.py) ---------------------------------
-
 /// Turns a complete utterance into text.
 pub trait Recognizer: Send {
     fn transcribe(&mut self, audio: &AudioBuffer) -> Result<String, GovoxError>;
