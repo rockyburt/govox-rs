@@ -34,3 +34,9 @@ written results.
   ["shared"]` links and runs, at the cost of `libsherpa-onnx-c-api.so` on the install path
   and a 193 MB prebuilt fetch — giving up the self-contained binary the current design
   bought.
+- **[m-2b-sherpa-vad-parity.md](m-2b-sherpa-vad-parity.md)** — whether sherpa's own Silero
+  VAD could replace the `silero` crate and get back to one runtime. It cannot: neither the
+  safe API nor the C API exposes a per-window probability, so m-1c's 1e-4 comparison has
+  nothing to compare; `SileroVadModelConfig` has a single `threshold` where `[vad]` needs
+  speech/silence hysteresis; and it wants `silero_vad.onnx` on disk, so the self-contained
+  binary is lost either way.
