@@ -1,0 +1,36 @@
+# §1 spike. Outside the workspace, like the whisper and silero probes, so that
+# linking ONNX Runtime never enters the govox-core test loop.
+#
+# The question is NOT "does a Parakeet binding exist" — sherpa-onnx has one. It
+# is whether sherpa-onnx and the `silero` crate can live in one binary.
+#
+# They reach ONNX Runtime by different routes:
+#
+#   silero 0.6      -> ort 2.0.0-rc.13 -> ONNX Runtime (its own copy)
+#   sherpa-onnx     -> sherpa-onnx-sys -> ONNX Runtime (its own, statically
+#                      linked from a prebuilt archive the build script fetches)
+#
+# sherpa-onnx does not use `ort`. So adopting it for recognition while keeping
+# the current VAD means two independent ONNX Runtimes in one process. That may
+# fail at link time on duplicate symbols, or link cleanly and misbehave at
+# runtime, or be entirely fine. The review that proposed this assumed the
+# dependency was "already paid for" because `ort` is in the tree. It is not the
+# same ONNX Runtime.
+#
+# This crate exists to find out which, by building it.
+[package]
+name = "parakeet-probe"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+# Both, deliberately, in one binary. That is the experiment.
+# Shared, not the default static: statically linking both this and ort fails on
+# duplicate onnx::* protobuf symbols. See docs/spikes/m-2a-sherpa-onnx-coexistence.md.
+sherpa-onnx = { version = "1.13", default-features = false, features = ["shared"] }
+silero = "0.6"
+hound = "3"
+anyhow = "1"
