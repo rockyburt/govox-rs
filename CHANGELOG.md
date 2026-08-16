@@ -53,6 +53,9 @@ before 1.0.0, minor versions may change behaviour.
   exited 0 and typed nothing. Emoji now go by the clipboard.
 - Removed a pointer to `docs/reference/commands.md`, a file that never existed, from
   `config/default.toml`.
+- **The README no longer promises that a mistyped config key is caught.** An unknown
+  *section* is rejected, but an unknown *key inside* one is accepted and ignored, so
+  `beem_size` silently did nothing while the docs said it would be reported.
 
 ### Changed
 
@@ -63,6 +66,15 @@ before 1.0.0, minor versions may change behaviour.
   the id — `hw:CARD=Microphones,DEV=0` — and `[audio] device` prefers it, because labels
   are neither unique nor stable. An unambiguous label still works. The listing is longer
   now: the backend enumerates every ALSA PCM variant, and the id tells them apart.
+- **Streaming is on by default.** Words now appear as provisional text while you speak,
+  rather than only when the utterance ends. Set `[streaming] enabled = false` for the old
+  behaviour.
+- **`[recognition] compute_type` is gone.** It was a CTranslate2 setting that whisper.cpp
+  cannot honour — quantization is baked into the GGUF file — so it never took effect. A
+  config that still sets it keeps loading and now says so at startup. Point
+  `[recognition] model_dir` at a quantized model instead.
+- The `model` and `download_policy` defaults stay conservative — `small` and `offline` —
+  and `config/default.toml` now explains why rather than leaving it to look like drift.
 
 ### Internal
 

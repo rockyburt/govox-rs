@@ -85,7 +85,6 @@
     },
     "beam_size": 1,
     "bias_prompt_token_budget": 180,
-    "compute_type": "int8",
     "device": "auto",
     "download_policy": "offline",
     "engine": "local",
@@ -96,7 +95,7 @@
   "streaming": {
     "buffer_trimming": "segment",
     "buffer_trimming_sec": 10.0,
-    "enabled": false,
+    "enabled": true,
     "engine": "whisper_streaming",
     "fallback_to_utterance": true,
     "min_chunk_size_s": 1.0,

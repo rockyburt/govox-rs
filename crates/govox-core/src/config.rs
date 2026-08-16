@@ -146,7 +146,6 @@ pub struct RecognitionConfig {
     pub model: String,
     pub language: String,
     pub device: RecognitionDevice,
-    pub compute_type: String,
     pub beam_size: u32,
     pub bias_prompt_token_budget: u32,
     pub download_policy: DownloadPolicy,
@@ -567,6 +566,43 @@ pub struct Config {
     pub logging: LoggingConfig,
 }
 
+/// Keys that were once part of the schema and no longer do anything.
+///
+/// `(section, key, what to do instead)`.
+///
+/// Sections deliberately do **not** use `deny_unknown_fields` (see the module
+/// documentation), so a key dropped from the schema stops being an error and
+/// becomes silence — the user keeps a line in their config that reads as a
+/// setting and is not one. That is precisely the failure mode this crate
+/// refuses everywhere else, so a retired key is announced rather than ignored.
+///
+/// A warning, not an error: the config still loads, because breaking a startup
+/// over a line that was already doing nothing helps nobody.
+const RETIRED_KEYS: &[(&str, &str, &str)] = &[(
+    "recognition",
+    "compute_type",
+    "whisper.cpp bakes quantization into the GGUF file, so this never took \
+     effect — it is a CTranslate2 concept. To run a quantized model, point \
+     [recognition] model_dir at one.",
+)];
+
+/// Warn about any retired key the merged configuration still carries.
+///
+/// Runs on the *merged* table, after the embedded defaults, the user file, the
+/// environment and any explicit path. Since a retired key is no longer in the
+/// embedded default, anything found here was supplied by the user.
+fn warn_retired_keys(merged: &toml::Table) {
+    for (section, key, advice) in RETIRED_KEYS {
+        let present = merged
+            .get(*section)
+            .and_then(toml::Value::as_table)
+            .is_some_and(|table| table.contains_key(*key));
+        if present {
+            tracing::warn!("[{section}] {key} is no longer used and has been ignored. {advice}");
+        }
+    }
+}
+
 impl Config {
     /// Load the four layers and validate the result.
     pub fn load(explicit: Option<&Path>) -> Result<Self, ConfigError> {
@@ -595,6 +631,8 @@ impl Config {
             }
             merge_nested(&mut merged, read_toml(path)?);
         }
+
+        warn_retired_keys(&merged);
 
         let config: Self =
             toml::Value::Table(merged)
@@ -902,7 +940,10 @@ mod tests {
         let dir = scratch("streaming-defaults");
         let config = Config::load_from(None, &env_with_config_home(&dir)).unwrap();
 
-        assert!(!config.streaming.enabled);
+        // On by default since the live-preview path became the one that makes
+        // dictation feel immediate. Asserted rather than assumed: this is the
+        // only default whose value changes what a new user sees on first run.
+        assert!(config.streaming.enabled);
         assert_eq!(config.streaming.engine, StreamingEngine::WhisperStreaming);
         assert_eq!(config.streaming.min_chunk_size_s, 1.0);
         assert_eq!(config.streaming.buffer_trimming, BufferTrimming::Segment);
@@ -936,6 +977,45 @@ mod tests {
 
         let config = Config::load_from(None, &env_with_config_home(&dir)).unwrap();
         assert_eq!(config.recognition.model, "tiny");
+    }
+
+    /// A config carrying `compute_type` must keep loading. It was a real key
+    /// once, it is warned about now, and refusing to start over a line that was
+    /// already doing nothing would break working installs to make a point.
+    #[test]
+    fn a_retired_key_warns_without_failing_the_load() {
+        let dir = scratch("retired-key");
+        write(
+            &dir.join("govox/config.toml"),
+            "[recognition]\ncompute_type = \"int8\"\nmodel = \"tiny\"\n",
+        );
+
+        let config = Config::load_from(None, &env_with_config_home(&dir))
+            .expect("a retired key must not fail the load");
+        // The rest of the section still applies; the retired key is the only
+        // thing ignored.
+        assert_eq!(config.recognition.model, "tiny");
+    }
+
+    /// The retired list is only honest if every entry is genuinely gone from
+    /// the schema — an entry that still exists would warn about a key that
+    /// works.
+    #[test]
+    fn every_retired_key_is_absent_from_the_schema() {
+        let dir = scratch("retired-absent");
+        let config = Config::load_from(None, &env_with_config_home(&dir)).unwrap();
+        let serialized = toml::Value::try_from(&config).unwrap();
+
+        for (section, key, _) in RETIRED_KEYS {
+            let present = serialized
+                .get(*section)
+                .and_then(toml::Value::as_table)
+                .is_some_and(|table| table.contains_key(*key));
+            assert!(
+                !present,
+                "[{section}] {key} is listed as retired but is still in the schema"
+            );
+        }
     }
 
     #[test]
