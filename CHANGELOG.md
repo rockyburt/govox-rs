@@ -95,6 +95,12 @@ before 1.0.0, minor versions may change behaviour.
 
 ### Internal
 
+- **The recognition bias prompt is a sentence, not a word list.** Whisper reads
+  `initial_prompt` as the transcript preceding the audio, and `Newfoundland Labrador Gander
+  Gambo …` is unlike anything it was trained on. The same terms wrapped in a sentence take
+  raw WER from 0.128 to **0.097** and corrected WER from 0.075 to **0.067** on the eval
+  corpus — two clips better, none worse, no term added or removed. Comma-separating them
+  undoes the gain, so the list stays space-joined.
 - Migrated to cpal 0.18, which split `Device::name()` into `Display` and `DeviceId`.
 - **Tests run under `cargo nextest`**, as CI does. The golden corpus is 144 s of a 146 s
   run, so `GOVOX_GOLDEN_SAMPLE=50` gives a ~6 s inner loop.

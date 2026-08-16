@@ -35,11 +35,14 @@ across models, which the harness is shaped for but does not yet do.
 
 `large-v3-turbo` on Vulkan, 29 clips, reference machine.
 
-| | 2026-08-16 first run | after the dictionary audit |
-|---|---|---|
-| Raw WER | 0.124 | 0.128 |
-| Corrected WER | 0.094 | **0.075** |
-| Term recall | 20 / 27 | **22 / 27** |
+| | first run | after the dictionary audit | after the prompt reshape |
+|---|---|---|---|
+| Raw WER | 0.124 | 0.128 | **0.097** |
+| Corrected WER | 0.094 | 0.075 | **0.067** |
+| Term recall | 20 / 27 | 22 / 27 | **22 / 27** |
+
+All three runs are the same 29 clips on the same machine and model; only the dictionary and
+the prompt shape changed between them.
 
 ### Bias is the lever that works
 
@@ -82,7 +85,54 @@ Each was seen once, and a rule built on a single observation of a non-determinis
 is a guess wearing evidence's clothes. The standard is the same thing wrong the same way
 more than once.
 
-### The one fix that worked
+### The prompt is a sentence, not a word list
+
+Whisper conditions `initial_prompt` as if it were the transcript *preceding* this audio.
+The prompt used to be a bare word salad — `Newfoundland Labrador Gander Gambo …` — which is
+unlike anything the model was trained on. Wrapping the same words in a sentence, changing no
+term:
+
+| prompt shape | raw WER | corrected WER | recall |
+|---|---|---|---|
+| `Gander Gambo …` (was) | 0.128 | 0.075 | 22/27 |
+| `Gander, Gambo, …` | 0.130 | 0.077 | 21/27 |
+| `This transcript mentions Gander, Gambo, ….` | 0.098 | 0.068 | 21/27 |
+| **`This transcript mentions Gander Gambo ….`** | **0.097** | **0.067** | **22/27** |
+
+The sentence frame is worth ~24% relative on raw WER; commas cost a term in both variants
+that used them, so the list stays space-joined inside the sentence. Two clips improved at
+the document level, none regressed.
+
+This is a change to the *mechanism*, not to any term — which is the only kind of tuning this
+corpus can honestly support. Fitting the word list until the misses disappear would turn a
+29-clip test set into a training set.
+
+### The five that resist
+
+`Appleton`, `Lewisporte`, `Gander`, `Rentsync` and `Jira` are all biased and all still
+missed. The raw output says why they are not a prompting problem:
+
+| clip | produced |
+|---|---|
+| `glovertown-appleton` | "runs past **Hamilton**" — a real place, confidently substituted |
+| `lewisporte-ferry` | "**The prairie** leaves from **Losort** to the morning" |
+| `gander-gambo` | "from **Ganner** to Gambo" — while `Gambo` beside it survives |
+| `rentsync-deploy` | "The **Rancink** deploy" — while `Rentsync` in its other clip is exact |
+| `jira-standup` | "the **jiribor** up" |
+
+Two of these are decisive. `Gander` fails in a clip where `Gambo` — equally rare, equally
+biased, one second later — is recognised. `Rentsync` fails here and is perfect in
+`rentsync-jira`. A term that succeeds in one clip and fails in another is not a vocabulary
+gap; it is that recording. `lewisporte-ferry` puts it beyond doubt by also turning "the
+ferry" into "the prairie" — ordinary words, no bias involved.
+
+The honest reading is that these five are acoustic, and the remedies are re-recording those
+clips (which selects for easy audio and makes the corpus flatter) or a per-term `replace`
+rule (which the dictionary's own standard forbids on a single observation, and which for
+`Hamilton` would corrupt a real place name). Neither is worth doing. They are left failing
+on purpose: a corpus with no failures left in it has stopped being a measurement.
+
+### The one dictionary fix that worked
 
 `ultra filtered milk` — the phrase that prompted this whole exercise, arriving as
 "ultra-fiddle" — had never been *biased*, only guessed at with a replacement. Adding it to

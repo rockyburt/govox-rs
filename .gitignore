@@ -32,4 +32,6 @@ dist/
 # public. The manifest that scripts them and the scores they produce are both
 # tracked, so the numbers stay reviewable without publishing the recordings —
 # reconstitute the audio with tools/record-eval.sh.
-corpus/eval/audio/
+# No trailing slash: a worktree wanting the recordings symlinks this path to the
+# main checkout, and `corpus/eval/audio/` matches a directory but not a symlink.
+corpus/eval/audio
