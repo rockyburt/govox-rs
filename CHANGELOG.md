@@ -69,6 +69,13 @@ before 1.0.0, minor versions may change behaviour.
 - Migrated to cpal 0.18, which split `Device::name()` into `Display` and `DeviceId`.
 - **Tests run under `cargo nextest`**, as CI does. The golden corpus is 144 s of a 146 s
   run, so `GOVOX_GOLDEN_SAMPLE=50` gives a ~6 s inner loop.
+- **The streaming processor decodes through a trait**, `WordRecognizer`, replacing a dead
+  `Recognizer` that nothing implemented. Its window trimming and timestamp arithmetic are
+  now tested against a scripted recognizer instead of needing a loaded model — a wrong
+  offset there does not crash, it silently drops words from the session. A second
+  recognition engine becomes an added implementation rather than a rewrite.
+- **A failed decode reports as `RecognitionFailed`**, not `InjectionRejected`. Model faults
+  used to be logged as injection faults, sending a reader to the wrong subsystem.
 
 ## [0.1.0] — 2026-08-14
 

@@ -5,6 +5,8 @@ type: Decision Record
 covers:
   - crates/govox-core/src/correction/
   - crates/govox-core/src/editing/
+  - crates/govox-core/src/domain.rs
+  - crates/govox-asr/src/streaming.rs
   - crates/govox-input/
   - crates/govox-ime/
   - crates/govox-daemon/src/daemon.rs
@@ -310,3 +312,7 @@ a documented one is a decision.
 | DTW word-timestamp preset | changed | Chosen at *context construction*, not per call as in faster-whisper. Getting it wrong is silent — timestamps return as zeros — so each model is paired with its preset in one table and a test asserts no two models share one. |
 | tqdm POSIX-semaphore workaround | dropped | A faster-whisper/tqdm interaction with no analogue. |
 | Vendored `whisper_online.py` | dropped | Only `FasterWhisperASR` and `OnlineASRProcessor` were ever used. |
+| `Recognizer` as the recognition seam | changed | **Deleted, not reconciled.** It was a sync `fn transcribe(&mut self, …)` Protocol ported from `govox-py` and never implemented by anything — the async rewrite outgrew it, and `govox-daemon` quietly defined its own `Transcriber` instead. A dead trait is worse than no trait: `ARCHITECTURE.md` cited it as evidence that recognition was tested against fakes, when nothing implemented it. Replaced by `WordRecognizer` (`domain.rs`), which is what streaming actually decodes through. The name is deliberately *not* `Recognizer`: `WhisperRecognizer` already exists as an unrelated struct that does not implement it. |
+| `OnlineProcessor` bound to `WhisperHandle` | changed | Now generic over `WordRecognizer`, defaulting to `WhisperHandle` so callers naming it bare are unaffected. The point is testability: window management, trimming and the `offset_s` arithmetic could not be exercised without a loaded model, and a wrong offset does not crash — it makes `HypothesisBuffer` discard freshly decoded words as already-seen, so the session silently drops words. `ScriptedWordRecognizer` in `govox-core` now covers a trim, the pre-roll drop and the forced-trim backstop. A second engine becomes an added impl rather than an edit to `streaming.rs`. |
+| Recognition failure reported as `InjectionRejected` | changed | `From<AsrError> for GovoxError` mapped every decode failure onto the injection variant, so a model fault logged as *"injection rejected: whisper failed to load the model"* — pointing a reader at `ydotool` for a fault in Whisper. Now `GovoxError::RecognitionFailed`. The narrow-error-surface reasoning it was originally justified by still holds; the wrong *name* was never part of it. |
+| `Transcriber` living in `govox-daemon` | changed | The whole-utterance seam stays in `govox-daemon` rather than `govox-core`, which is a deliberate exception to "every outside-world trait is defined in `govox-core`". It is implemented and faked where it is, and moving it buys nothing but churn. Noted because `ARCHITECTURE.md` states the general rule, and an unexplained exception reads as an oversight. |

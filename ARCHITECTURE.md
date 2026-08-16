@@ -54,8 +54,9 @@ must stay runnable on any machine with no hardware and no desktop session, which
 keeps it cheap enough to run on every save.
 
 Everything that touches the outside world sits behind a trait `govox-core` defines
-(`Recognizer`, `Corrector`, `Injector`, `PreeditSink`, `TextModel`), so the logic is tested
-against recording fakes rather than hardware.
+(`WordRecognizer`, `Corrector`, `Injector`, `PreeditSink`, `TextModel`), so the logic is tested
+against recording fakes rather than hardware. One deliberate exception: `Transcriber`, the
+whole-utterance seam, lives in `govox-daemon` rather than here — see `docs/parity.md`.
 
 **No GObject introspection anywhere.** The tray, the IBus engine and AT-SPI all speak D-Bus
 directly. There is no GLib main loop, no GTK, and no bridging to a system Python's PyGObject —
