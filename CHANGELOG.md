@@ -27,8 +27,47 @@ before 1.0.0, minor versions may change behaviour.
 - **`govox commands`**, which lists every phrase govox understands, says which groups are
   switched on, and names the setting that would enable one that is off. Generated from the
   grammar tables, so it cannot drift from the behaviour.
+- **An accuracy eval**, which is what 0.1.0's "word error rate is not measured" limitation
+  needed. `tools/record-eval.sh` records a 29-clip corpus and
+  `cargo test -p govox-asr --test eval -- --ignored` scores the configured model, reporting
+  word error rate, per-term recall and the gap between raw and corrected output — that gap
+  being what the personal dictionary is worth, which nothing measured before. The corpus is
+  built from transcriptions that actually failed, so it is a regression net rather than a
+  guess at what is hard. The recordings stay out of git; the manifest and scores are
+  tracked. See [docs/guides/accuracy-eval.md](docs/guides/accuracy-eval.md). **No figure is
+  published yet** — the harness exists, the clips are not recorded, and quoting a number
+  before measuring one is the habit this replaces.
+- **Activation keys accept a list**, so `toggle_key = ["KEY_LEFTCTRL", "KEY_RIGHTCTRL"]`
+  works and a shortcut no longer has to pick a side of the keyboard. Listed keys share one
+  double-tap timer, so left-then-right counts as a double tap.
+- **`--version` and the About submenu report the build**, not the manifest:
+  `0.1.0+14.a18ad6e` when past a tag, plain `0.1.0` on one. Semver build metadata, so it
+  ranks equal to the release rather than below it — which `git describe`'s own
+  `0.1.0-14-g…` shape would not, being a prerelease.
 
 ### Fixed
+
+- **Dictating twice into a terminal no longer runs the utterances together.** `…it does
+  now.this is fun!` — `TERMINAL` is a verbatim purpose, so the pipeline returned before the
+  separating space was ever considered. Standing prose rules down and joining utterances
+  were one flag doing two jobs; a terminal wants the first and not the second, while a URL
+  bar wants both, so that `example` + `dot com` still makes `example.com`.
+- **`Ctrl+C` twice in a terminal no longer starts dictation.** Double-tap counted any two
+  presses of the key inside the window, so a repeated shortcut — two Controls with a `C`
+  between them — read as the gesture. An ordinary key pressed after a tap now cancels it;
+  modifiers do not, so `Ctrl+Shift+…` is unaffected. Found when binding Control made it
+  reachable, and it is how a running command is interrupted.
+- **An emoji no longer fails the whole utterance where `wl-copy` is not installed.** The
+  emoji router sent pictographic text to the clipboard without checking there was one, and
+  the fallback pasted with `ydotool key ctrl+v` — depending on the backend it existed to
+  cover for. A ydotool-only session now types what it can, drops what it cannot,
+  renormalises the spacing the removal leaves behind, and says so every time. With neither
+  backend available the About row reads `nothing available` instead of naming a working one.
+- **The About submenu says what is true.** The licence is read from the manifest rather
+  than a literal that could drift; the injection row reports the backend that actually
+  carried the text, not the one chosen at startup, so a silent clipboard fallback is
+  visible; and the GPU index is labelled `requested`, because whisper.cpp takes it and
+  reports nothing back.
 
 - **The HUD no longer sits under the desktop panel.** X11 reports a monitor as its full
   physical rectangle, which takes no notice of panels, so the card was placed 24 px from the
@@ -47,6 +86,11 @@ before 1.0.0, minor versions may change behaviour.
 
 ### Changed
 
+- **The default activation shortcut is now double-tapping either Control**, replacing
+  `toggle` on `KEY_SCROLLLOCK` — a key most keyboards no longer have somewhere reachable.
+  The mode and the key are one decision: Control is pressed constantly, so `toggle` on it
+  would start dictation on every copy, and double-tap is what makes an everyday key safe to
+  bind. Existing configs are unaffected; `toggle_key` still accepts a single name.
 - **Input devices are identified by their backend id rather than their label.**
   `govox devices` now prints the id in brackets — `hw:CARD=Microphones,DEV=0` — and
   `[audio] device` prefers it. Labels turned out to be neither unique nor stable: one
@@ -60,6 +104,10 @@ before 1.0.0, minor versions may change behaviour.
 
 - Migrated to cpal 0.18, which split the old `Device::name()` into `Display` for labels and
   `DeviceId` for identity.
+- **Tests run under `cargo nextest`**, which is what CI runs and what `AGENTS.md` now
+  documents. The golden corpus is 144 s of a 146 s run, so `GOVOX_GOLDEN_SAMPLE=50` — a
+  strided sample hitting every stage — is the inner loop at ~6 s, while the full corpus is
+  what a merge needs.
 
 ## [0.1.0] — 2026-08-14
 
