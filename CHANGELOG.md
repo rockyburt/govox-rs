@@ -19,12 +19,24 @@ before 1.0.0, minor versions may change behaviour.
   utterance, so no mode can stick.
 - **`govox commands`**, listing every phrase govox understands and the setting that enables
   one that is off. Generated from the grammar tables, so it cannot drift.
-- **An accuracy eval.** `tools/record-eval.sh` records a 29-clip corpus;
-  `cargo test -p govox-asr --test eval -- --ignored` scores the configured model for word
-  error rate, per-term recall, and the raw-versus-corrected gap — what the personal
-  dictionary is worth. The clips come from transcriptions that actually failed. Recordings
-  stay out of git; scores are tracked. **No figure is published yet.** See
-  [docs/guides/accuracy-eval.md](docs/guides/accuracy-eval.md).
+- **An accuracy eval, and its first figures.** `cargo test -p govox-asr --test eval --
+  --ignored` scores the configured model for word error rate, per-term recall, and the
+  raw-versus-corrected gap. The clips come from transcriptions that actually failed.
+  Recordings stay out of git; scores are tracked in `corpus/eval/baseline.json`.
+
+  On the reference machine with `large-v3-turbo`: **raw WER 0.124, corrected 0.094**,
+  term recall 20/27, mean decode 0.80 s. This supersedes 0.1.0's "word error rate is not
+  measured" limitation.
+
+  It also showed that **several personal-dictionary rules are dead**: they map specific
+  mis-transcriptions recorded under a different model, and `large-v3-turbo` fails
+  differently — `Lewisporte` arrives as "Losort" and `Rentsync` as "Durant Sink-Tipoli",
+  which no existing rule matches. A dictionary is tuned to a model.
+  See [docs/guides/accuracy-eval.md](docs/guides/accuracy-eval.md).
+- **`tools/cut-take.py`**, for recording the eval corpus where `record-eval.sh` cannot
+  run. That script prompts per clip, so it needs a TTY and exits immediately without one.
+  This splits one continuous recording into clips instead, refusing to write unless every
+  segment matches its expected sentence.
 - **Activation keys accept a list**: `toggle_key = ["KEY_LEFTCTRL", "KEY_RIGHTCTRL"]`.
   Listed keys share one double-tap timer, so left-then-right counts as a double tap.
 - **`--version` reports the build**, not the manifest: `0.1.0+14.a18ad6e` past a tag,

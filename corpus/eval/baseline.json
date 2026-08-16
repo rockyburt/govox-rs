@@ -1,0 +1,286 @@
+{
+  "clips": [
+    {
+      "corrected": "We drove out to Twillingate on Saturday afternoon.",
+      "corrected_wer": 0.0,
+      "id": "twillingate-drive",
+      "raw": "We drove out to Twillingate on Saturday afternoon.",
+      "raw_wer": 0.0,
+      "terms": {
+        "Twillingate": true
+      }
+    },
+    {
+      "corrected": "Twillingate and Bonavista are both worth the trip.",
+      "corrected_wer": 0.0,
+      "id": "twillingate-bonavista",
+      "raw": "Twillingate and Bonavista are both worth the trip",
+      "raw_wer": 0.0,
+      "terms": {
+        "Bonavista": true,
+        "Twillingate": true
+      }
+    },
+    {
+      "corrected": "The road to Glovertown runs past Hamilton.",
+      "corrected_wer": 0.143,
+      "id": "glovertown-appleton",
+      "raw": "The road to Glovertown runs past Hamilton",
+      "raw_wer": 0.143,
+      "terms": {
+        "Appleton": false,
+        "Glovertown": true
+      }
+    },
+    {
+      "corrected": "The prairie leaves from Losort to the morning.",
+      "corrected_wer": 0.375,
+      "id": "lewisporte-ferry",
+      "raw": "The prairie leaves from Losort to the morning.",
+      "raw_wer": 0.375,
+      "terms": {
+        "Lewisporte": false
+      }
+    },
+    {
+      "corrected": "It is about half an hour from Ganner to Gambo.",
+      "corrected_wer": 0.1,
+      "id": "gander-gambo",
+      "raw": "It is about half an hour from Ganner to Gambo",
+      "raw_wer": 0.1,
+      "terms": {
+        "Gambo": true,
+        "Gander": false
+      }
+    },
+    {
+      "corrected": "There was ice in Notre Dame Bay well until June.",
+      "corrected_wer": 0.1,
+      "id": "notre-dame-bay",
+      "raw": "There was ice in Notre Dame Bay well until June.",
+      "raw_wer": 0.1,
+      "terms": {
+        "Notre Dame Bay": true
+      }
+    },
+    {
+      "corrected": "Newfoundland Labrador is the name of the province.",
+      "corrected_wer": 0.2,
+      "id": "newfoundland-labrador",
+      "raw": "Newfoundland Labrador is the name of the province",
+      "raw_wer": 0.2,
+      "terms": {
+        "Labrador": true,
+        "Newfoundland": true
+      }
+    },
+    {
+      "corrected": "We are driving down to Avalon next weekend.",
+      "corrected_wer": 0.111,
+      "id": "avalon-drive",
+      "raw": "We are driving down to Avalon next weekend",
+      "raw_wer": 0.111,
+      "terms": {
+        "Avalon": true
+      }
+    },
+    {
+      "corrected": "Durant Sink-Tipoli finished about an hour ago.",
+      "corrected_wer": 0.375,
+      "id": "rentsync-deploy",
+      "raw": "Durant Sink-Tipoli finished about an hour ago",
+      "raw_wer": 0.375,
+      "terms": {
+        "Rentsync": false
+      }
+    },
+    {
+      "corrected": "I moved the RentSync ticket in JIRA this morning.",
+      "corrected_wer": 0.0,
+      "id": "rentsync-jira",
+      "raw": "I moved the RentSync ticket in JIRA this morning",
+      "raw_wer": 0.0,
+      "terms": {
+        "Jira": true,
+        "Rentsync": true
+      }
+    },
+    {
+      "corrected": "The listing is live on Rentals.Ca now.",
+      "corrected_wer": 0.0,
+      "id": "rentals-ca-listing",
+      "raw": "The listing is live on Rentals.ca now.",
+      "raw_wer": 0.333,
+      "terms": {
+        "rentals.ca": true
+      }
+    },
+    {
+      "corrected": "The Rentals-API call timed out twice in a row.",
+      "corrected_wer": 0.0,
+      "id": "rentals-api-timeout",
+      "raw": "The Rentals-API call timed out twice in a row.",
+      "raw_wer": 0.2,
+      "terms": {
+        "Rentals-API": true
+      }
+    },
+    {
+      "corrected": "I will pull the Jiriborg up before stand up.",
+      "corrected_wer": 0.444,
+      "id": "jira-standup",
+      "raw": "I will pull the Jiriborg up before stand up.",
+      "raw_wer": 0.444,
+      "terms": {
+        "Jira": false
+      }
+    },
+    {
+      "corrected": "Cloudflare is still serving the cached version.",
+      "corrected_wer": 0.0,
+      "id": "cloudflare-cache",
+      "raw": "Cloudflare is still serving the cached version",
+      "raw_wer": 0.0,
+      "terms": {
+        "Cloudflare": true
+      }
+    },
+    {
+      "corrected": "Demer is on GitHub but the pipeline runs in GitLab.",
+      "corrected_wer": 0.182,
+      "id": "github-gitlab",
+      "raw": "Demer is on GitHub but the pipeline runs in GitLab",
+      "raw_wer": 0.182,
+      "terms": {
+        "GitHub": true,
+        "GitLab": true
+      }
+    },
+    {
+      "corrected": "BuildingStack and Domum are both on the integration list.",
+      "corrected_wer": 0.0,
+      "id": "buildingstack-domum",
+      "raw": "BuildingStack and Domum are both on the integration list",
+      "raw_wer": 0.0,
+      "terms": {
+        "BuildingStack": true,
+        "Domum": true
+      }
+    },
+    {
+      "corrected": "I am dictating this into Govox right now.",
+      "corrected_wer": 0.0,
+      "id": "govox-dictation",
+      "raw": "I am dictating this into Govox right now.",
+      "raw_wer": 0.0,
+      "terms": {
+        "Govox": true
+      }
+    },
+    {
+      "corrected": "I replied in Slack thread rather than the channel.",
+      "corrected_wer": 0.1,
+      "id": "slack-thread",
+      "raw": "I replied in Slack thread rather than the channel.",
+      "raw_wer": 0.1,
+      "terms": {
+        "slack": true
+      }
+    },
+    {
+      "corrected": "Pick up a carton of ultra-filtered milk.",
+      "corrected_wer": 0.25,
+      "id": "ultra-filtered-milk",
+      "raw": "Pick up a carton of ultra-filtered milk.",
+      "raw_wer": 0.25,
+      "terms": {
+        "ultra filtered milk": false
+      }
+    },
+    {
+      "corrected": "The ultra-fizzled milk lasts a lot longer in the fridge.",
+      "corrected_wer": 0.182,
+      "id": "ultra-filtered-milk-long",
+      "raw": "The ultra-fizzled milk lasts a lot longer in the fridge.",
+      "raw_wer": 0.182,
+      "terms": {
+        "ultra filtered milk": false
+      }
+    },
+    {
+      "corrected": "Let us push up the meeting back to the middle of next week.",
+      "corrected_wer": 0.083,
+      "id": "prose-meeting",
+      "raw": "Let us push up the meeting back to the middle of next week.",
+      "raw_wer": 0.083,
+      "terms": {}
+    },
+    {
+      "corrected": "It looks like the rain is going to hold off until this evening.",
+      "corrected_wer": 0.0,
+      "id": "prose-weather",
+      "raw": "It looks like the rain is going to hold off until this evening.",
+      "raw_wer": 0.0,
+      "terms": {}
+    },
+    {
+      "corrected": "I need to stop at the store on the way home for bread and eggs.",
+      "corrected_wer": 0.0,
+      "id": "prose-groceries",
+      "raw": "I need to stop at the store on the way home for bread and eggs.",
+      "raw_wer": 0.0,
+      "terms": {}
+    },
+    {
+      "corrected": "The thing I keep running into is that the first attempt works and the second one quietly fails.",
+      "corrected_wer": 0.0,
+      "id": "prose-longer",
+      "raw": "The thing I keep running into is that the first attempt works and the second one quietly fails.",
+      "raw_wer": 0.0,
+      "terms": {}
+    },
+    {
+      "corrected": "There were about 15 people there and it went on for two hours.",
+      "corrected_wer": 0.077,
+      "id": "prose-numbers",
+      "raw": "There were about 15 people there and it went on for two hours.",
+      "raw_wer": 0.077,
+      "terms": {}
+    },
+    {
+      "corrected": "Do you know whether anyone has looked at that ticket yet?",
+      "corrected_wer": 0.0,
+      "id": "prose-question",
+      "raw": "Do you know whether anyone has looked at that ticket yet?",
+      "raw_wer": 0.0,
+      "terms": {}
+    },
+    {
+      "corrected": "First we test, then we ship.",
+      "corrected_wer": 0.0,
+      "id": "spoken-punctuation-comma",
+      "raw": "First we test comma, then we ship period.",
+      "raw_wer": 0.0,
+      "terms": {}
+    },
+    {
+      "corrected": "Is that ready yet?",
+      "corrected_wer": 0.0,
+      "id": "spoken-punctuation-question",
+      "raw": "Is that ready yet?",
+      "raw_wer": 0.333,
+      "terms": {}
+    },
+    {
+      "corrected": "Send it to Rocky@gmail.Com.",
+      "corrected_wer": 0.0,
+      "id": "spoken-email",
+      "raw": "Send it to Rocky at sign gmail dot com",
+      "raw_wer": 0.0,
+      "terms": {}
+    }
+  ],
+  "corrected_wer": 0.094,
+  "model": "large-v3-turbo",
+  "raw_wer": 0.124
+}

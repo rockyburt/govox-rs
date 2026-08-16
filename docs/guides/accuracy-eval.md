@@ -7,6 +7,7 @@ covers:
   - crates/govox-asr/tests/eval.rs
   - corpus/eval/
   - tools/record-eval.sh
+  - tools/cut-take.py
 ---
 
 # Measuring accuracy
@@ -30,6 +31,43 @@ answers two questions:
 It does **not** answer whether `large-v3-turbo` is worth its cost. That needs a sweep
 across models, which the harness is shaped for but does not yet do.
 
+## The first baseline
+
+Recorded 2026-08-16 on the reference machine, `large-v3-turbo` on Vulkan, 29 clips.
+
+| | |
+|---|---|
+| Raw WER | **0.124** |
+| Corrected WER | **0.094** |
+| Closed by correction + dictionary | **0.030** |
+| Term recall | **20 / 27** |
+| Mean decode | 0.80 s |
+
+Two things fell out of it that no aggregate would have shown.
+
+**The dictionary earns its place, but several of its rules are dead.** It closes three
+points of WER — visible on `rentals dot ca` → `rentals.ca` and `rentals API` →
+`Rentals-API`, which go from wrong to exact. Yet `Lewisporte`, `Rentsync`, `Jira` and
+`Appleton` were all missed, and the raw output says why:
+
+| Expected | `large-v3-turbo` produced |
+|---|---|
+| Lewisporte | "Losort" |
+| Rentsync | "Durant Sink-Tipoli" |
+| Jira | "Jiriborg" |
+| Appleton | "Hamilton" |
+
+The `replace` rules map *specific* manglings — `rent sync` → Rentsync, `jurl` → Jira —
+recorded when a different model was configured. This model fails differently, so those
+rules never fire. A dictionary is tuned to a model, and swapping the model silently
+retires part of it. That is worth re-deriving from this output rather than assuming the
+rules still work.
+
+**One miss is the scorer's fault, not the model's.** `ultra filtered milk` came back as
+"ultra-filtered milk" — hyphenated, and arguably better English than the reference. Term
+matching is whole-word, so the hyphen defeats it. Real recall is 21/27; the genuine
+failure is the other clip's "ultra-fizzled milk".
+
 ## Running it
 
 ```bash
@@ -39,6 +77,25 @@ cargo test -p govox-asr --test eval -- --ignored --nocapture
 
 Without the recordings the test **skips** with a message naming the script — it is
 `#[ignore]`d like everything else needing a model, and a fresh clone has no audio.
+
+### When `record-eval.sh` cannot run
+
+It prompts per clip with `read`, so it needs an interactive terminal and exits at the
+first clip when stdin is not a TTY — a CI runner, a pipeline, an agent harness. The
+recorded corpus was made the other way: a handful of sentences per take, split afterwards.
+
+```bash
+arecord -f S16_LE -r 44100 -c 2 take.wav          # Ctrl-C when finished
+tools/cut-take.py take.wav corpus/eval/audio \
+    twillingate-drive:8 twillingate-bonavista:8 glovertown-appleton:7
+```
+
+Each argument is `<clip-id>:<word-count>` in reading order. `cut-take.py` segments on RMS
+energy against a threshold derived from the recording — an absolute dB threshold fails
+silently when the room changes, and background music alone moved the noise floor 20 dB
+here — then refuses to write anything unless it finds exactly as many segments as ids and
+each one plausibly holds its sentence. Stop the daemon first: it holds the microphone and
+watches for the activation key.
 
 ## The corpus
 
