@@ -31,7 +31,7 @@ gpu_device = 0
 |---|---|---|---|---|
 | `tiny.en` | 0.169 | 0.162 | 0.09 s | 20/27 |
 | `base.en` | 0.220 | 0.210 | 0.12 s | 18/27 |
-| `small.en` | 0.151 | 0.106 | 0.38 s | 23/27 |
+| `small.en` | 0.151 | 0.106 | 0.23 s | 23/27 |
 | **`small`** | 0.124 | 0.091 | **0.24 s** | **24/27** |
 | `medium.en` | 0.158 | 0.106 | 0.51 s | 24/27 |
 | **`large-v3-turbo`** | **0.097** | **0.067** | 0.53 s | 22/27 |
@@ -42,9 +42,17 @@ Three things in that table contradict what this guide used to say.
 worse than `small` on every axis including speed.
 
 **The `.en` variants are not reliably better.** Plain `small` beats `small.en` on WER
-(0.124 against 0.151), on recall, *and* on decode time. The claim that an English-only
-build is more accurate than its multilingual twin was inherited, not measured, and does not
-hold here.
+(0.124 against 0.151) and on recall (24 against 23), at the same decode cost — they are the
+same size, and both decode in 0.23–0.24 s. The claim that an English-only build is more
+accurate than its multilingual twin was inherited, not measured, and does not hold here.
+The gap is reproducible: both models return byte-identical figures on repeat runs, because
+`temperature = 0.0` with `beam_size = 1` makes decoding deterministic.
+
+**Accuracy in this table is exact; the timings are not.** A model's first decode after a
+download or a cold cache carries warm-up, and one such reading put `small.en` at 0.38 s in
+the first sweep — impossible, given it is the same size as `small`. Re-running with every
+model cached gave 0.23 s and changed nothing else. Run the sweep twice and trust the second
+pass, or pre-fetch the models.
 
 **The two metrics disagree, and which one matters depends on what you dictate.**
 `large-v3-turbo` has the lowest WER by a clear margin. `small` has the better *term recall*
