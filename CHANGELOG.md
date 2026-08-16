@@ -95,6 +95,18 @@ before 1.0.0, minor versions may change behaviour.
 
 ### Internal
 
+- **`tools/model-sweep.sh`** scores every candidate model against the eval corpus.
+  The switch to `large-v3-turbo` was made on one bad transcription at ~5.5× the decode
+  cost, and had never been checked. It holds up on word error rate — turbo is the most
+  accurate at 0.067 — but **`small` has better term recall (24/27 against 22/27) at half
+  the decode time**, getting `Appleton`, `Gander` and `Rentsync` right where turbo does
+  not. Turbo substitutes "Hamilton" for `Appleton`: a stronger language model overriding
+  rare proper nouns with common ones.
+
+  The sweep also overturned two claims in the model guide: bigger is not monotonically
+  better (`base.en` is worse than `tiny.en`, `medium.en` worse than `small`), and the
+  `.en` builds are not reliably better than their multilingual twins — plain `small` beats
+  `small.en` on accuracy *and* speed. Both claims were inherited rather than measured.
 - **The recognition bias prompt is a sentence, not a word list.** Whisper reads
   `initial_prompt` as the transcript preceding the audio, and `Newfoundland Labrador Gander
   Gambo …` is unlike anything it was trained on. The same terms wrapped in a sentence take

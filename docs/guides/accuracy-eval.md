@@ -28,8 +28,13 @@ answers two questions:
 2. *Is the personal dictionary still earning its place?* — per-term recall, and the gap
    between the raw and corrected scores.
 
-It does **not** answer whether `large-v3-turbo` is worth its cost. That needs a sweep
-across models, which the harness is shaped for but does not yet do.
+On its own it does **not** answer whether `large-v3-turbo` is worth its cost. That needs a
+sweep across models, and `tools/model-sweep.sh` now does one — the harness takes the model
+from config, so a sweep is a loop over `GOVOX__RECOGNITION__MODEL`. The results, and the
+two guide claims they overturned, are in [models.md](models.md).
+
+The short version: turbo has the lowest WER, `small` has the better term recall at half the
+decode time, and bigger is not monotonically better.
 
 ## The baseline
 
