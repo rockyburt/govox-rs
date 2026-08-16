@@ -55,10 +55,9 @@ impl Backoff {
         if self.max_attempts.is_some_and(|limit| self.attempt > limit) {
             return None;
         }
-        // Saturating rather than wrapping: `2^(attempt-1)` overflows a u32 at
-        // attempt 33, and a wrapping result would hand back a *short* delay —
-        // turning a backoff into a hot loop against a device that is never
-        // coming back.
+        // Saturating, not wrapping: `2^(attempt-1)` overflows a u32 at attempt
+        // 33, and wrapping would hand back a *short* delay — a backoff turned
+        // into a hot loop against a device that is never coming back.
         let scaled = self
             .base
             .saturating_mul(2_u32.saturating_pow(self.attempt - 1));

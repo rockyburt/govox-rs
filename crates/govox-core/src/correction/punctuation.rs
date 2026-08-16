@@ -51,10 +51,9 @@ pub const SPOKEN_PUNCTUATION: &[(&str, &str, Attach)] = &[
     ("colon", ":", Attach::Left),
     ("hyphen", "-", Attach::Tight),
     ("dash", "—", Attach::Tight),
-    // Deliberately no bare "quote": it is an everyday verb and noun, and the
-    // determiner guard cannot see far enough back to tell them apart. The
-    // opener must be spoken "open quote". "unquote" is safe bare — it is not an
-    // English word in its own right.
+    // Deliberately no bare "quote": it is an everyday verb and noun and the
+    // determiner guard cannot see far enough back to tell them apart, so the
+    // opener must be "open quote". "unquote" is safe bare — not a word alone.
     ("open quote", "\"", Attach::Right),
     ("close quote", "\"", Attach::Left),
     ("unquote", "\"", Attach::Left),
@@ -95,10 +94,9 @@ fn lookup(phrase: &str) -> Option<(&'static str, Attach)> {
 
 static PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     // "open"/"close" must not be swallowed as an ordinary prefix word when they
-    // are the first half of a paired-mark phrase, or "close quote" parses as
-    // prefix="close", phrase="quote" — dropping the real prefix and losing the
-    // no-space attachment. Derived from the table so a future "open …" phrase
-    // is guarded automatically.
+    // open a paired-mark phrase, or "close quote" parses as prefix="close",
+    // phrase="quote" — dropping the prefix and losing the no-space attachment.
+    // Derived from the table, so a future "open …" phrase is guarded too.
     let paired: Vec<String> = SPOKEN_PUNCTUATION
         .iter()
         .filter(|(p, _, _)| p.starts_with("open ") || p.starts_with("close "))
@@ -149,12 +147,11 @@ pub fn apply_spoken_punctuation(text: &str) -> String {
         // word; dropping them is what stops ".." and ". ." forming.
         let (lead, trail) = match attach {
             Attach::Right => {
-                // The mark belongs to the word after it. Keep the space that
+                // The mark belongs to the word after it: keep the space that
                 // separated the prefix, drop the trailing one. When
-                // auto-punctuation was absorbed instead of a prefix word
-                // ("he said. Open quote hello"), the mark goes but the
-                // separation it carried does not, or the opener glues to the
-                // previous word.
+                // auto-punctuation was absorbed instead ("he said. Open quote
+                // hello") the mark goes but its space stays, or the opener
+                // glues to the previous word.
                 let lead = if let Some(prefix) = prefix {
                     format!("{prefix} ")
                 } else if lead_mark.is_some() {

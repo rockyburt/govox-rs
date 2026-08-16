@@ -299,9 +299,8 @@ mod tests {
     #[test]
     fn the_microphone_level_reaches_the_overlay() {
         // The one thing on the card that moves while the user speaks. The
-        // pipeline smoothed this value and then dropped it, so the card sat
-        // completely still for a whole session — which reads as a frozen
-        // overlay rather than a listening one.
+        // pipeline smoothed this value then dropped it, so the card sat still
+        // for a whole session — a frozen overlay rather than a listening one.
         let overlay = Arc::new(RecordingOverlay::default());
         let channel = channel(FeedbackConfig::default(), &overlay);
 

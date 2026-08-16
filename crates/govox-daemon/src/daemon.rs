@@ -322,11 +322,10 @@ impl<T: Transcriber> Daemon<T> {
                 Ok(())
             }
 
-            // Nothing matched a command, and in command mode that is a
-            // misrecognition rather than something to dictate. Typing it would
-            // scatter half-heard command words through the document, which is
-            // the failure the mode exists to prevent. Say what was dropped so
-            // it can be repeated or the mode left.
+            // Nothing matched, and in command mode that is a misrecognition,
+            // not something to dictate: typing it would scatter half-heard
+            // command words through the document, the failure the mode exists
+            // to prevent. Say what was dropped so it can be repeated.
             PipelineAction::Text(text) if self.shared.command_mode() => {
                 tracing::info!(%text, "command mode: discarded a non-command utterance");
                 self.announcer
@@ -342,10 +341,9 @@ impl<T: Transcriber> Daemon<T> {
 
             PipelineAction::Text(text) => {
                 // The engine is live and holding this session's provisional
-                // text, so the words land as one IBus commit instead of a
-                // stream of synthetic keystrokes. Same routing decision as
-                // every other action — only the actuator differs — which is
-                // what keeps commands working identically in both modes.
+                // text, so the words land as one IBus commit rather than a
+                // stream of synthetic keystrokes. Same routing as every other
+                // action — only the actuator differs — so both modes match.
                 if let Some(preedit) = self.preedit.as_ref()
                     && self.shared.preedit_active()
                 {
@@ -381,8 +379,7 @@ impl<T: Transcriber> Daemon<T> {
         } else {
             // A plan that retypes text (a case transform) leaves different
             // characters on screen than the buffer remembers. Recording them
-            // keeps a following "delete that" backspacing the right length
-            // instead of the pre-transform one.
+            // keeps a following "delete that" at the right length.
             let retyped: String = plan
                 .actions
                 .iter()

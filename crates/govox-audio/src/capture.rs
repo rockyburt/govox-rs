@@ -187,10 +187,9 @@ fn build_stream(
     let channels = default.channels();
     let config: cpal::StreamConfig = default.into();
 
-    // Timestamps are derived from the sample count rather than read from the
-    // clock. The callback can be late or coalesced, and a wall-clock reading
-    // would put that jitter into the utterance boundaries the VAD produces;
-    // the sample count is exact by construction.
+    // Timestamps come from the sample count, not the clock: the callback can
+    // be late or coalesced, and wall-clock jitter would land in the utterance
+    // boundaries the VAD produces. The sample count is exact by construction.
     let samples_seen = Arc::new(AtomicU64::new(0));
     let target_len = (sample_rate as usize * frame_ms as usize / 1000).max(1);
     let mut pending: Vec<f32> = Vec::with_capacity(target_len * 2);
@@ -211,9 +210,8 @@ fn build_stream(
                         timestamp: seen as f64 / f64::from(sample_rate),
                     };
                     // try_send, never blocking send: this is the audio
-                    // callback. Dropping a frame under backpressure costs one
-                    // 30 ms window; blocking here would underrun the device and
-                    // corrupt everything after it.
+                    // callback. A dropped frame costs one 30 ms window;
+                    // blocking would underrun the device and corrupt the rest.
                     if frames.try_send(frame).is_err() {
                         tracing::warn!("audio frame dropped: consumer is not keeping up");
                     }

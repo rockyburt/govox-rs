@@ -48,8 +48,7 @@ pub const SPOKEN_EMOJI: &[(&str, &str)] = &[
 static PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     // Longest first: alternation is ordered, so "smiling face" must be tried
     // before any phrase that is a prefix of it. Python's `sorted(key=len,
-    // reverse=True)` is stable, so equal-length phrases keep table order —
-    // `sort_by_key` is stable too.
+    // reverse=True)` is stable, as is `sort_by_key`: ties keep table order.
     let mut phrases: Vec<&str> = SPOKEN_EMOJI.iter().map(|(p, _)| *p).collect();
     phrases.sort_by_key(|p| std::cmp::Reverse(p.len()));
     let alternation = phrases

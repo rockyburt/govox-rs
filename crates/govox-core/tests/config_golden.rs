@@ -137,10 +137,9 @@ fn defaults_match_the_golden_snapshot() {
     let mut differences = Vec::new();
     diff(&rust, &golden, "", &mut differences);
 
-    // Declared additions are removed here rather than skipped inside `diff`,
-    // so a key that stops being an addition — because it was folded into the
-    // snapshot, or renamed — resurfaces as a failure instead of staying
-    // invisible.
+    // Declared additions are removed here rather than skipped inside `diff`, so
+    // a key that stops being one — folded into the snapshot, or renamed —
+    // resurfaces as a failure instead of staying invisible.
     differences.retain(|d| {
         !RUST_ONLY_KEYS
             .iter()

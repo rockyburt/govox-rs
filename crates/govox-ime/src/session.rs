@@ -191,10 +191,9 @@ async fn run(
     state: Arc<FieldState>,
     config: ImeConfig,
 ) {
-    // Preedit is a surface the user watches for. When it silently does
-    // nothing, a DEBUG line nobody has enabled is indistinguishable from the
-    // feature not being wired at all — so say it out loud once per session,
-    // then fall back to DEBUG so a persistent fault cannot flood the journal.
+    // Preedit is a surface the user watches. When it silently does nothing, a
+    // DEBUG line nobody enabled looks the same as the feature not being wired
+    // — so say it once per session, then drop to DEBUG so it cannot flood.
     let mut warned = false;
     while let Some(command) = commands.recv().await {
         let name = command.name();
@@ -287,11 +286,10 @@ where
     B: serde::Serialize + zvariant::DynamicType,
 {
     let Some(path) = state.active() else {
-        // Ordinary when no text field has focus yet — the application simply
-        // never asked IBus for an engine. Ordinary once; if it is still true
-        // when govox is trying to draw provisional text, it is the whole
-        // reason nothing appears under the caret, and it deserves to be said
-        // rather than left in a DEBUG channel nobody has turned on.
+        // Ordinary when no text field has focus yet — the application never
+        // asked IBus for an engine. Ordinary once; if it is still true while
+        // govox is drawing provisional text it is the whole reason nothing
+        // appears under the caret, so say it rather than leave it at DEBUG.
         static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
         if signal == "UpdatePreeditText" && !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed)
         {

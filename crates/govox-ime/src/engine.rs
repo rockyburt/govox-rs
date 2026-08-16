@@ -127,16 +127,14 @@ impl FieldState {
         };
         if first {
             // Once per process at INFO: whether clients report a usable caret
-            // is the one thing that decides if the HUD can follow it, and it
-            // varies by toolkit. Logging the first makes that answerable from a
-            // log rather than by guesswork.
+            // decides if the HUD can follow it, and it varies by toolkit.
+            // Logging the first makes that answerable from a log.
             tracing::info!(?rect, "IBus reported a caret location");
         } else {
             // The rest at DEBUG. The INFO line answers "does this desktop
-            // report carets at all", but not "does *this application* report
-            // one that matches where the caret visibly is" — and clients
-            // disagree. Diagnosing a misplaced HUD needs the rectangle the
-            // misbehaving app actually sent.
+            // report carets at all", not "does *this application* report one
+            // that matches where the caret visibly is" — and clients disagree.
+            // A misplaced HUD needs the rectangle the app actually sent.
             tracing::debug!(?rect, "IBus caret location");
         }
     }

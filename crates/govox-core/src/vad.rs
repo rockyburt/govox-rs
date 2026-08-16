@@ -85,10 +85,9 @@ impl VadSegmenter {
             self.silence_ms += duration_ms;
         }
 
-        // Deliberately outside the branch above, matching govox-py: a frame in
-        // the dead band does not advance the timer but does re-check it, so a
-        // phrase already past its hangover closes on the next frame whatever
-        // that frame's probability is.
+        // Deliberately outside the branch above, matching govox-py: a dead-band
+        // frame does not advance the timer but does re-check it, so a phrase
+        // past its hangover closes on the next frame at any probability.
         if self.silence_ms < self.hangover_ms {
             return None;
         }
@@ -259,10 +258,9 @@ mod tests {
 
     #[test]
     fn a_dead_band_frame_can_close_a_phrase_already_past_its_hangover() {
-        // The load-bearing consequence of govox-py checking the hangover
-        // outside the silence branch. Worth pinning: the obvious refactor —
-        // folding the check into the `probability <= silence_threshold` arm —
-        // changes behaviour here and nowhere else.
+        // The load-bearing consequence of checking the hangover outside the
+        // silence branch: the obvious refactor — folding it into the
+        // `probability <= silence_threshold` arm — changes behaviour only here.
         let mut seg = segmenter();
         let mut probabilities = vec![0.9; 10];
         probabilities.extend([0.0; 14]); // reaches the hangover exactly...

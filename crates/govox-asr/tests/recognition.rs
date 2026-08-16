@@ -248,12 +248,10 @@ async fn a_streaming_session_grows_a_caption_and_commits() {
         committed.push_str(&update.committed);
         captions.push(format!("{committed}{}", update.pending));
     }
-    // Awaited: `finish` decodes whatever the last chunk left undecoded, so
-    // the tail of a session is transcribed rather than discarded with the
-    // buffer.
-    // `true`: the fixture is speech throughout, so the leftover is worth
-    // decoding. The daemon decides this from how much voice the VAD saw since
-    // the last decode.
+    // Awaited: `finish` decodes what the last chunk left undecoded, so the
+    // session tail is transcribed rather than discarded with the buffer.
+    // `true`: the fixture is speech throughout. The daemon decides this from
+    // how much voice the VAD saw since the last decode.
     let tail = processor.finish(true).await;
 
     assert!(!captions.is_empty(), "no streaming updates were produced");

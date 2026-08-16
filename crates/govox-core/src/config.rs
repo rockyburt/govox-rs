@@ -719,9 +719,8 @@ fn parse_env_value(value: &str) -> toml::Value {
         return toml::Value::Boolean(false);
     }
     // Python's int()/float() tolerate surrounding whitespace, so trim first.
-    // They also accept digit separators ("1_0" -> 10) where Rust does not;
-    // that input reaches the schema as a string here and is rejected, which is
-    // a narrower behaviour than the reference's, not a wider one.
+    // They also accept digit separators ("1_0" -> 10) where Rust does not; that
+    // reaches the schema as a string and is rejected — narrower, not wider.
     if let Ok(int) = value.trim().parse::<i64>() {
         return toml::Value::Integer(int);
     }

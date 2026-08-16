@@ -119,9 +119,8 @@ impl OnlineProcessor {
     /// times as long as a 15-second one.
     fn maybe_trim(&mut self) {
         // `sentence` trimming needs a sentence tokenizer for the target
-        // language, which is a dependency for a bounded gain over trimming at
-        // a word boundary. Recorded in docs/parity.md rather than silently
-        // treated as equivalent.
+        // language — a dependency for a bounded gain over word-boundary
+        // trimming. Recorded in docs/parity.md, not silently treated as equal.
         if self.trimming == BufferTrimming::Sentence {
             tracing::debug!("sentence trimming is not implemented; trimming at a word boundary");
         }
@@ -204,17 +203,14 @@ impl OnlineProcessor {
     /// # Errors
     /// Never — a failed final decode degrades to the words already in hand.
     pub async fn finish(&mut self, decode_tail: bool) -> String {
-        // Decode what has not been decoded yet. Between two decodes there is
+        // Decode what has not been decoded yet: between two decodes there is
         // always up to `min_chunk_size_s` of audio the model has never seen,
-        // and at the end of a session that audio is the last thing the user
-        // said. Returning only the standing hypothesis discards it, so a
-        // session ends by truncating its own final word.
+        // and at a session's end that is the last thing the user said —
+        // returning only the standing hypothesis truncates the final word.
         //
         // `decode_tail` is the caller's answer to "is there speech in there?".
-        // Usually there is not: a session ends a moment after the last word,
-        // so the leftover is the silence between finishing speaking and
-        // reaching for the key — and a decode of that comes back with the
-        // stock phrase, appended to the end of the user's sentence.
+        // Usually not: the leftover is the silence between the last word and
+        // reaching for the key, which decodes to the stock phrase, appended.
         let mut tail = String::new();
         if decode_tail && !self.audio.is_empty() {
             match self.process().await {

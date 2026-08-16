@@ -45,10 +45,9 @@ impl CompiledDictionary {
     pub fn apply(&self, text: &str) -> String {
         let mut result = text.to_owned();
         for (pattern, target) in &self.rules {
-            // The replacement is inserted verbatim: as a template string a
-            // target is scanned for group references, so a backslash or a "\1"
-            // in a user's dictionary would corrupt the output or fail. Nothing
-            // in a replacement is ever meant as a pattern.
+            // The replacement is inserted verbatim. As a template string it
+            // would be scanned for group references, so a backslash or "\1" in
+            // a user's dictionary would corrupt the output or fail.
             result = super::punctuation::replace_all(pattern, &result, |_| target.clone());
         }
         result

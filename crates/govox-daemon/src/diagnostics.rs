@@ -200,10 +200,9 @@ impl Default for Probes {
                     .is_empty()
                     .then(|| "no capture device is available".to_owned())
             }),
-            // "Cached" asked as a *resolution under an offline policy*, which
-            // is the same question the daemon asks at startup and, unlike a
-            // guess at the cache layout, cannot drift from it. Never touches
-            // the network, whatever the configured policy is.
+            // "Cached" asked as a *resolution under an offline policy*: the
+            // same question the daemon asks at startup, so unlike a guess at
+            // the cache layout it cannot drift. Never touches the network.
             model_cached: Box::new(|config| {
                 let mut offline = config.clone();
                 offline.download_policy = DownloadPolicy::Offline;
@@ -274,10 +273,9 @@ fn session(probes: &Probes) -> Section {
 fn injection(config: &Config, probes: &Probes) -> Section {
     let mut checks = Vec::new();
     // Not from `[injection] ydotool_socket`: that key configures the *runner*,
-    // while ydotoold itself listens where `$YDOTOOL_SOCKET` says, or at
-    // /run/user/<uid>/.ydotool_socket. Checking the config key instead would
-    // report a missing socket on every machine that never set it — which is
-    // every machine, since the default is empty.
+    // while ydotoold listens where `$YDOTOOL_SOCKET` says or at
+    // /run/user/<uid>/.ydotool_socket. Checking the config key would report a
+    // missing socket on every machine, since the default is empty.
     let socket = ydotool_socket(&config.injection.ydotool_socket);
 
     let ydotool_ok = (probes.has_binary)("ydotool") && (probes.socket_exists)(&socket);
@@ -524,10 +522,9 @@ fn preedit(config: &Config, probes: &Probes) -> Section {
 
 fn field_reading(config: &Config) -> Section {
     let check = if config.editing.read_focused_field {
-        // Deliberately not probed here. Whether a *field* is readable is a
-        // property of the focused element, not of the desktop, so a connection
-        // test would report "OK" and tell the user nothing about the
-        // application they care about. The live test is what answers that.
+        // Deliberately not probed. Whether a *field* is readable is a property
+        // of the focused element, not the desktop, so a connection test would
+        // report "OK" and say nothing about the app. The live test answers it.
         Check::new(
             "field_reading",
             "focused field",

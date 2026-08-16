@@ -270,18 +270,13 @@ impl Drop for WhisperRecognizer {
         // struct holds a `WhisperHandle`, a sender is alive.
         drop(self.handle.take());
 
-        // Deliberately *not* joining the thread.
-        //
-        // The first version did, to guarantee the GPU context was released
-        // before process exit. That deadlocks: `handle()` hands out clones, and
-        // any clone still alive — the pipeline holds one for its whole run —
-        // keeps the channel open, so `blocking_recv` never returns and the join
-        // waits forever. Shutdown must not depend on every caller having
-        // dropped its handle first.
-        //
-        // The worker exits on its own once the last handle goes, and the
-        // process reclaims the context regardless. A slightly late GPU teardown
-        // is a far better trade than a daemon that will not quit.
+        // Deliberately *not* joining the thread. The first version did, to
+        // release the GPU context before process exit, and it deadlocks:
+        // `handle()` hands out clones, the pipeline holds one for its whole
+        // run, so the channel stays open, `blocking_recv` never returns and
+        // the join waits forever. The worker exits once the last handle goes
+        // and the process reclaims the context regardless — a late GPU
+        // teardown beats a daemon that will not quit.
         self.thread.take();
     }
 }
@@ -382,9 +377,8 @@ impl Worker {
         let mut text = String::new();
         for segment in state.as_iter() {
             // whisper.cpp accepts `no_speech_thold` but documents it as not
-            // implemented, so the threshold has to be applied here or it does
-            // nothing at all. Dropping the segment is what keeps a cough from
-            // being typed into the user's document as invented words.
+            // implemented, so it has to be applied here or it does nothing.
+            // Dropping the segment keeps a cough from being typed as words.
             if f64::from(segment.no_speech_probability()) > no_speech_threshold {
                 tracing::debug!(
                     probability = segment.no_speech_probability(),

@@ -132,9 +132,8 @@ pub async fn run(config: Config, cancel: CancellationToken) -> Result<(), Pipeli
     };
     // Constructed only when the overlay is configured; started just below.
     // Push-to-talk is exempt: there is no latched session for a click to flip
-    // off, so the click would do nothing — and the helper only claims an X11
-    // input region when it is told click-to-stop is on. Withholding the flag
-    // is what keeps the card click-through in that mode.
+    // off, and the helper only claims an X11 input region when told
+    // click-to-stop is on — withholding the flag keeps the card click-through.
     let click_to_stop = feedback_config.overlay_click_to_stop
         && activation_mode != govox_core::config::ActivationMode::PushToTalk;
     let overlay: Option<Arc<dyn govox_ui::OverlaySink>> = feedback_config.overlay.then(|| {
@@ -198,10 +197,9 @@ pub async fn run(config: Config, cancel: CancellationToken) -> Result<(), Pipeli
     if let Some(overlay) = stop_watcher {
         let stops = events_tx.clone();
         overlay.watch_stops(Box::new(move || {
-            // `try_send`, not `blocking_send`: this runs on the helper's
-            // stdout reader thread, and a full event queue means the loop is
-            // already behind — a click dropped there would be re-sent by the
-            // user long before the thread finished blocking on it.
+            // `try_send`, not `blocking_send`: this runs on the helper's stdout
+            // reader thread, and a full queue means the loop is already behind
+            // — the user re-clicks long before a blocking send would return.
             let _ = stops.try_send(Event::StopRequested);
         }));
     }
@@ -248,9 +246,8 @@ pub async fn run(config: Config, cancel: CancellationToken) -> Result<(), Pipeli
     tracing::info!("ready — press your activation key and speak");
 
     // Streaming turns dictation into a live surface: words appear as
-    // provisional text while you speak instead of arriving in one block at the
-    // end. Without it `[streaming] enabled` is a key that does nothing, which
-    // is the failure class this project exists to avoid.
+    // provisional text while you speak, not in one block at the end. Without
+    // it `[streaming] enabled` is a key that does nothing.
     let streaming = streaming_config
         .enabled
         .then(|| govox_asr::OnlineProcessor::new(asr_handle, &streaming_config, sample_rate));
@@ -313,10 +310,9 @@ impl<A: Announcer> Announcer for SharedAnnouncer<A> {
     fn level(&self, value: f32) {
         self.0.level(value);
     }
-    // Forwarded rather than defaulted. The trait defaults these to no-ops so
-    // that log-only announcers need not care, which means a wrapper that
-    // forgets one fails silently — the exact shape of bug this overlay has
-    // already produced twice.
+    // Forwarded rather than defaulted. The trait defaults these to no-ops for
+    // log-only announcers, so a wrapper that forgets one fails silently — the
+    // bug this overlay has already produced twice.
     fn anchor(&self, caret: Option<govox_core::domain::CaretRect>) {
         self.0.anchor(caret);
     }
@@ -491,29 +487,20 @@ impl<A: Announcer> EventLoop<'_, A> {
         if !processor.ready() {
             return;
         }
-        // Never ask Whisper to transcribe a window that holds almost no
-        // speech. Given silence it does not answer "nothing" — it answers
-        // with what its training data put after silence, reliably
-        // "www.github.com" or "Thank you for watching!".
-        //
-        // Waiting for the VAD and dropping the pre-speech silence were both
-        // necessary and neither was sufficient, because `min_chunk_size_s`
-        // measures the *window*, not the speech in it: at 0.5 s the first
-        // decode ran on a 0.3 s pre-roll and 0.2 s of voice — a fifth of a
-        // second of a partial word, which is exactly the input that
-        // hallucinates. So gate on how much voice has actually been heard,
-        // independently of how much audio is buffered.
-        //
-        // Nothing is lost by waiting: the audio stays buffered, and a session
-        // shorter than this is decoded in full by `finish`.
+        // Given near-silence Whisper answers "www.github.com" or
+        // "Thank you for watching!", not "nothing". The VAD gate and the
+        // pre-roll drop were each necessary and neither sufficient:
+        // `min_chunk_size_s` measures the window, not the speech in it — at
+        // 0.5 s the first decode saw a 0.3 s pre-roll and 0.2 s of voice. So
+        // gate on voice actually heard. Nothing is lost: the audio stays
+        // buffered, and a shorter session is decoded in full by `finish`.
         if self.voiced_s < MIN_VOICED_S {
             return;
         }
         // Keep the decode duty cycle at roughly half. The decode is awaited on
-        // this loop, so back-to-back decodes that each run longer than the
-        // audio they consume starve every other event — including the key that
-        // ends the session. Yielding at least as long as the last decode took
-        // costs a little hypothesis latency and keeps the daemon answerable.
+        // this loop, so decodes running longer than the audio they consume
+        // starve every other event — including the key that ends the session.
+        // Yielding for the last decode's duration keeps the daemon answerable.
         if let Some((finished, took)) = self.last_decode
             && finished.elapsed() < took
         {
@@ -543,15 +530,11 @@ impl<A: Announcer> EventLoop<'_, A> {
         let hypothesis = format!("{}{}", self.session_text, update.pending);
         // Hold back a session's opening words only when they look like
         // Whisper's answer to silence. LocalAgreement discards such a decode
-        // on the next pass anyway, but `pending` is shown before that check
-        // runs, which is how a stock phrase still reached the caret.
-        //
-        // Withholding *every* first hypothesis was the obvious version of this
-        // and was wrong: stacked behind the voiced gate, a decode and the
-        // pacing pause, it put the first visible text seconds after the user
-        // started speaking — and an utterance that ended before the second
-        // decode showed no provisional text at all. Real speech now appears on
-        // the first decode, as it should.
+        // next pass anyway, but `pending` is shown before that check runs,
+        // which is how a stock phrase still reached the caret. Withholding
+        // *every* first hypothesis was the obvious version and was wrong:
+        // behind the voiced gate, a decode and the pacing pause it put the
+        // first visible text seconds late, and short utterances showed none.
         if first_words && govox_core::streaming::is_silence_artifact(&hypothesis) {
             tracing::debug!(hypothesis, "withholding an unconfirmed opening hypothesis");
             return;
@@ -568,10 +551,9 @@ impl<A: Announcer> EventLoop<'_, A> {
     async fn finish_streaming(&mut self) {
         self.streaming_active = false;
         let heard_voice = self.heard_voice;
-        // The final decode is where a session too short to have tripped
-        // `MIN_VOICED_S` gets transcribed at all, so it must not be skipped
-        // for being brief — only for holding no speech, where it would
-        // hallucinate exactly what the gates exist to prevent.
+        // The final decode is where a session too short to trip `MIN_VOICED_S`
+        // gets transcribed at all, so skip it only for holding no speech —
+        // never for being brief.
         let decode_tail = self.voiced_since_decode >= TAIL_MIN_VOICED_S;
         let mut tail = match self.streaming.as_mut() {
             Some(processor) if heard_voice => processor.finish(decode_tail).await,
@@ -581,10 +563,9 @@ impl<A: Announcer> EventLoop<'_, A> {
             }
             None => String::new(),
         };
-        // Second line of defence, on the tail alone rather than the whole
-        // session: a stock phrase arriving as the last words of a sentence is
-        // the shape this takes once the leading edge is guarded, and unlike a
-        // provisional hypothesis it would be committed to the document.
+        // Second line of defence, on the tail alone: once the leading edge is
+        // guarded a stock phrase arrives as the last words of a sentence, and
+        // unlike a provisional hypothesis it would be committed.
         if govox_core::streaming::is_silence_artifact(&tail) {
             tracing::debug!(tail, "dropping a silence artifact from the session tail");
             tail = String::new();
@@ -736,10 +717,9 @@ impl<A: Announcer> EventLoop<'_, A> {
                 self.app_rule =
                     govox_core::caret::match_app_rule(window.as_deref(), &self.feedback.app_rules)
                         .cloned();
-                // Logged with the label whether or not it matched. A line only
-                // on success cannot tell "the window could not be named" from
-                // "the window was named something the rules do not cover", and
-                // those need opposite fixes.
+                // Logged with the label whether or not it matched: a line only
+                // on success cannot tell "could not name the window" from
+                // "named it, no rule covers it", and those need opposite fixes.
                 if !self.feedback.app_rules.is_empty() {
                     tracing::debug!(
                         window = window.as_deref().unwrap_or("<unnamed>"),
@@ -780,8 +760,7 @@ impl<A: Announcer> EventLoop<'_, A> {
         self.announcer.set_state(transition.state());
         // Down the same path as the hotkey. Flushing the segmenter alone left
         // a streaming session running and the input method activated, so a
-        // session that timed out never ended in the way one stopped by hand
-        // does — which is exactly what this is documented not to do.
+        // timed-out session never ended the way a hand-stopped one does.
         self.stop_session().await;
     }
 
@@ -800,28 +779,21 @@ impl<A: Announcer> EventLoop<'_, A> {
             }
         };
 
-        // The level meter is driven from raw amplitude rather than the VAD
-        // probability: it should show the microphone working even for sounds
-        // the VAD is confident are not speech, which is what makes it useful
-        // for diagnosing a muted input.
-        // Sent, not just computed. Smoothing the level and then dropping it on
-        // the floor left the card completely static — no meter, no motion —
-        // for a whole session, which reads as a frozen overlay rather than a
-        // listening one. This is the only thing on the card that moves while
-        // the user is speaking.
+        // Raw amplitude, not the VAD probability: the meter should show the
+        // microphone working even for sounds the VAD is sure are not speech,
+        // which is what makes it useful for diagnosing a muted input. And
+        // sent, not just computed — smoothing it and dropping it on the floor
+        // left the card static for a whole session.
         let meter = self
             .level
             .update(govox_core::feedback::compute_rms(&frame.samples));
         self.announcer.level(meter);
 
-        // Streaming owns the whole session, so the VAD no longer decides where
-        // an utterance ends — it only feeds the silence auto-stop below. The
-        // segmenter is still run in utterance mode, which is what
-        // `[streaming] enabled = false` gets.
-        // Computed separately from `voice` below, which folds in the
-        // segmenter's mid-phrase state: in streaming mode the segmenter is
-        // never fed, so its state would be permanently false anyway, and
-        // reordering the two would change what the auto-stop timer sees.
+        // Streaming owns the session, so the VAD only feeds the silence
+        // auto-stop below; the segmenter still runs in utterance mode, which
+        // is what `[streaming] enabled = false` gets. Computed separately from
+        // `voice`, which folds in the segmenter's mid-phrase state — never fed
+        // in streaming mode, so reordering would change what the timer sees.
         let speech = f64::from(probability) >= self.segmenter.speech_threshold;
 
         if self.streaming_active {
@@ -835,12 +807,10 @@ impl<A: Announcer> EventLoop<'_, A> {
         // finished and the auto-stop timer must not advance.
         let voice =
             f64::from(probability) >= self.segmenter.speech_threshold || self.segmenter.in_speech();
-        // Cheap: the caret is state the input method pushed to us, so this
-        // is a lock and a comparison, not a round trip — and deduplicated, so
-        // an unmoved caret sends nothing. Done here rather than only when text
-        // arrives, because the client reports its caret within milliseconds of
-        // the session opening and the card should be at the caret by the time
-        // the user has looked at it, not once the first words are recognised.
+        // Cheap: the caret is state the input method pushed to us, so this is a
+        // lock and a comparison, not a round trip, and deduplicated. Done here
+        // rather than when text arrives because the client reports its caret
+        // within milliseconds — the card should be placed before the words are.
         self.update_anchor();
 
         if self.silence.observe(frame.timestamp, voice) {
@@ -864,11 +834,10 @@ impl<A: Announcer> EventLoop<'_, A> {
         };
         let location = sink.cursor_location();
 
-        // Whether the card *moves* is a preference; whether the field is
-        // showing the dictation is a fact, and `compact` depends on the fact.
-        // A client that reports a caret is rendering the preedit, so the
-        // caption stands down even with following turned off — or the user
-        // reads the same words twice.
+        // Whether the card *moves* is a preference; whether the field shows the
+        // dictation is a fact, and `compact` depends on the fact. A client that
+        // reports a caret is rendering the preedit, so the caption stands down
+        // even with following off — or the user reads the same words twice.
         let following = self
             .app_rule
             .as_ref()
@@ -925,10 +894,9 @@ impl<A: Announcer> EventLoop<'_, A> {
     }
 
     async fn dispatch(&self, utterance: Utterance) {
-        // try_send, not send: awaiting a full queue would stall the event loop,
-        // which is what stops modifier releases being seen. A full queue means
-        // recognition is already further behind than the configured depth, and
-        // govox-py's own backlog path is dead code — so say so plainly.
+        // try_send, not send: awaiting a full queue would stall the event loop
+        // and stop modifier releases being seen. A full queue means recognition
+        // is past the configured depth; govox-py's backlog path is dead code.
         if self.utterances.try_send(Job::Utterance(utterance)).is_err() {
             tracing::warn!("utterance dropped: recognition is backlogged");
         }
@@ -988,9 +956,8 @@ fn spawn_keyboards(
         let shared = Arc::clone(shared);
         let cancel = cancel.clone();
         // A blocking thread per keyboard rather than AsyncFd: there are two or
-        // three, they are idle almost always, and this keeps evdev's blocking
-        // read out of the async machinery entirely. The supervised hotplug
-        // rescan is still to come.
+        // three, almost always idle, and this keeps evdev's blocking read out
+        // of the async machinery. Supervised hotplug rescan is still to come.
         std::thread::spawn(move || {
             while !cancel.is_cancelled() {
                 let Ok(batch) = device.fetch_events() else {

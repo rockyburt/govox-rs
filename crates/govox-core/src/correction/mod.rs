@@ -157,10 +157,9 @@ pub fn apply_rules(
         // acquire a stray full stop).
         normalized = emoji::apply_spoken_emoji(&normalized);
     }
-    // Outside prose, none of what follows applies: a capital and a closing full
-    // stop are wrong in a URL bar, and so is a separating space. Spoken
-    // punctuation still works — saying "dot" is an explicit instruction, not an
-    // assumption govox is making on the user's behalf.
+    // Outside prose none of what follows applies: a capital, a closing full
+    // stop and a separating space are all wrong in a URL bar. Spoken
+    // punctuation still works — "dot" is an instruction, not an assumption.
     if !prose {
         return normalized;
     }
@@ -318,10 +317,9 @@ pub fn normalize_spacing(text: &str) -> String {
     let text = AROUND_BREAK.replace_all(&text, "\n");
     // Two blank lines are a paragraph; more are a mistake.
     let text = MANY_BREAKS.replace_all(&text, "\n\n");
-    // Strip horizontal whitespace only. A trailing newline is a break the
-    // speaker asked for — "hello new line" should leave the caret on the next
-    // line — and a plain strip would throw it away, turning a lone "new line"
-    // into the empty string.
+    // Horizontal whitespace only. A trailing newline is a break the speaker
+    // asked for ("hello new line" leaves the caret on the next line); a plain
+    // strip would throw it away, turning a lone "new line" into "".
     text.trim_matches([' ', '\t', '\r', '\u{c}', '\u{b}'])
         .to_owned()
 }

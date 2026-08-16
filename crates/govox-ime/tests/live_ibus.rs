@@ -120,9 +120,8 @@ async fn two_govox_processes_cannot_both_register() {
     let first = IbusSession::start(&config()).await;
     let Ok(first) = first else {
         // Something outside this process already owns the name — govox-py, in
-        // practice. That is the situation this test describes rather than a
-        // failure of it, so say so loudly: a silent skip here would read as a
-        // pass for the guard it never got to exercise.
+        // practice. That is what this test describes, not a failure of it, so
+        // say so loudly: a silent skip reads as a pass never actually earned.
         eprintln!("SKIPPED: the bus name is already held (is govox-py running?)");
         return;
     };
