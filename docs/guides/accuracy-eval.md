@@ -36,6 +36,81 @@ two guide claims they overturned, are in [models.md](models.md).
 The short version: turbo has the lowest WER, `small` has the better term recall at half the
 decode time, and bigger is not monotonically better.
 
+## Two decode paths, and the one nobody was measuring
+
+Everything above, every number in [models.md](models.md), and `corpus/eval/baseline.json`
+all score `WhisperHandle::transcribe` — one decode over a whole clip. **Dictation never
+does that.** It runs `transcribe_words` over a growing window through `OnlineProcessor`,
+committing words on LocalAgreement-2. Different path, different cost, different accuracy.
+
+```bash
+GOVOX_EVAL_STREAMING=1 cargo test -p govox-asr --test eval -- --ignored --nocapture
+```
+
+Measured on the same 29 clips with `model = "small"`:
+
+| path | raw WER | corrected WER | term recall | cost |
+|---|---|---|---|---|
+| utterance | 0.124 | 0.091 | 24/27 | 0.24 s × 1 |
+| **streaming** | **0.247** | **0.206** | **19/27** | 0.235 s × 9.1 |
+
+**The path dictation actually uses is about twice as bad as the published figures**, and
+it loses whole words rather than mangling them — "I moved the rentsync ticket in this
+morning", "I need to at the store on the way home". That is a LocalAgreement problem, not
+a model problem, and it is the largest known accuracy gap in the project. Nothing here
+fixes it; this section exists so it stops being invisible.
+
+Streaming runs deliberately leave `baseline.json` alone. It remains the utterance record.
+
+### Pin the cadence when comparing accuracy
+
+By default the harness schedules decodes the way `pipeline.rs` does — a ~50% duty cycle,
+so the next decode waits one decode-length after the last finishes. That is faithful, and
+it makes accuracy **irreproducible**: GPU jitter changes how many decodes a clip gets,
+which changes the windows, which changes what commits. Three identical runs scored raw WER
+0.253, 0.247 and 0.248 with term recall 20, 19 and 21.
+
+`GOVOX_EVAL_CADENCE_S=0.5` pins the schedule to a fixed interval of audio instead. Windows
+become identical between runs and accuracy repeats exactly, while decode times are still
+measured — they just no longer feed back into the schedule.
+
+**Compare accuracy with it set, and speed with it unset.** Any accuracy claim from an
+unpinned run is worth about ±0.01 WER and ±1 term, which is larger than most changes.
+
+## What was tried to make the decode faster
+
+Dictation's caption cadence is two decodes wide, so decode time sets how fast words
+appear. Four levers were measured against the streaming corpus. **One was kept.**
+
+| lever | verdict | evidence |
+|---|---|---|
+| Reuse `WhisperState` | **kept** | 0.240 s → 0.215 s per decode |
+| `temperature_inc = 0.0` | rejected | ~5% faster, raw WER 0.247 → 0.283, recall 20 → 16 |
+| `n_threads` 8 or 16 | rejected | 0.235 s and 0.243 s against the default's 0.235 s |
+| `audio_ctx` scaled to window | rejected | no speed gain, recall 19 → 13, and it aborts |
+
+Two of these are worth more than their table rows.
+
+**The temperature fallback earns its cost.** whisper.cpp defaults `temperature_inc` to
+0.2 and re-decodes at rising temperature when a pass trips `logprob_thold` or
+`entropy_thold`. It was the prime suspect for "sometimes it takes too long". Turning it
+off is a bad trade: about 5% off a decode for 0.035 WER and four terms.
+
+**`audio_ctx` is the one to stay away from.** Whisper encodes a full 30 s mel window
+however little audio it is given, so scaling the encoder to the real window looks like the
+obvious big win. It is not. On a Vulkan build it produced **no measurable speedup at all**
+— the encoder is not where the time goes — while term recall fell from 19/27 to 13/27. It
+is also unsafe with word timestamps: at smaller contexts the decoder emits garbage on a
+near-empty span and whisper.cpp's DTW asserts and **kills the process**:
+
+```
+WHISPER_ASSERT: whisper.cpp:8772: filter_width < a->ne[2]
+```
+
+`medfilt_width` is hardcoded to 7, so DTW needs more than 14 frames in the segment. That
+is an abort, not an error return — nothing in Rust can catch it, and in the daemon it
+would land mid-sentence.
+
 ## The baseline
 
 `large-v3-turbo` on Vulkan, 29 clips, reference machine.
@@ -155,6 +230,10 @@ Which is the loop this corpus exists for: change one thing, re-run, watch the nu
 ```bash
 tools/record-eval.sh                                        # once, ~15 minutes
 cargo test -p govox-asr --test eval -- --ignored --nocapture
+
+# the path dictation actually uses, with accuracy pinned so it repeats
+GOVOX_EVAL_STREAMING=1 GOVOX_EVAL_CADENCE_S=0.5 \
+    cargo test -p govox-asr --test eval -- --ignored --nocapture
 ```
 
 Without the recordings the test **skips** with a message naming the script — it is
