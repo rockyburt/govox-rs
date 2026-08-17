@@ -36,16 +36,47 @@ impl TimedWord {
     }
 }
 
-/// How many consecutive words are checked for an n-gram repeat.
+/// How far the end of an overlapping word may sit from the commit point and
+/// still count as the same word rather than a genuine repetition.
 ///
-/// Whisper sometimes re-emits words it has already produced when its window
-/// slides. Without this the same phrase is typed twice.
-const MAX_NGRAM: usize = 5;
+/// Word timestamps are not stable between decodes of overlapping windows, so
+/// this has to be loose. Ordinary movement is 0.3–0.5 s; the largest seen on
+/// the corpus is 1.22 s, on `twillingate-drive`, where a tighter bound rejected
+/// the overlap and the fallback then swallowed "drove out to Twillingate".
+///
+/// Raising it to 3.0 changes nothing on the corpus — the useful range is a
+/// plateau rather than a tuned edge — so this keeps the smaller value, which
+/// leaves more room between drift and a word genuinely said twice.
+const JOIN_DRIFT_S: f64 = 2.0;
 
-/// Words whose start is more than this far behind the last commit are dropped
-/// as already-seen. The slack absorbs timestamp jitter between decodes of
-/// overlapping windows.
+/// Fallback slack for the timestamp filter, used only when no text overlap can
+/// be found. Words starting further back than this are treated as already seen.
 const COMMIT_SLACK_S: f64 = 0.1;
+
+/// Whether two hypotheses mean the same word, for matching an overlap.
+///
+/// Case and edge punctuation are ignored, because the model supplies both from
+/// context and the context changes as the window grows: the same audio comes
+/// back as "milk." at the end of one hypothesis and "Milk" mid-sentence in the
+/// next. Treating those as different words leaves the overlap unrecognised and
+/// types the word twice — observed on `ultra-filtered-milk-long` as "milk.
+/// Milk".
+///
+/// Only the edges are stripped, so `rentals.ca` keeps its dot. Words that are
+/// nothing but punctuation compare literally, so a comma is not equal to a
+/// full stop.
+fn same_word(a: &str, b: &str) -> bool {
+    let normalize = |s: &str| {
+        s.trim()
+            .trim_matches(|c: char| !c.is_alphanumeric())
+            .to_lowercase()
+    };
+    let (a_norm, b_norm) = (normalize(a), normalize(b));
+    if a_norm.is_empty() || b_norm.is_empty() {
+        return a.trim() == b.trim();
+    }
+    a_norm == b_norm
+}
 
 /// Accumulates hypotheses and commits their agreed prefix.
 #[derive(Debug, Default)]
@@ -67,35 +98,57 @@ impl HypothesisBuffer {
 
     /// Offer a new hypothesis for the current window.
     ///
-    /// Words already behind the commit point are discarded, and a repeated
-    /// n-gram at the join is dropped so the same phrase is not emitted twice.
+    /// The words this hypothesis repeats from the committed tail are dropped,
+    /// so the same phrase is not emitted twice.
     pub fn insert(&mut self, words: Vec<TimedWord>) {
-        self.incoming = words
-            .into_iter()
-            .filter(|word| word.start > self.last_committed_time - COMMIT_SLACK_S)
-            .collect();
+        self.incoming = words;
 
-        let Some(first) = self.incoming.first() else {
-            return;
-        };
-        // Only de-duplicate at a real join. A hypothesis starting well after
-        // the commit point is new material, not a repeat.
-        if (first.start - self.last_committed_time).abs() >= 1.0 || self.committed.is_empty() {
+        if let Some(overlap) = self.committed_overlap() {
+            self.incoming.drain(..overlap);
             return;
         }
 
-        let limit = MAX_NGRAM.min(self.committed.len()).min(self.incoming.len());
-        for n in 1..=limit {
-            let tail: Vec<&str> = self.committed[self.committed.len() - n..]
-                .iter()
-                .map(|w| w.text.as_str())
-                .collect();
-            let head: Vec<&str> = self.incoming[..n].iter().map(|w| w.text.as_str()).collect();
-            if tail == head {
-                self.incoming.drain(..n);
-                break;
-            }
-        }
+        // No prefix of this hypothesis matches the committed tail, so there is
+        // nothing to align against and the timestamps are all that is left.
+        // Reached when the model revises a word it has already emitted, which
+        // is uncommon; the cost of being wrong here is a repeated word rather
+        // than a lost one.
+        self.incoming
+            .retain(|word| word.start > self.last_committed_time - COMMIT_SLACK_S);
+    }
+
+    /// How many leading words of the incoming hypothesis are already committed.
+    ///
+    /// Whisper re-transcribes the **whole** window on every chunk, so a
+    /// hypothesis normally opens by repeating everything already made final.
+    /// Those words have to come off, and the question is how to recognise them.
+    ///
+    /// Matching on text rather than on timestamps, because the timestamps move.
+    /// The same word decoded from two overlapping windows can land 0.3–0.5 s
+    /// apart — traced on `prose-groceries`, where "the" was reported at
+    /// 1.28–1.57 s in one decode and 0.80–0.99 s in the next. A rule that drops
+    /// everything starting before the commit point then discards words that
+    /// were never committed, and they are gone for good: the audio behind them
+    /// stays in the window but the word can never be re-offered. That is the
+    /// mechanism behind whole words vanishing mid-sentence.
+    ///
+    /// The overlap is still anchored in time, just at the **join** instead of
+    /// at the start of the hypothesis: the last matched word has to end near
+    /// the commit point. Without that, "one" said again after a pause would be
+    /// mistaken for the "one" already typed and swallowed.
+    ///
+    /// The longest match wins. A short one can be a coincidence in a sentence
+    /// that repeats a word, and the overlap is bounded only by how much of the
+    /// window is already settled — capping it at five words, as this did, fails
+    /// as soon as a sixth word is committed while the window still holds it.
+    fn committed_overlap(&self) -> Option<usize> {
+        let limit = self.committed.len().min(self.incoming.len());
+        (1..=limit).rev().find(|&n| {
+            let tail = self.committed[self.committed.len() - n..].iter();
+            let head = self.incoming[..n].iter();
+            tail.zip(head).all(|(a, b)| same_word(&a.text, &b.text))
+                && (self.incoming[n - 1].end - self.last_committed_time).abs() <= JOIN_DRIFT_S
+        })
     }
 
     /// Commit the longest common prefix of the two most recent hypotheses.
@@ -378,6 +431,105 @@ mod tests {
             [" three"],
             "the repeated word should have been dropped"
         );
+    }
+
+    /// Traced on `prose-groceries`, which streamed as "I need to stop at store
+    /// on the way home" — "the" gone from the middle of a sentence the model
+    /// transcribes perfectly in one pass.
+    #[test]
+    fn a_word_is_not_lost_when_timestamps_drift_backwards() {
+        let mut buffer = HypothesisBuffer::new();
+        let settled = words(&[
+            (0.00, 0.28, " I"),
+            (0.28, 0.55, " need"),
+            (0.55, 1.00, " to"),
+            (1.00, 1.24, " stop"),
+            (1.24, 1.28, " at"),
+        ]);
+        buffer.insert(settled.clone());
+        buffer.flush();
+        buffer.insert(settled);
+        buffer.flush();
+        assert!((buffer.last_committed_time() - 1.28).abs() < 1e-9);
+
+        // The same five words re-decoded from a longer window, every one of
+        // them reported around half a second earlier, plus the next word.
+        buffer.insert(words(&[
+            (0.00, 0.28, " I"),
+            (0.28, 0.31, " need"),
+            (0.31, 0.43, " to"),
+            (0.43, 0.68, " stop"),
+            (0.68, 0.80, " at"),
+            (0.80, 0.99, " the"),
+        ]));
+
+        assert_eq!(
+            texts(&buffer.incoming),
+            [" the"],
+            "the new word starts behind the commit point only because the \
+             timestamps moved; dropping it loses it permanently"
+        );
+    }
+
+    /// Traced on `twillingate-drive`, which streamed as "We on Saturday
+    /// afternoon" against a one-pass "We drove out to Twillingate on Saturday
+    /// afternoon". One word was committed from a short window, where its
+    /// timestamp ran late; the next hypothesis placed it 1.2 s earlier, the
+    /// overlap was rejected as too far from the join, and the fallback filter
+    /// then discarded four words that had never been committed.
+    #[test]
+    fn a_late_committed_word_still_matches_after_a_second_of_drift() {
+        let mut buffer = HypothesisBuffer::new();
+        buffer.insert(words(&[(1.24, 1.50, " We")]));
+        buffer.flush();
+        buffer.insert(words(&[(1.24, 1.50, " We")]));
+        buffer.flush();
+        assert_eq!(texts(&buffer.committed), [" We"]);
+
+        buffer.insert(words(&[
+            (0.00, 0.28, " We"),
+            (0.28, 0.60, " drove"),
+            (0.60, 0.90, " out"),
+            (0.90, 1.10, " to"),
+            (1.10, 1.60, " Twillingate"),
+        ]));
+
+        assert_eq!(
+            texts(&buffer.incoming),
+            [" drove", " out", " to", " Twillingate"],
+            "the overlap is 1.2s from the commit point but is still the same word"
+        );
+    }
+
+    /// The overlap is however much of the window is already settled. Capping it
+    /// at five words — as a fixed n-gram guard does — fails on the sixth.
+    #[test]
+    fn an_overlap_longer_than_five_words_is_recognised() {
+        let mut buffer = HypothesisBuffer::new();
+        let six = words(&[
+            (0.0, 0.2, " one"),
+            (0.2, 0.4, " two"),
+            (0.4, 0.6, " three"),
+            (0.6, 0.8, " four"),
+            (0.8, 1.0, " five"),
+            (1.0, 1.2, " six"),
+        ]);
+        buffer.insert(six.clone());
+        buffer.flush();
+        buffer.insert(six);
+        buffer.flush();
+
+        buffer.insert(words(&[
+            (0.00, 0.15, " one"),
+            (0.15, 0.30, " two"),
+            (0.30, 0.45, " three"),
+            (0.45, 0.60, " four"),
+            (0.60, 0.75, " five"),
+            (0.75, 0.90, " six"),
+            (0.90, 1.10, " seven"),
+        ]));
+
+        assert_eq!(texts(&buffer.incoming), [" seven"]);
     }
 
     #[test]

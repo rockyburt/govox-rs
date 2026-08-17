@@ -61,7 +61,30 @@ before 1.0.0, minor versions may change behaviour.
   unpinned, GPU jitter changes how many decodes a clip gets and three identical runs scored
   0.253, 0.247 and 0.248.
 
+  Most of that gap is closed under Fixed, below; the measurement is what found it.
+- **`stream_trace`**, which replays one clip through the streaming path and prints every
+  window, every word the model returned with its timestamps, and what the agreement buffer
+  did with it. An aggregate score says a word is missing; this says where it went.
+
 ### Fixed
+
+- **Streaming dictation no longer drops words out of the middle of a sentence.** "I need to
+  stop at the store" was landing as "I need to at the store" — not a mangled word, a
+  missing one, on audio the model transcribes perfectly in a single pass.
+
+  whisper.cpp's word timestamps move between decodes of overlapping windows: the same
+  "the" was reported at 1.28–1.57 s in one decode and 0.80–0.99 s in the next. The commit
+  filter discarded anything starting more than 0.1 s behind the commit point as
+  already-typed, so a word that had never been committed was thrown away — permanently,
+  since its audio stays in the window but the word is never offered again. A second defect
+  compounded it: the repeat guard only looked five words back, and stopped working once a
+  sixth word was committed while the window still held it.
+
+  The already-committed prefix is now identified by matching text against the committed
+  tail — longest match first, no length cap, case and edge punctuation ignored — with
+  timestamps demoted to a sanity check at the join. On the corpus at a pinned cadence:
+  **raw WER 0.227 → 0.160, corrected 0.200 → 0.124, term recall 19/27 → 22/27**, and no
+  word is duplicated on any of the 29 clips.
 
 - **Two utterances into a terminal no longer run together** — `…it does now.this is fun!`.
   One flag governed both prose rules and utterance joining. A terminal needs prose rules
