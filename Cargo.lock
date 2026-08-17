@@ -1460,6 +1460,7 @@ dependencies = [
  "tokio",
  "toml",
  "tracing",
+ "tracing-subscriber",
  "whisper-rs",
 ]
 

@@ -107,6 +107,23 @@ impl<R: WordRecognizer> OnlineProcessor<R> {
             .map(|w| TimedWord::new(w.start + self.offset_s, w.end + self.offset_s, w.text))
             .collect();
 
+        // The raw hypothesis, before agreement decides any of it. Words are
+        // lost between here and the caption often enough that reconstructing
+        // this from the outside is the first thing anyone needs; decoding the
+        // window twice to get it would change what the recognizer does.
+        if tracing::enabled!(tracing::Level::DEBUG) {
+            tracing::debug!(
+                window_s = self.buffered_s(),
+                offset_s = self.offset_s,
+                hypothesis = %shifted
+                    .iter()
+                    .map(|w| format!("{}[{:.2}-{:.2}]", w.text.trim(), w.start, w.end))
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                "streaming hypothesis"
+            );
+        }
+
         self.hypotheses.insert(shifted);
         let committed = self.hypotheses.flush();
         let update = StreamingUpdate {

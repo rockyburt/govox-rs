@@ -49,18 +49,42 @@ GOVOX_EVAL_STREAMING=1 cargo test -p govox-asr --test eval -- --ignored --nocapt
 
 Measured on the same 29 clips with `model = "small"`:
 
-| path | raw WER | corrected WER | term recall | cost |
-|---|---|---|---|---|
-| utterance | 0.124 | 0.091 | 24/27 | 0.24 s × 1 |
-| **streaming** | **0.247** | **0.206** | **19/27** | 0.235 s × 9.1 |
+| path | raw WER | corrected WER | term recall |
+|---|---|---|---|
+| utterance | 0.124 | 0.091 | 24/27 |
+| streaming, when first measured | 0.247 | 0.206 | 19/27 |
+| **streaming now** | **0.160** | **0.124** | **22/27** |
 
-**The path dictation actually uses is about twice as bad as the published figures**, and
-it loses whole words rather than mangling them — "I moved the rentsync ticket in this
-morning", "I need to at the store on the way home". That is a LocalAgreement problem, not
-a model problem, and it is the largest known accuracy gap in the project. Nothing here
-fixes it; this section exists so it stops being invisible.
+When this was first measured the streaming path was **about twice as bad as every
+published figure**, and it lost whole words rather than mangling them — "I need to at the
+store on the way home". The cause was word timestamps that move between decodes of
+overlapping windows, against a commit filter that assumed they do not; the diagnosis is in
+`docs/parity.md` under "Recognising which words a hypothesis already committed", and
+`stream_trace` is the tool that found it.
+
+Most of that gap is now closed. What remains is largely the same acoustic failures the
+utterance path has — `Glovertown` as "Govertown", `cache` as "cash" — plus windows where
+whisper.cpp returns no words at all for audio that plainly contains speech. Streaming is
+still the weaker path and should be scored on its own before any claim about accuracy.
 
 Streaming runs deliberately leave `baseline.json` alone. It remains the utterance record.
+
+### Tracing one clip
+
+An aggregate score says a word went missing, not where. `stream_trace` replays a single
+clip through the streaming path and prints every window the model saw, every word it
+returned with its timestamps, and what the agreement buffer did with each one — alongside
+the same clip decoded in one pass, which is the standard the streaming result is failing
+to meet.
+
+```bash
+GOVOX_TRACE_CLIP=prose-groceries \
+    cargo test -p govox-asr --test stream_trace -- --ignored --nocapture
+```
+
+It loads the configured dictionary, because the bias prompt changes what the model
+returns: an early version of this trace used an empty one and produced a clean transcript
+for a clip the eval was failing.
 
 ### Pin the cadence when comparing accuracy
 

@@ -45,3 +45,6 @@ whisper-rs.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true
+# For `stream_trace`, which reads the hypothesis the streaming path logs at
+# debug rather than decoding each window a second time to see it.
+tracing-subscriber.workspace = true
