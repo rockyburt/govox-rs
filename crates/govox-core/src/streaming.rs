@@ -53,6 +53,18 @@ const JOIN_DRIFT_S: f64 = 2.0;
 /// be found. Words starting further back than this are treated as already seen.
 const COMMIT_SLACK_S: f64 = 0.1;
 
+/// How much settled audio to keep behind a trim, as run-up for the words after
+/// it that are not settled yet. See [`trim_point`].
+const TRIM_CONTEXT_S: f64 = 2.0;
+
+/// How many committed words at most are matched to locate the join.
+///
+/// Long enough that a match is not a coincidence, short enough to survive the
+/// model revising a word further back — which is the case that made matching
+/// the whole committed region useless. Bounds the search, which is otherwise
+/// quadratic in the window's word count.
+const MAX_TAIL_MATCH: usize = 8;
+
 /// Whether two hypotheses mean the same word, for matching an overlap.
 ///
 /// Case and edge punctuation are ignored, because the model supplies both from
@@ -137,18 +149,44 @@ impl HypothesisBuffer {
     /// the commit point. Without that, "one" said again after a pause would be
     /// mistaken for the "one" already typed and swallowed.
     ///
-    /// The longest match wins. A short one can be a coincidence in a sentence
-    /// that repeats a word, and the overlap is bounded only by how much of the
-    /// window is already settled — capping it at five words, as this did, fails
-    /// as soon as a sixth word is committed while the window still holds it.
+    /// Only the **tail** of the committed text is matched, and its position in
+    /// the hypothesis is searched for rather than assumed. Requiring the whole
+    /// committed region to line up from the first word fails the moment the
+    /// model revises any one word inside it — and it does: in a long session
+    /// "Demir" came back as "Demerr" six words behind the commit point, no
+    /// alignment was found, and the fallback below then re-committed "the",
+    /// typing "but the the pipeline".
+    ///
+    /// The longest tail that matches wins, because a one-word match is easy to
+    /// find by coincidence in a sentence that repeats a word. Where a tail
+    /// matches in more than one place, the timestamps break the tie: the
+    /// candidate ending nearest the commit point is the one meant.
     fn committed_overlap(&self) -> Option<usize> {
-        let limit = self.committed.len().min(self.incoming.len());
-        (1..=limit).rev().find(|&n| {
-            let tail = self.committed[self.committed.len() - n..].iter();
-            let head = self.incoming[..n].iter();
-            tail.zip(head).all(|(a, b)| same_word(&a.text, &b.text))
-                && (self.incoming[n - 1].end - self.last_committed_time).abs() <= JOIN_DRIFT_S
-        })
+        if self.committed.is_empty() || self.incoming.is_empty() {
+            return None;
+        }
+        for len in (1..=MAX_TAIL_MATCH.min(self.committed.len())).rev() {
+            let tail = &self.committed[self.committed.len() - len..];
+            let mut best: Option<(f64, usize)> = None;
+            for end in len..=self.incoming.len() {
+                let candidate = &self.incoming[end - len..end];
+                if !candidate
+                    .iter()
+                    .zip(tail)
+                    .all(|(a, b)| same_word(&a.text, &b.text))
+                {
+                    continue;
+                }
+                let drift = (self.incoming[end - 1].end - self.last_committed_time).abs();
+                if drift <= JOIN_DRIFT_S && best.is_none_or(|(seen, _)| drift < seen) {
+                    best = Some((drift, end));
+                }
+            }
+            if let Some((_, end)) = best {
+                return Some(end);
+            }
+        }
+        None
     }
 
     /// Commit the longest common prefix of the two most recent hypotheses.
@@ -202,14 +240,39 @@ impl HypothesisBuffer {
 /// Trimming at a committed word boundary is what keeps the window bounded
 /// without cutting a word in half — a cut mid-word makes the next decode
 /// hallucinate a fragment.
+///
+/// The cut is held [`TRIM_CONTEXT_S`] *behind* the last committed word rather
+/// than exactly at it. Everything before that word is settled and the decoder
+/// will never be asked for it again, so cutting there looks free — but the words
+/// after it are **not** settled, and they are decoded from whatever audio
+/// remains. Cut flush to the commit point and the uncommitted tail is
+/// re-transcribed with no run-up at all: traced on a long session, "runs in
+/// GitLab" was correct in the window before the trim and came back from the
+/// 1.1 s fragment left afterwards as "In GitHub.", then never recovered. Keeping
+/// a couple of seconds of already-committed speech costs a little decode time
+/// and gives the tail something to be heard against.
+///
+/// The margin is a preference, not a guarantee: it yields to keeping the buffer
+/// inside `limit_s`. A margin comparable to the limit would otherwise reclaim
+/// nothing on each trim and let the window grow without bound, which is the
+/// pathology [`forced_trim_point`] exists to prevent — an ever-slower decode and
+/// eventually a daemon that stops answering its own stop key. The cut also never
+/// runs past the commit point, because the audio after it has not been
+/// transcribed yet.
 #[must_use]
-pub fn trim_point(committed: &[TimedWord], buffer_s: f64, limit_s: f64) -> Option<f64> {
+pub fn trim_point(
+    committed: &[TimedWord],
+    buffer_s: f64,
+    limit_s: f64,
+    offset_s: f64,
+) -> Option<f64> {
     if buffer_s <= limit_s || committed.is_empty() {
         return None;
     }
-    // The end of the last committed word: everything before it is settled, so
-    // the decoder never needs that audio again.
-    committed.last().map(|word| word.end)
+    let boundary = committed.last()?.end;
+    // Where the cut has to be for the buffer to end up at its limit.
+    let backstop = offset_s + (buffer_s - limit_s);
+    Some((boundary - TRIM_CONTEXT_S).max(backstop).min(boundary))
 }
 
 /// Where to cut when the buffer is over its limit and nothing has committed.
@@ -501,6 +564,51 @@ mod tests {
         );
     }
 
+    /// Traced on a long session, which streamed "but the the pipeline runs runs
+    /// in GitLab". The model revised a word *behind* the commit point — "Demir"
+    /// became "Demerr" — which broke an alignment that required the whole
+    /// committed region to match from the first word, and the timestamp
+    /// fallback then let the already-committed tail through to be typed twice.
+    ///
+    /// Only reachable in a window long enough to have been trimmed, so no
+    /// single corpus clip exercises it.
+    #[test]
+    fn a_word_revised_behind_the_commit_point_does_not_cause_a_repeat() {
+        let mut buffer = HypothesisBuffer::new();
+        let settled = words(&[
+            (14.00, 14.66, " Demir"),
+            (14.66, 14.92, " is"),
+            (14.92, 15.18, " on"),
+            (15.18, 16.18, " GitHub,"),
+            (16.18, 16.50, " but"),
+            (16.50, 16.82, " the"),
+        ]);
+        buffer.insert(settled.clone());
+        buffer.flush();
+        buffer.insert(settled);
+        buffer.flush();
+        assert_eq!(buffer.committed.len(), 6);
+
+        // The same audio, but the model has changed its mind about "Demir" —
+        // six words behind the commit point — and carried on past "the".
+        buffer.insert(words(&[
+            (14.00, 14.73, " Demerr"),
+            (14.73, 15.02, " is"),
+            (15.02, 15.25, " on"),
+            (15.25, 16.24, " GitHub,"),
+            (16.24, 16.61, " but"),
+            (16.61, 16.98, " the"),
+            (16.98, 18.00, " pipeline"),
+        ]));
+
+        assert_eq!(
+            texts(&buffer.incoming),
+            [" pipeline"],
+            "everything up to the committed tail must come off, however the \
+             model has revised what sits behind it"
+        );
+    }
+
     /// The overlap is however much of the window is already settled. Capping it
     /// at five words — as a fixed n-gram guard does — fails on the sixth.
     #[test]
@@ -567,21 +675,55 @@ mod tests {
     #[test]
     fn the_buffer_is_not_trimmed_before_its_limit() {
         let committed = words(&[(0.0, 1.0, " a")]);
-        assert_eq!(trim_point(&committed, 10.0, 15.0), None);
+        assert_eq!(trim_point(&committed, 10.0, 15.0, 0.0), None);
     }
 
     #[test]
     fn trimming_happens_at_a_committed_word_boundary() {
-        // Cutting mid-word makes the next decode hallucinate a fragment.
+        // Cutting mid-word makes the next decode hallucinate a fragment. Here
+        // the buffer is 5s over its limit, so the backstop outweighs the context
+        // margin and the cut lands on the boundary itself.
         let committed = words(&[(0.0, 1.0, " a"), (1.0, 2.5, " b")]);
-        assert_eq!(trim_point(&committed, 20.0, 15.0), Some(2.5));
+        assert_eq!(trim_point(&committed, 20.0, 15.0, 0.0), Some(2.5));
+    }
+
+    #[test]
+    fn a_trim_keeps_some_settled_audio_as_run_up() {
+        // The case from a long session: barely over the limit, so the margin is
+        // affordable and the cut is held behind the commit point. Cutting flush
+        // at 18.21 left "in GitLab" to be decoded from a 1.1s fragment.
+        let committed = words(&[(17.94, 18.21, " runs")]);
+        assert_eq!(
+            trim_point(&committed, 10.36, 10.0, 9.0),
+            Some(18.21 - TRIM_CONTEXT_S)
+        );
+    }
+
+    #[test]
+    fn the_context_margin_never_lets_the_buffer_outgrow_its_limit() {
+        // A margin bigger than the limit would reclaim nothing and the window
+        // would grow for the length of the session.
+        let committed = words(&[(0.0, 0.5, " a")]);
+        let cut = trim_point(&committed, 2.0, 1.5, 0.0).expect("over the limit");
+        assert!(
+            (cut - 0.5).abs() < 1e-9,
+            "the cut must still reclaim the 0.5s the buffer is over by, got {cut}"
+        );
+    }
+
+    #[test]
+    fn a_trim_never_cuts_past_the_commit_point() {
+        // Audio after the commit point has not been transcribed yet.
+        let committed = words(&[(0.0, 1.0, " a")]);
+        let cut = trim_point(&committed, 30.0, 5.0, 0.0).expect("over the limit");
+        assert!(cut <= 1.0, "cut {cut} is past the last committed word");
     }
 
     #[test]
     fn an_over_long_buffer_with_nothing_committed_has_no_word_boundary() {
         // There is no settled word to cut at, so this function declines. The
         // buffer is still bounded — by `forced_trim_point` below.
-        assert_eq!(trim_point(&[], 20.0, 15.0), None);
+        assert_eq!(trim_point(&[], 20.0, 15.0, 0.0), None);
     }
 
     #[test]

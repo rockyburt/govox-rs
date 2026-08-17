@@ -87,12 +87,26 @@ async fn traces_one_clip_through_the_streaming_path() {
         .try_init()
         .ok();
 
-    let path = repo_root().join(format!("corpus/eval/audio/{clip}.wav"));
-    if !path.is_file() {
-        eprintln!("SKIPPING: no audio at {}", path.display());
-        return;
+    // A comma-separated list is joined into one long session, with a beat of
+    // silence between clips. Every corpus clip is under 8 s, so on its own none
+    // of them reaches `buffer_trimming_sec` (10 s) — trimming, and everything
+    // that only goes wrong in a window long enough to be trimmed, is otherwise
+    // unreachable from the corpus.
+    let mut samples = Vec::new();
+    let mut sample_rate = 16_000;
+    for (i, one) in clip.split(',').map(str::trim).enumerate() {
+        let path = repo_root().join(format!("corpus/eval/audio/{one}.wav"));
+        if !path.is_file() {
+            eprintln!("SKIPPING: no audio at {}", path.display());
+            return;
+        }
+        let (part, rate) = load_wav(&path);
+        sample_rate = rate;
+        if i > 0 {
+            samples.extend(std::iter::repeat_n(0.0, rate as usize * 3 / 10));
+        }
+        samples.extend(part);
     }
-    let (samples, sample_rate) = load_wav(&path);
 
     let config = Config::load(None).expect("the machine's own configuration loads");
     // The configured dictionary, not an empty one: the bias prompt changes what
