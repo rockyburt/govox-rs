@@ -1,8 +1,9 @@
 //! Wiring: microphone → VAD → Whisper → correction → injection.
 //!
 //! The routing itself lives in [`crate::daemon`]; this module is the plumbing
-//! that feeds it. Four long-lived tasks: an evdev reader per keyboard, the
-//! capture supervisor, the event loop, and the utterance consumer.
+//! that feeds it. Long-lived tasks: a keyboard supervisor with an evdev reader
+//! per keyboard, the capture supervisor, the event loop, and the utterance
+//! consumer.
 //!
 //! **The consumer is a separate task on purpose.** Processing an utterance
 //! inline would block the event loop for the whole of transcription, so the
@@ -16,6 +17,8 @@
 //! Still to come: streaming (M9's processor is built but not yet driven from
 //! here) and AT-SPI field reading (M11).
 
+use std::collections::{BTreeSet, HashSet};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use govox_asr::whisper::{WhisperHandle, WhisperRecognizer};
@@ -273,7 +276,7 @@ pub async fn run(config: Config, cancel: CancellationToken) -> Result<(), Pipeli
         });
     }
 
-    spawn_keyboards(&devices, &events_tx, &shared, &cancel);
+    spawn_keyboard_supervisor(keys.clone(), &events_tx, &shared, &cancel);
     spawn_capture(&device, sample_rate, frame_ms, &events_tx, &cancel);
 
     let consumer = tokio::spawn(consume(
@@ -413,6 +416,13 @@ const TAIL_MIN_VOICED_S: f64 = 0.1;
 /// to lose. 300 ms is ten frames at the 30 ms default — generous against that
 /// latency while still leaving the first decode overwhelmingly speech.
 const PREROLL_S: f64 = 0.3;
+
+/// How often to check whether the set of input devices has changed.
+///
+/// Only a directory listing, not a device probe, so this can be brisk. It is
+/// the delay between plugging a keyboard in and being able to dictate with it,
+/// and a second of that is not worth noticing.
+const KEYBOARD_POLL: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// What the consumer task is handed.
 ///
@@ -996,44 +1006,134 @@ async fn consume<T: Transcriber>(
     tracing::debug!("utterance consumer exited");
 }
 
-fn spawn_keyboards(
-    devices: &[std::path::PathBuf],
+/// Which of `found` are not being read yet.
+///
+/// Split out so the bookkeeping that decides whether a keyboard gets a reader
+/// is testable without a `/dev/input` node to plug and unplug.
+fn unwatched(found: &[PathBuf], watched: &HashSet<PathBuf>) -> Vec<PathBuf> {
+    found
+        .iter()
+        .filter(|path| !watched.contains(*path))
+        .cloned()
+        .collect()
+}
+
+/// A cheap fingerprint of which event nodes exist.
+///
+/// [`find_keyboard_devices`] has to *open* every node to ask which keys it
+/// supports, which is too much to repeat on a timer. Reading the directory does
+/// not, so this is what decides when the expensive scan is worth running.
+fn input_nodes() -> BTreeSet<std::ffi::OsString> {
+    std::fs::read_dir("/dev/input")
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| entry.file_name())
+                .filter(|name| name.as_encoded_bytes().starts_with(b"event"))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Read every keyboard that can send an activation key — now, and later.
+///
+/// Keyboards are not a fixed set, and this used to assume they were. Unplugging
+/// one ended its reader thread with a warning and nothing else; plugging one in
+/// was never noticed at all. Swapping keyboards therefore left the daemon
+/// running, healthy, and deaf, with no route back but a restart — which is
+/// exactly what happened on 2026-08-18 when a wireless keyboard was replaced
+/// with a wired one.
+///
+/// Rescans when a reader dies, and when the contents of `/dev/input` change.
+/// Polling that directory is cheap; opening every node to ask what keys it
+/// supports is not, so the listing is what gates the real scan.
+fn spawn_keyboard_supervisor(
+    keys: Vec<String>,
     events: &mpsc::Sender<Event>,
     shared: &Arc<SharedState>,
     cancel: &CancellationToken,
 ) {
-    for path in devices {
-        let Ok(mut device) = open_device(path) else {
-            tracing::warn!(path = %path.display(), "cannot read keyboard; skipping");
-            continue;
-        };
-        let events = events.clone();
-        let shared = Arc::clone(shared);
-        let cancel = cancel.clone();
-        // A blocking thread per keyboard rather than AsyncFd: there are two or
-        // three, almost always idle, and this keeps evdev's blocking read out
-        // of the async machinery. Supervised hotplug rescan is still to come.
-        std::thread::spawn(move || {
-            while !cancel.is_cancelled() {
-                let Ok(batch) = device.fetch_events() else {
-                    tracing::warn!("keyboard disconnected");
-                    return;
-                };
-                for event in batch {
-                    let Some(key) = to_key_event(&event) else {
+    let events = events.clone();
+    let shared = Arc::clone(shared);
+    let cancel = cancel.clone();
+
+    tokio::spawn(async move {
+        let mut watched: HashSet<PathBuf> = HashSet::new();
+        let mut nodes = input_nodes();
+        // Reader threads report their own death here, so a disconnect is acted
+        // on immediately rather than at the next tick.
+        let (died_tx, mut died_rx) = mpsc::unbounded_channel::<PathBuf>();
+        let mut rescan = true;
+
+        loop {
+            if rescan {
+                for path in unwatched(&find_keyboard_devices(&keys), &watched) {
+                    let Ok(mut device) = open_device(&path) else {
+                        tracing::warn!(path = %path.display(), "cannot read keyboard; skipping");
                         continue;
                     };
-                    // Recorded here, ahead of the event loop, so the modifier
-                    // set stays live while the loop is busy. See the module
-                    // docs — this is the whole reason the split exists.
-                    shared.note_modifier(key.key(), matches!(key, KeyEvent::Down(_)));
-                    if events.blocking_send(Event::Key(key)).is_err() {
-                        return;
+                    tracing::info!(path = %path.display(), "reading keyboard");
+                    watched.insert(path.clone());
+
+                    let events = events.clone();
+                    let shared = Arc::clone(&shared);
+                    let cancel = cancel.clone();
+                    let died = died_tx.clone();
+                    // A blocking thread per keyboard rather than AsyncFd: there
+                    // are two or three, almost always idle, and this keeps
+                    // evdev's blocking read out of the async machinery.
+                    std::thread::spawn(move || {
+                        while !cancel.is_cancelled() {
+                            let Ok(batch) = device.fetch_events() else {
+                                tracing::warn!(path = %path.display(), "keyboard disconnected");
+                                let _ = died.send(path);
+                                return;
+                            };
+                            for event in batch {
+                                let Some(key) = to_key_event(&event) else {
+                                    continue;
+                                };
+                                // Recorded here, ahead of the event loop, so the
+                                // modifier set stays live while the loop is
+                                // busy. See the module docs — this is the whole
+                                // reason the split exists.
+                                shared.note_modifier(key.key(), matches!(key, KeyEvent::Down(_)));
+                                if events.blocking_send(Event::Key(key)).is_err() {
+                                    return;
+                                }
+                            }
+                        }
+                        let _ = died.send(path);
+                    });
+                }
+                if watched.is_empty() {
+                    // Not fatal here, unlike at startup: a keyboard that goes
+                    // away can come back, and the daemon is worth keeping alive
+                    // to notice that it did.
+                    tracing::warn!(
+                        "no keyboard can send the activation key; waiting for one to appear"
+                    );
+                }
+                rescan = false;
+            }
+
+            tokio::select! {
+                () = cancel.cancelled() => break,
+                Some(path) = died_rx.recv() => {
+                    watched.remove(&path);
+                    rescan = true;
+                }
+                () = tokio::time::sleep(KEYBOARD_POLL) => {
+                    let now = input_nodes();
+                    if now != nodes {
+                        nodes = now;
+                        rescan = true;
                     }
                 }
             }
-        });
-    }
+        }
+        tracing::debug!("keyboard supervisor exited");
+    });
 }
 
 fn spawn_capture(
@@ -1176,6 +1276,58 @@ fn probe_capabilities() -> govox_core::domain::Capabilities {
     // the diagnostic reports cannot disagree — which was the whole point of
     // there being a diagnostic.
     crate::diagnostics::capabilities(&crate::diagnostics::Probes::default())
+}
+
+#[cfg(test)]
+mod keyboard_tests {
+    use super::{input_nodes, unwatched};
+    use std::collections::HashSet;
+    use std::path::PathBuf;
+
+    fn paths(names: &[&str]) -> Vec<PathBuf> {
+        names.iter().map(PathBuf::from).collect()
+    }
+
+    #[test]
+    fn a_newly_appeared_keyboard_is_picked_up() {
+        let watched: HashSet<PathBuf> = paths(&["/dev/input/event3"]).into_iter().collect();
+        let found = paths(&["/dev/input/event3", "/dev/input/event26"]);
+        assert_eq!(unwatched(&found, &watched), paths(&["/dev/input/event26"]));
+    }
+
+    #[test]
+    fn a_keyboard_already_being_read_is_not_opened_twice() {
+        // The rescan runs on a timer, so without this every tick would stack
+        // another reader thread on the same device.
+        let watched: HashSet<PathBuf> = paths(&["/dev/input/event3"]).into_iter().collect();
+        assert!(unwatched(&paths(&["/dev/input/event3"]), &watched).is_empty());
+    }
+
+    #[test]
+    fn a_keyboard_that_went_away_is_simply_absent() {
+        // Disconnection is handled by the reader reporting its own death; the
+        // scan says nothing about devices that are no longer there.
+        let watched: HashSet<PathBuf> = paths(&["/dev/input/event3"]).into_iter().collect();
+        assert!(unwatched(&[], &watched).is_empty());
+    }
+
+    #[test]
+    fn everything_is_new_when_nothing_is_watched() {
+        let found = paths(&["/dev/input/event3", "/dev/input/event26"]);
+        assert_eq!(unwatched(&found, &HashSet::new()), found);
+    }
+
+    #[test]
+    fn the_node_listing_holds_only_event_nodes() {
+        // Runs on whatever machine builds this, including one with no
+        // /dev/input at all, so it asserts the shape rather than the contents.
+        for name in input_nodes() {
+            assert!(
+                name.to_string_lossy().starts_with("event"),
+                "{name:?} is not an event node"
+            );
+        }
+    }
 }
 
 #[cfg(test)]

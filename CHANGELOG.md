@@ -138,6 +138,21 @@ before 1.0.0, minor versions may change behaviour.
   individual clips and cost more elsewhere, taking raw WER 0.146 → 0.160 (`Jira board`) and
   0.146 → 0.156 (`cache`).
 
+- **Swapping keyboards no longer silently stops dictation.** Keyboards were enumerated once
+  at startup. Unplugging one ended its reader with a "keyboard disconnected" warning and
+  nothing else; plugging one in was never noticed at all. The daemon carried on looking
+  perfectly healthy — running, model loaded, tray normal — while being unable to see the
+  activation key, and the only way back was a restart.
+
+  A supervisor now rescans when a reader dies and when the contents of `/dev/input` change,
+  so a keyboard plugged in mid-session is picked up within about a second. Verified against
+  a real device created through `/dev/uinput`: appearance detected in 0.1 s, removal logged
+  with the device path, and the other keyboards unaffected.
+
+  Startup still fails hard when no keyboard can emit the activation key — that is usually a
+  missing `input` group and worth stopping for — but a keyboard going away later is now a
+  warning, because it can come back.
+
 - **Two utterances into a terminal no longer run together** — `…it does now.this is fun!`.
   One flag governed both prose rules and utterance joining. A terminal needs prose rules
   off but the space kept; a URL bar needs neither, so `example` + `dot com` still makes
