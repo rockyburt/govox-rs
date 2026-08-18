@@ -1,5 +1,5 @@
 ---
-last_verified: 2026-08-16
+last_verified: 2026-08-18
 owner: rockyburt
 type: Guide
 covers:
@@ -51,9 +51,14 @@ Measured on the same 29 clips with `model = "small"`:
 
 | path | raw WER | corrected WER | term recall |
 |---|---|---|---|
-| utterance | 0.124 | 0.091 | 24/27 |
+| utterance | 0.124 | 0.082 | 26/27 |
 | streaming, when first measured | 0.247 | 0.206 | 19/27 |
-| **streaming now** | **0.146** | **0.115** | **22/27** |
+| **streaming now** | **0.146** | **0.089** | **27/27** |
+
+Read the two columns differently. **Raw WER is the recogniser**; corrected WER and term
+recall include the dictionary, and six `replace` rules added on 2026-08-18 target terms
+this corpus contains — so recall is now partly a measurement of those rules. See
+[the five that resist](#the-five-that-resist), which is where they came from.
 
 When this was first measured the streaming path was **about twice as bad as every
 published figure**, and it lost whole words rather than mangling them — "I need to at the
@@ -261,6 +266,73 @@ clips (which selects for easy audio and makes the corpus flatter) or a per-term 
 rule (which the dictionary's own standard forbids on a single observation, and which for
 `Hamilton` would corrupt a real place name). Neither is worth doing. They are left failing
 on purpose: a corpus with no failures left in it has stopped being a measurement.
+
+#### Update, 2026-08-18: four of them earned a rule after all
+
+The argument above turns on "a single observation of a non-deterministic model". That
+premise no longer holds. `GOVOX_EVAL_CADENCE_S` pins the decode schedule, so a streaming
+run now repeats exactly, and "does this recur identically" became a question with an
+answer. Asked at three cadences — 0.4, 0.5 and 0.6, which decode genuinely different
+windows — the answer was yes:
+
+| term | produced | recurs |
+|---|---|---|
+| `Glovertown` | "Govertown" | 3 of 3 cadences, and on the utterance path |
+| `Lewisporte` | "Lewisworth" | 3 of 3 |
+| `Jira board` | "Gerobord" | 3 of 3 |
+| `BuildingStack` | "BuildingSack" | 3 of 3 |
+| `Rentsync` | "Durensync" | 2 of 3 (correct at the third) |
+
+Same wrong string every time, on two different code paths. That is the standard the
+dictionary set, met.
+
+**What has not changed is the line about `Hamilton`.** Every string above is nonsense —
+not a word, not a place, nothing anyone would dictate on purpose — which is exactly why a
+whole-word rule for it is safe. `Appleton` → "Hamilton" and `cache` → "cash" recur just as
+reliably and still get no rule, because both targets are real words and the rule would
+corrupt honest text. A rule may only rewrite a string that has no meaning of its own.
+
+**Bias was tried first**, twice, because it is the better lever where it works. Adding
+"Jira board" to the bias list fixed that clip outright and still lost overall: raw WER
+0.146 → 0.160, with `Notre Dame Bay` falling from perfect to 0.600, because a longer prompt
+crowds out the rolling context the streaming backend passes. Adding "standup" alongside was
+worse. Both rejected — the measurement is in the dictionary's own comments.
+
+Effect, streaming at cadence 0.5: corrected WER 0.115 → 0.094, term recall 22/27 → 27/27.
+Utterance path: 0.091 → 0.082, recall 24/27 → 26/27. **Raw WER did not move on either**,
+which is the tell that these run after recognition and cannot flatter the model.
+
+The warning the section opens with still stands, and now applies to the rules: recall for
+these five is tautological on this corpus. **Judge a model change by raw WER**, and delete
+any rule that stops firing.
+
+#### The other two, revisited
+
+`Appleton` → "Hamilton" and `cache` → "cash" were the two this guide singled out as
+unfixable. They turned out to be different problems.
+
+**`Appleton` no longer fails, and needs no rule.** "Hamilton" was `large-v3-turbo`
+behaviour, recorded while turbo was the configured model. With `small` — chosen on
+2026-08-16 precisely because it recalls proper nouns better — the clip comes back correct
+at all three cadences *and* on the utterance path. A rule would have fixed nothing and
+put a real place name at risk. Worth stating plainly: **an error attributed to the model
+can be fixed by changing the model**, and a rule written for it would have outlived the
+problem silently.
+
+**`cache` was fixed with a phrase, not a word.** The error is `cached` → "cash", identical
+in all four runs. `cash` is an ordinary word, so the rule matches `cash version` instead:
+`bounded_pattern` puts `\b` at both ends of the whole source, so a multi-word `from` only
+matches the phrase and "I paid cash for it" is untouched. Verified against a list of honest
+sentences — cash flow, Hamilton, Hamilton Ontario — none of which any rule rewrites.
+
+Biasing `cache` was measured first and rejected. It does change the decode, to "the cache
+version", but that is still not "cached", so the clip scores no better, and the longer
+prompt cost elsewhere: raw WER 0.146 → 0.156, `ultra-filtered-milk-long` from exact to
+0.182.
+
+No rules were added for the other collocations of cache — "clear the cash", "cash hit".
+None has been observed, and predicting mis-hearings is exactly what the 2026-08-11 rules
+did before every one of them turned out to be dead.
 
 ### The one dictionary fix that worked
 
