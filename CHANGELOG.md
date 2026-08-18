@@ -110,6 +110,34 @@ before 1.0.0, minor versions may change behaviour.
   `stream_trace` now takes a comma-separated list of clips and joins them into one session,
   which is what made both of these visible.
 
+- **Five recurring mis-hearings now corrected**: `Glovertown` arriving as "Govertown",
+  `Lewisporte` as "Lewisworth", `Jira board` as "Gerobord", `BuildingStack` as
+  "BuildingSack", `Rentsync` as "Durensync". These are personal-dictionary `replace` rules,
+  so they live in `~/.config/govox/dictionary.toml` rather than in this repository.
+
+  The dictionary's standard for a rule is "the same thing wrong the same way more than
+  once", and until now that was untestable — the streaming decode did not repeat between
+  runs, so every observation was a sample of one. Pinning the decode schedule
+  (`GOVOX_EVAL_CADENCE_S`) fixed that: each string above was produced *identically* at three
+  different cadences, and all but one on the whole-utterance path as well.
+
+  Streaming corrected WER 0.115 → **0.094**, term recall 22/27 → **27/27**; utterance
+  0.091 → **0.082**, 24/27 → 26/27. Raw WER unchanged on both paths, which is the point —
+  a rule runs after recognition and cannot flatter the recogniser.
+
+  A sixth rule fixes `cached` → "cash" as a **phrase** (`cash version`), because `cash` is
+  an ordinary word and a bare rule would rewrite "I paid cash for it"; whole-word matching
+  applies to the entire source, so only the phrase matches. Streaming corrected WER falls
+  further to **0.089**.
+
+  `Appleton` → "Hamilton", the other long-standing failure, turned out to need no rule at
+  all: it was `large-v3-turbo` behaviour and does not occur under `small`, the configured
+  model since 2026-08-16. A rule for it would have risked a real place name to fix nothing.
+
+  Adding these terms to the *bias* prompt instead was measured and rejected — it fixed
+  individual clips and cost more elsewhere, taking raw WER 0.146 → 0.160 (`Jira board`) and
+  0.146 → 0.156 (`cache`).
+
 - **Two utterances into a terminal no longer run together** — `…it does now.this is fun!`.
   One flag governed both prose rules and utterance joining. A terminal needs prose rules
   off but the space kept; a URL bar needs neither, so `example` + `dot com` still makes
