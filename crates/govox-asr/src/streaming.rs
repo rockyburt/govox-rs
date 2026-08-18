@@ -153,6 +153,7 @@ impl<R: WordRecognizer> OnlineProcessor<R> {
             self.hypotheses.committed_words(),
             buffered_s,
             self.buffer_limit_s,
+            self.offset_s,
         ) {
             Some(cut_s) => cut_s,
             // No settled word to cut at, so fall back to the backstop; see

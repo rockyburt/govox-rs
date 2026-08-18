@@ -53,7 +53,7 @@ Measured on the same 29 clips with `model = "small"`:
 |---|---|---|---|
 | utterance | 0.124 | 0.091 | 24/27 |
 | streaming, when first measured | 0.247 | 0.206 | 19/27 |
-| **streaming now** | **0.160** | **0.124** | **22/27** |
+| **streaming now** | **0.146** | **0.115** | **22/27** |
 
 When this was first measured the streaming path was **about twice as bad as every
 published figure**, and it lost whole words rather than mangling them — "I need to at the
@@ -62,10 +62,19 @@ overlapping windows, against a commit filter that assumed they do not; the diagn
 `docs/parity.md` under "Recognising which words a hypothesis already committed", and
 `stream_trace` is the tool that found it.
 
-Most of that gap is now closed. What remains is largely the same acoustic failures the
-utterance path has — `Glovertown` as "Govertown", `cache` as "cash" — plus windows where
-whisper.cpp returns no words at all for audio that plainly contains speech. Streaming is
-still the weaker path and should be scored on its own before any claim about accuracy.
+Most of that gap is now closed. What remains is the same acoustic failures the utterance
+path has — `Glovertown` as "Govertown", `cache` as "cash". Streaming is still the weaker
+path and should be scored on its own before any claim about accuracy.
+
+An earlier version of this section also blamed "windows where whisper.cpp returns no words
+at all for audio that plainly contains speech". **That was wrong, and it is worth keeping
+the correction visible**, because the mistake is an easy one to repeat: the evidence was a
+trace showing three consecutive decodes with an empty `pending`, read as the model
+returning nothing. It was not. Those decodes returned full word lists — "We drove out to
+the city.", "We drove out to Twillingate." — and the *commit filter* discarded them, which
+is the bug fixed above. Re-measured across all 29 clips afterwards: **0 of 252 decodes
+returned no words.** An empty caption is not evidence of an empty decode; only the
+hypothesis log says which it was.
 
 Streaming runs deliberately leave `baseline.json` alone. It remains the utterance record.
 
@@ -85,6 +94,23 @@ GOVOX_TRACE_CLIP=prose-groceries \
 It loads the configured dictionary, because the bias prompt changes what the model
 returns: an early version of this trace used an empty one and produced a clean transcript
 for a clip the eval was failing.
+
+**Pass several clips to build a long session**, joined with a beat of silence:
+
+```bash
+GOVOX_TRACE_CLIP="prose-longer,twillingate-drive,github-gitlab" \
+    cargo test -p govox-asr --test stream_trace -- --ignored --nocapture
+```
+
+This is the only way to reach a whole class of behaviour from this corpus. Every clip is
+under 8 s and `buffer_trimming_sec` is 10 s, so **no single clip ever trims the buffer** —
+and two distinct bugs lived on the other side of that line, invisible to a 29-clip score:
+a word committed twice when the model revised something behind the commit point, and the
+words immediately after a trim being decoded with no run-up. Both are in `docs/parity.md`.
+
+The scoring corpus cannot be fixed by adding a longer clip, because a clip is one
+utterance and this needs a session. Judge a long session by comparing its `STREAMED:` line
+against the one-pass decode printed above it; that gap was 0.081 WER and is now 0.032.
 
 ### Pin the cadence when comparing accuracy
 

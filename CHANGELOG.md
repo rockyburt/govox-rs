@@ -86,6 +86,30 @@ before 1.0.0, minor versions may change behaviour.
   **raw WER 0.227 → 0.160, corrected 0.200 → 0.124, term recall 19/27 → 22/27**, and no
   word is duplicated on any of the 29 clips.
 
+- **Long dictation sessions no longer type words twice or lose the words after a trim.**
+  Two defects that only exist once the audio buffer passes `buffer_trimming_sec`, so no
+  single corpus clip could reach them — every clip is under 8 s against a 10 s limit.
+
+  A session dictated as "but the pipeline runs in GitLab" came out as "but **the the**
+  pipeline **runs runs** in GitLab". The already-committed prefix was matched by requiring
+  the whole committed region to line up from its first word, and the model revising any one
+  word behind the commit point broke it — "Demir" became "Demerr" six words back. Only the
+  last few committed words are matched now, and where they land in the hypothesis is
+  searched for rather than assumed.
+
+  Separately, trimming cut flush at the last committed word, leaving the *uncommitted*
+  words after it to be re-decoded with no run-up: "runs in GitLab" was correct before a
+  trim and came back from the 1.1 s fragment afterwards as "In GitHub", then never
+  recovered. The cut now stays 2 s behind the commit point, yielding to a backstop that
+  keeps the buffer inside its limit.
+
+  Long-session word error against a one-pass decode of the same audio: **0.081 → 0.032**,
+  at no measurable decode cost. The corpus improved too — **raw WER 0.160 → 0.146,
+  corrected 0.124 → 0.115** — because the tail match is more robust on short clips as well.
+
+  `stream_trace` now takes a comma-separated list of clips and joins them into one session,
+  which is what made both of these visible.
+
 - **Two utterances into a terminal no longer run together** — `…it does now.this is fun!`.
   One flag governed both prose rules and utterance joining. A terminal needs prose rules
   off but the space kept; a URL bar needs neither, so `example` + `dot com` still makes
