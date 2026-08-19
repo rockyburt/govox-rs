@@ -166,7 +166,11 @@ Rough edges worth knowing before you rely on it:
 - **Whisper hallucinates on silence**, answering with stock phrases like
   `www.github.com` or `Thank you for watching!`. There are guards at both ends of a
   session and a content check; a new variant may still slip through.
-- **Word error rate is not yet measured** against a corpus.
+- **Streaming trails a whole-utterance decode**, at corrected word error 0.089 against
+  0.082 on the eval corpus. Dictation takes the streaming path, so that is the number
+  that describes what you get. See [docs/guides/accuracy-eval.md](docs/guides/accuracy-eval.md).
+- **The accuracy corpus is personal** — 29 clips that failed on one machine, in one voice.
+  It catches regressions in this pipeline; it is not a claim about whisper in general.
 - **`ydotool` is required** for the non-IBus path, which means a daemon running as root
   or a udev rule.
 
@@ -175,17 +179,26 @@ Rough edges worth knowing before you rely on it:
 Issues and pull requests are welcome. Before opening a PR:
 
 ```bash
-cargo test --workspace
+cargo nextest run --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all --check
 ```
+
+CI runs [`cargo nextest`](https://nexte.st/), which reports failures from every binary in
+one pass instead of stopping at the first. The golden corpus below is ~99% of that run, so
+`GOVOX_GOLDEN_SAMPLE=50` — every 50th record, a stable stride — gives a ~6 s inner loop.
+Run the whole corpus before merging anything that touches the correction pipeline.
 
 Tests that need real hardware or a downloaded model are `#[ignore]`d and do not run by
 default:
 
 ```bash
-cargo test --workspace -- --ignored
+cargo nextest run --workspace --run-ignored ignored-only -E 'not test(bless)'
 ```
+
+The `bless` tests are excluded because they are `#[ignore]`d too and fail *by design*
+without `GOVOX_BLESS=1`, which is what stops a stray `--run-ignored` rewriting a corpus.
+Doc tests are the one thing nextest does not run: `cargo test --workspace --doc`.
 
 The correction pipeline is pinned by a **golden corpus** of ~239,000 recorded calls, which
 runs as an ordinary test. If you change that pipeline and the corpus disagrees, the
