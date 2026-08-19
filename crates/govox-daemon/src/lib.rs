@@ -28,6 +28,7 @@ pub mod diagnostics;
 pub mod feedback;
 pub mod pipeline;
 pub mod state;
+pub mod watch;
 
 /// The version of *this build*: the manifest version, plus the commit as
 /// semver build metadata when this is not a tagged release.

@@ -33,6 +33,7 @@ cuda = ["whisper-rs/cuda"]
 
 [dependencies]
 govox-core.workspace = true
+arc-swap.workspace = true
 hf-hub.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

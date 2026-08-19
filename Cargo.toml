@@ -44,6 +44,9 @@ cpal = "0.18"
 evdev = "0.13"
 ksni = "0.3"
 notify-rust = "4.18"
+# Filesystem watching, for config and dictionary edits. Named one letter apart
+# from `notify-rust` above, which sends desktop notifications and is unrelated.
+notify = { version = "8.2", default-features = false }
 rodio = "0.22"
 hf-hub = { version = "1", default-features = false, features = ["blocking", "rustls-tls"] }
 silero = "0.6"

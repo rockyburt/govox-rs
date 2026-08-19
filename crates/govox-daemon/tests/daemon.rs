@@ -14,13 +14,15 @@ use govox_core::domain::{
     PersonalDictionary, PipelineAction, Utterance,
 };
 use govox_core::textmodel::DictationBuffer;
-use govox_daemon::daemon::{Announcer, Daemon, Transcriber};
+use govox_daemon::daemon::{Announcer, Daemon, ReloadTrigger, Transcriber};
 use govox_daemon::state::SharedState;
 
 /// Returns a canned transcript, or an error, and records what it was asked.
 struct FakeTranscriber {
     result: Mutex<Result<String, String>>,
     calls: Mutex<usize>,
+    /// The bias terms a reload pushed, if it pushed any.
+    bias: Mutex<Option<Vec<String>>>,
 }
 
 impl FakeTranscriber {
@@ -28,6 +30,7 @@ impl FakeTranscriber {
         Self {
             result: Mutex::new(Ok(text.to_owned())),
             calls: Mutex::new(0),
+            bias: Mutex::new(None),
         }
     }
 
@@ -35,11 +38,16 @@ impl FakeTranscriber {
         Self {
             result: Mutex::new(Err("model exploded".to_owned())),
             calls: Mutex::new(0),
+            bias: Mutex::new(None),
         }
     }
 }
 
 impl Transcriber for FakeTranscriber {
+    fn set_bias_terms(&self, terms: &[String]) {
+        *self.bias.lock().unwrap() = Some(terms.to_vec());
+    }
+
     async fn transcribe(&self, _audio: &AudioBuffer) -> Result<String, GovoxError> {
         *self.calls.lock().unwrap() += 1;
         self.result
@@ -581,6 +589,115 @@ async fn a_failed_reload_keeps_the_running_configuration() {
             .notifications()
             .iter()
             .any(|(_, body)| body.contains("Reload failed"))
+    );
+}
+
+#[tokio::test]
+async fn reloading_a_dictionary_re_biases_recognition() {
+    // The half a reload used to miss. The correction pipeline reads the
+    // dictionary per utterance, so replacements took effect immediately; the
+    // recogniser's initial prompt is fixed when the worker starts, so bias
+    // terms did not — and bias is the lever the accuracy eval says matters.
+    let dir = std::env::temp_dir().join(format!("govox-rebias-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("scratch directory");
+    let dictionary = dir.join("dictionary.toml");
+    std::fs::write(
+        &dictionary,
+        "[dictionary]\nbias = [\"ultrafiltered milk\"]\n",
+    )
+    .expect("write dictionary");
+    let config_file = dir.join("config.toml");
+    std::fs::write(
+        &config_file,
+        format!(
+            "[correction]\ndictionary_path = \"{}\"\n",
+            dictionary.display()
+        ),
+    )
+    .expect("write config");
+
+    let mut h = harness("hello");
+    h.daemon.config_path = Some(config_file);
+
+    let outcome = h.daemon.reload();
+
+    assert!(outcome.ok, "{}", outcome.summary());
+    assert!(outcome.applied.contains(&"dictionary".to_owned()));
+    assert_eq!(
+        h.daemon.transcriber.bias.lock().unwrap().clone(),
+        Some(vec!["ultrafiltered milk".to_owned()]),
+        "the recogniser must be told, or the reload only half happened"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn a_failed_reload_is_announced_even_when_the_filesystem_asked() {
+    // Quietness is only ever about a reload that changed nothing. A broken file
+    // saved on disk is precisely when the user needs telling, and they are not
+    // looking at a terminal.
+    let mut h = harness("hello");
+    h.daemon.config_path = Some(std::path::PathBuf::from("/nonexistent/govox.toml"));
+
+    let outcome = h.daemon.reload_from(ReloadTrigger::FileChanged);
+
+    assert!(!outcome.ok);
+    assert!(
+        h.announcer
+            .notifications()
+            .iter()
+            .any(|(_, body)| body.contains("Reload failed"))
+    );
+}
+
+/// Reload once so the running state matches whatever this machine's files
+/// actually say, making a *second* reload a no-op by construction.
+///
+/// The harness starts from the embedded defaults, but a reload reads the real
+/// `~/.config/govox`. Asserting the two agree would make the test pass or fail
+/// on whether the developer running it happens to have a config file.
+fn settle(h: &mut Harness) {
+    let first = h.daemon.reload();
+    assert!(
+        first.ok,
+        "this machine's own config and dictionary must load: {}",
+        first.summary()
+    );
+}
+
+#[tokio::test]
+async fn a_save_that_changed_nothing_says_nothing() {
+    // The reload still happens — the files are re-read — but a save that moved
+    // a comment must not produce a notification, or the notification stops
+    // meaning anything.
+    let mut h = harness("hello");
+    settle(&mut h);
+    let notifications = h.announcer.notifications().len();
+    let captions = h.announcer.captions().len();
+
+    let outcome = h.daemon.reload_from(ReloadTrigger::FileChanged);
+
+    assert!(outcome.is_no_op(), "{}", outcome.summary());
+    assert_eq!(h.announcer.notifications().len(), notifications);
+    assert_eq!(h.announcer.captions().len(), captions);
+}
+
+#[tokio::test]
+async fn a_requested_reload_answers_even_when_nothing_changed() {
+    // The tray's counterpart: a menu item that appears to do nothing is worse
+    // than a redundant notification.
+    let mut h = harness("hello");
+    settle(&mut h);
+
+    let outcome = h.daemon.reload_from(ReloadTrigger::Requested);
+
+    assert!(outcome.is_no_op(), "{}", outcome.summary());
+    assert!(
+        h.announcer
+            .notifications()
+            .iter()
+            .any(|(_, body)| body.contains("nothing changed"))
     );
 }
 

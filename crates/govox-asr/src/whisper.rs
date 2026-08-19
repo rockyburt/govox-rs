@@ -21,6 +21,8 @@ use whisper_rs::{
     WhisperState,
 };
 
+use arc_swap::ArcSwap;
+
 use crate::model::{self, ModelError};
 use crate::text::{bias_prompt, postprocess_text, whisper_language};
 
@@ -149,6 +151,8 @@ enum Request {
 #[derive(Clone)]
 pub struct WhisperHandle {
     requests: mpsc::Sender<Request>,
+    prompt: Arc<ArcSwap<String>>,
+    budget: u32,
 }
 
 impl WhisperHandle {
@@ -182,6 +186,20 @@ impl WhisperHandle {
             .await
             .map_err(|_| AsrError::Stopped)?;
         answer.await.map_err(|_| AsrError::Stopped)?
+    }
+
+    /// Re-bias recognition on a new personal dictionary.
+    ///
+    /// Without this a dictionary reload updated the correction pipeline's
+    /// replacements and left the recogniser biased by the *old* word list until
+    /// the daemon restarted — and the accuracy eval says bias is the lever that
+    /// matters, term recall falling from 20/27 to 10/27 without it. So the
+    /// reload reported "dictionary" and the new word still came out wrong.
+    ///
+    /// Takes effect on the next decode; one already in flight keeps the prompt
+    /// it started with.
+    pub fn set_bias_terms(&self, terms: &[String]) {
+        self.prompt.store(Arc::new(bias_prompt(terms, self.budget)));
     }
 
     /// Load and warm the model so the first real utterance is not slow.
@@ -250,9 +268,13 @@ impl WhisperRecognizer {
         );
 
         let (tx, rx) = mpsc::channel(queue_depth.max(1));
+        let prompt = Arc::new(ArcSwap::from_pointee(bias_prompt(
+            &dictionary.bias_terms,
+            config.bias_prompt_token_budget,
+        )));
         let worker = Worker {
             config: config.clone(),
-            prompt: bias_prompt(&dictionary.bias_terms, config.bias_prompt_token_budget),
+            prompt: Arc::clone(&prompt),
             use_gpu,
             loaded: None,
         };
@@ -264,7 +286,14 @@ impl WhisperRecognizer {
             .map_err(|e| AsrError::Load(e.to_string()))?;
 
         Ok(Self {
-            handle: Some(WhisperHandle { requests: tx }),
+            handle: Some(WhisperHandle {
+                requests: tx,
+                prompt,
+                // Captured at startup because the budget itself is
+                // restart-only: `[recognition]` is not a reloadable section, so
+                // a running daemon never has a second answer for it.
+                budget: config.bias_prompt_token_budget,
+            }),
             thread: Some(thread),
         })
     }
@@ -297,10 +326,20 @@ impl Drop for WhisperRecognizer {
     }
 }
 
-/// The state that lives on the recognition thread and is never shared.
+/// The state that lives on the recognition thread.
+///
+/// Owned by that thread alone, with one exception: the bias prompt, which a
+/// dictionary reload has to be able to reach from outside.
 struct Worker {
     config: RecognitionConfig,
-    prompt: String,
+    /// The bias prompt, shared with every [`WhisperHandle`] so a dictionary
+    /// reload reaches the recogniser.
+    ///
+    /// Read per decode rather than held: the alternative is a `Request` on the
+    /// same queue as the audio, which would have to wait behind a decode in
+    /// flight — and the whole point is that the *next* utterance is biased by
+    /// the word you just added.
+    prompt: Arc<ArcSwap<String>>,
     use_gpu: bool,
     loaded: Option<Loaded>,
 }
@@ -418,8 +457,9 @@ impl Worker {
         // Load first and drop the mutable borrow, so the params (which borrow
         // the prompt) and the context can be held at the same time.
         self.ensure_loaded()?;
-        let params = Self::full_params_for(&self.config, &self.prompt);
-        // Disjoint field borrows: `params` holds `config` and `prompt`, this
+        let prompt = self.prompt.load_full();
+        let params = Self::full_params_for(&self.config, &prompt);
+        // Disjoint borrows: `params` holds `config` and the loaded prompt, this
         // holds `loaded`.
         let state = &mut self.loaded.as_mut().expect("ensure_loaded succeeded").state;
         state
@@ -459,7 +499,8 @@ impl Worker {
         let no_speech_threshold = self.config.advanced.no_speech_threshold;
 
         self.ensure_loaded()?;
-        let mut params = Self::full_params_for(&self.config, &self.prompt);
+        let prompt = self.prompt.load_full();
+        let mut params = Self::full_params_for(&self.config, &prompt);
         params.set_token_timestamps(true);
         params.set_max_len(1);
         params.set_split_on_word(true);
@@ -623,6 +664,47 @@ mod tests {
         finished
             .recv_timeout(std::time::Duration::from_secs(5))
             .expect("dropping the recognizer blocked; the Drop impl has regressed");
+    }
+
+    #[test]
+    fn re_biasing_reaches_the_prompt_the_next_decode_will_use() {
+        // The dictionary is loaded in two places — the correction pipeline's
+        // replacements and this prompt — and only the first used to be
+        // reloadable. A reload said "dictionary" while recognition stayed
+        // biased by the old word list until a restart.
+        let mut config = govox_core::config::Config::load_from(
+            None,
+            &govox_core::config::Environment::default(),
+        )
+        .expect("defaults are valid")
+        .recognition;
+        config.model = "tiny.en".to_owned();
+
+        let dictionary = PersonalDictionary {
+            bias_terms: vec!["Kubernetes".to_owned()],
+            replacements: Vec::new(),
+        };
+        let recognizer =
+            WhisperRecognizer::start(&config, &dictionary, 2).expect("starting needs no model");
+        let handle = recognizer.handle();
+        assert!(handle.prompt.load().contains("Kubernetes"));
+
+        handle.set_bias_terms(&["ultrafiltered milk".to_owned()]);
+
+        let prompt = handle.prompt.load();
+        assert!(prompt.contains("ultrafiltered milk"));
+        assert!(
+            !prompt.contains("Kubernetes"),
+            "a removed term must stop being biased, not accumulate"
+        );
+        assert_eq!(
+            **prompt,
+            bias_prompt(
+                &["ultrafiltered milk".to_owned()],
+                config.bias_prompt_token_budget
+            ),
+            "the reloaded prompt must be built exactly as the startup one is"
+        );
     }
 
     #[test]

@@ -99,7 +99,7 @@ fn run(cli: &Cli) -> Result<(), Error> {
     );
 
     match &cli.command {
-        Command::Run => dictate(config),
+        Command::Run => dictate(config, cli.config.clone()),
         Command::Doctor { machine } => doctor(&config, *machine),
         Command::Devices => devices(),
         Command::Keys => keys(),
@@ -164,7 +164,7 @@ fn doctor(config: &Config, machine: bool) -> Result<(), Error> {
 }
 
 /// Start the dictation pipeline and run until interrupted.
-fn dictate(config: Config) -> Result<(), Error> {
+fn dictate(config: Config, config_path: Option<std::path::PathBuf>) -> Result<(), Error> {
     let runtime = tokio::runtime::Runtime::new()
         .map_err(|e| Error::Runtime(format!("could not start the async runtime: {e}")))?;
 
@@ -175,7 +175,7 @@ fn dictate(config: Config) -> Result<(), Error> {
         // runtime drops it once `run` returns.
         tokio::spawn(cancel_on_signal(cancel.clone()));
 
-        govox_daemon::run(config, cancel)
+        govox_daemon::run(config, config_path, cancel)
             .await
             .map_err(|e| Error::Runtime(e.to_string()))
     })

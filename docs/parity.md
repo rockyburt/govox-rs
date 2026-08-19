@@ -1,5 +1,5 @@
 ---
-last_verified: 2026-08-17
+last_verified: 2026-08-19
 owner: rockyburt
 type: Decision Record
 covers:
@@ -7,9 +7,11 @@ covers:
   - crates/govox-core/src/editing/
   - crates/govox-core/src/domain.rs
   - crates/govox-asr/src/streaming.rs
+  - crates/govox-asr/src/whisper.rs
   - crates/govox-input/
   - crates/govox-ime/
   - crates/govox-daemon/src/daemon.rs
+  - crates/govox-daemon/src/watch.rs
   - bin/govox/src/reference.rs
 ---
 
@@ -74,6 +76,10 @@ a documented one is a decision.
 | Reload restricted to `[correction]` and `[logging]` | ported | Diffed through the serialized `toml::Table` rather than field by field. Hand-rolled comparisons are exactly where a new config key gets forgotten, and the failure is silent: the section stops being reported as changed and the user is told a restart is unnecessary when it is. A test asserts the section list has not drifted from `Config`. |
 | `[feedback] app_rules` exempt from "restart required" | ported | Consulted per session, so they are already live. Reporting them would tell the user to restart when the rule had already taken effect — a false alarm that teaches them to ignore the message. |
 | Personal dictionary load failure is fatal | ported | **Fixed a divergence introduced at M5**, where an unreadable dictionary only warned. It is text govox has been told to put in the user's documents: dictating without it is a silent wrong answer, not a missing feature. Unlike the optional layers (IBus, AT-SPI, tray), whose absence changes nothing about what gets typed. |
+| Config and dictionary edits reload themselves | **new** | The daemon watches both files and reloads on save; the tray's Reload item stays, for the case where you want to be told what happened. Three things make it work rather than merely appear to: the *parent directory* is watched, not the file, because an editor's atomic save replaces the inode and a file-level inotify watch would survive exactly one save and then observe an unlinked inode forever; events are debounced by 300 ms, since one save is a burst and each event alone would recompile the correction pipeline; and a file that does not exist yet is still watched, because the day you first write `~/.config/govox/dictionary.toml` is the day the watch has to already be looking. Failure to establish the watch is logged and startup continues — a degraded daemon, not a broken one. |
+| An automatic reload that changed nothing is silent | **new** | A *requested* reload always answers, including "nothing changed": a menu item that appears to do nothing is worse than a redundant notification. A *filesystem-triggered* one fires on every save, including a save that only moved a comment, so it reports only when something was applied, something needs a restart, or the file would not parse. Announcing no-ops would train the user to ignore the notification that tells them a restart is needed. |
+| `--config` is carried into the reload | **fixed** | The path reached `Config::load` at startup and was then dropped, so a reload — and now the watch — silently re-read the *default* location instead of the file the run was started from. A daemon started with `--config` reloaded someone else's configuration, and reported success doing it. |
+| Reloading the dictionary re-biases recognition | **fixed** | The dictionary is loaded in two places — the correction pipeline's replacements and whisper.cpp's initial prompt — and only the first was reloadable. A reload reported "dictionary" while recognition stayed biased by the *old* word list until a restart, which is the half that matters: the accuracy eval puts term recall at 20/27 with bias and 10/27 without. The prompt is now an `ArcSwap` read per decode rather than a `String` owned by the worker, so the swap needs no message on the audio queue and cannot wait behind a decode in flight. A decode already running keeps the prompt it started with. |
 
 ### Correction and editing
 
