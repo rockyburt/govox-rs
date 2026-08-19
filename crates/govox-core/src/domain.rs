@@ -313,7 +313,14 @@ impl PersonalDictionary {
     }
 }
 
-fn expand_user(path: &std::path::Path, home: Option<&std::path::Path>) -> std::path::PathBuf {
+/// Resolve a configured path, expanding a leading `~/` against `home`.
+///
+/// Public because the daemon has to watch the same file this resolves to. A
+/// watcher on the unexpanded `~/.config/govox/dictionary.toml` watches a
+/// directory that does not exist, and the failure is silent: no error, no
+/// events, edits simply never noticed.
+#[must_use]
+pub fn expand_user(path: &std::path::Path, home: Option<&std::path::Path>) -> std::path::PathBuf {
     let text = path.to_string_lossy();
     let Some(rest) = text.strip_prefix("~/") else {
         return path.to_path_buf();

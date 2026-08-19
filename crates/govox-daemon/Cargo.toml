@@ -28,6 +28,7 @@ govox-ime.workspace = true
 govox-a11y.workspace = true
 govox-ui.workspace = true
 anyhow.workspace = true
+notify.workspace = true
 arc-swap.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

@@ -65,8 +65,29 @@ before 1.0.0, minor versions may change behaviour.
 - **`stream_trace`**, which replays one clip through the streaming path and prints every
   window, every word the model returned with its timestamps, and what the agreement buffer
   did with it. An aggregate score says a word is missing; this says where it went.
+- **Saving `config.toml` or `dictionary.toml` reloads them.** Both files are watched, and a
+  save applies within about a third of a second — no tray click, no restart. Adding a word
+  to the personal dictionary is an edit-and-try loop, and a step between "save" and "try"
+  that lives in a menu is a step that gets forgotten: the next utterance came out unchanged
+  and the dictionary looked broken rather than merely unloaded.
+
+  The watch is on the parent *directory*, so an editor's atomic save — write a temporary
+  file, rename it into place — is noticed every time rather than only once, and a
+  dictionary written for the first time is noticed at all. A save that changed nothing says
+  nothing; the tray's Reload item still answers whatever the outcome. Which sections a
+  running daemon can adopt is unchanged: `[correction]`, `[logging]`, `[feedback]
+  app_rules` and the dictionary, with anything else reported as needing a restart.
 
 ### Fixed
+
+- **`--config` reached the reload.** The path was used at startup and then dropped, so
+  clicking Reload — and, now, saving the file — re-read the *default* configuration
+  location instead of the file the daemon was started from, and reported success doing it.
+- **Reloading the personal dictionary now re-biases recognition.** It was loaded in two
+  places and only one of them reloaded: replacements took effect at once, while whisper's
+  initial prompt kept the word list it was given at startup. So a reload said "Reloaded
+  dictionary." and the word you had just added still came out wrong — and bias is the half
+  that matters, with the eval scoring term recall 20/27 with it and 10/27 without.
 
 - **Streaming dictation no longer drops words out of the middle of a sentence.** "I need to
   stop at the store" was landing as "I need to at the store" — not a mangled word, a

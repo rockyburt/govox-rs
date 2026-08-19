@@ -38,6 +38,14 @@ pub trait Transcriber: Send + Sync {
         &self,
         audio: &govox_core::domain::AudioBuffer,
     ) -> impl std::future::Future<Output = Result<String, GovoxError>> + Send;
+
+    /// Adopt a reloaded personal dictionary's bias terms.
+    ///
+    /// Defaulted, in the house style for an optional capability: a recogniser
+    /// that cannot be re-biased ignores it rather than being asked whether it
+    /// can. Whisper's implementation swaps the initial prompt used by the next
+    /// decode.
+    fn set_bias_terms(&self, _terms: &[String]) {}
 }
 
 /// Where the daemon says things the user should see.
@@ -152,6 +160,22 @@ pub fn end_session(preedit: Option<&Arc<dyn PreeditSink>>, shared: &SharedState)
     };
     preedit.clear();
     preedit.deactivate();
+}
+
+/// What asked for a reload.
+///
+/// Not bookkeeping: it decides whether the outcome is announced. A reload the
+/// user requested from the tray always answers, including "nothing changed" —
+/// a menu item that appears to do nothing is worse than a redundant
+/// notification. A reload the filesystem triggered fires on every save, so a
+/// save with no effect says nothing at all, leaving the notification to mean
+/// what it should: something changed, or something needs a restart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReloadTrigger {
+    /// The tray's Reload item, or anything else a person clicked.
+    Requested,
+    /// A watched file changed on disk.
+    FileChanged,
 }
 
 /// Owns the pipeline state. Driven by exactly one task, so nothing is locked.
@@ -426,7 +450,19 @@ impl<T: Transcriber> Daemon<T> {
     /// one rather than killing a live session. What matters is that the failure
     /// is *loud*: captioned, notified and logged, never swallowed.
     pub fn reload(&mut self) -> ReloadOutcome {
+        self.reload_from(ReloadTrigger::Requested)
+    }
+
+    /// [`Self::reload`], told who asked.
+    ///
+    /// The reload itself is identical; only how loudly it reports differs. See
+    /// [`ReloadTrigger`].
+    pub fn reload_from(&mut self, trigger: ReloadTrigger) -> ReloadOutcome {
         let outcome = self.reload_inner();
+        if trigger == ReloadTrigger::FileChanged && outcome.is_no_op() {
+            tracing::debug!("configuration saved, nothing to apply");
+            return outcome;
+        }
         let summary = outcome.summary();
         if outcome.ok {
             tracing::info!("{summary}");
@@ -452,6 +488,12 @@ impl<T: Transcriber> Daemon<T> {
         let mut applied = Vec::new();
 
         if *self.shared.dictionary.load_full() != dictionary {
+            // Re-bias as well as re-publish. The correction pipeline reads the
+            // dictionary per utterance, but the recogniser's initial prompt is
+            // handed to whisper.cpp per decode, so nothing but this reaches it
+            // — and the reload would report "dictionary" while the new word
+            // kept coming out wrong.
+            self.transcriber.set_bias_terms(&dictionary.bias_terms);
             applied.push("dictionary".to_owned());
         }
         if previous.feedback.app_rules != config.feedback.app_rules {

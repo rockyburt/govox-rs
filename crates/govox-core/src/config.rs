@@ -794,6 +794,16 @@ impl Environment {
         Some(base.join("govox").join("config.toml"))
     }
 
+    /// `$HOME`, for expanding a leading `~/` in a configured path.
+    ///
+    /// Exposed rather than read from the process so that whoever resolves a
+    /// path resolves it against the same environment the config was loaded
+    /// from. Two answers to "where is the dictionary?" is one too many.
+    #[must_use]
+    pub fn home(&self) -> Option<PathBuf> {
+        self.vars.get("HOME").map(PathBuf::from)
+    }
+
     /// `GOVOX__SECTION__KEY=value` pairs, as a nested table.
     fn overrides(&self) -> Result<toml::Table, ConfigError> {
         let mut out = toml::Table::new();

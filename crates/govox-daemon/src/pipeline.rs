@@ -40,7 +40,7 @@ use govox_vad::{SileroVad, SpeechProbability};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use crate::daemon::{Announcer, Daemon, Transcriber};
+use crate::daemon::{Announcer, Daemon, ReloadTrigger, Transcriber};
 use crate::feedback::FeedbackChannel;
 use crate::state::SharedState;
 
@@ -63,6 +63,10 @@ pub enum PipelineError {
 struct WhisperTranscriber(WhisperHandle);
 
 impl Transcriber for WhisperTranscriber {
+    fn set_bias_terms(&self, terms: &[String]) {
+        self.0.set_bias_terms(terms);
+    }
+
     async fn transcribe(
         &self,
         audio: &govox_core::domain::AudioBuffer,
@@ -73,11 +77,28 @@ impl Transcriber for WhisperTranscriber {
 
 /// Run dictation until `cancel` fires.
 ///
+/// `config_path` is the `--config` file this run was started from, if any. It
+/// is carried rather than re-derived so a reload re-reads the same file the
+/// daemon started from, and so the watcher watches it.
+///
 /// # Errors
 /// If the dictionary will not load, no keyboard emits the activation key, or a
 /// subsystem fails to start.
-pub async fn run(config: Config, cancel: CancellationToken) -> Result<(), PipelineError> {
+pub async fn run(
+    config: Config,
+    config_path: Option<std::path::PathBuf>,
+    cancel: CancellationToken,
+) -> Result<(), PipelineError> {
     let dictionary = crate::load_dictionary(&config)?;
+
+    // Resolved here, while `config` is still owned by this function and before
+    // anything can swap it: these are the files *this* run was configured from,
+    // and the watch has to name them even when they do not exist yet.
+    let watched = crate::watch::watched_paths(
+        &config,
+        config_path.as_deref(),
+        &govox_core::config::Environment::from_process(),
+    );
 
     let mut controller = ActivationController::from_config(&config.activation);
     let keys = controller.active_keys().names().to_vec();
@@ -263,7 +284,11 @@ pub async fn run(config: Config, cancel: CancellationToken) -> Result<(), Pipeli
     // Reload is a *message*, not a direct call: the swap then happens on the
     // task that owns the daemon rather than on whichever thread the tray menu
     // was clicked from. That is what removes govox-py's cross-thread rebinding.
-    let (reloads_tx, reloads) = mpsc::unbounded_channel::<()>();
+    let (reloads_tx, reloads) = mpsc::unbounded_channel::<ReloadTrigger>();
+
+    // Held for the life of the run: dropping the watcher stops the watch, and a
+    // daemon that has stopped watching looks exactly like one that is.
+    let _config_watcher = crate::watch::spawn(&watched, reloads_tx.clone(), &cancel);
 
     if let Some(mut commands) = tray_commands {
         let events = events_tx.clone();
@@ -293,7 +318,7 @@ pub async fn run(config: Config, cancel: CancellationToken) -> Result<(), Pipeli
             text_model: Arc::clone(&text_model),
             announcer: Box::new(SharedAnnouncer(Arc::clone(&announcer))),
             preedit: preedit.clone(),
-            config_path: None,
+            config_path: config_path.clone(),
             listening: false,
         },
         utterances,
@@ -469,7 +494,7 @@ struct EventLoop<'a, A: Announcer> {
     /// Drives the overlay's level meter from capture amplitude.
     level: LevelSmoother,
     /// Asks the daemon to re-read its files.
-    reloads: mpsc::UnboundedSender<()>,
+    reloads: mpsc::UnboundedSender<ReloadTrigger>,
     /// The input method, when one registered.
     preedit: Option<Arc<dyn PreeditSink>>,
     /// What govox believes is in the focused field, for the context read at
@@ -725,7 +750,7 @@ impl<A: Announcer> EventLoop<'_, A> {
                 }
                 Event::Tray(command) => match command {
                     TrayCommand::Reload => {
-                        let _ = self.reloads.send(());
+                        let _ = self.reloads.send(ReloadTrigger::Requested);
                     }
                     TrayCommand::Quit => {
                         tracing::info!("quit requested from the tray");
@@ -975,7 +1000,7 @@ impl<A: Announcer> EventLoop<'_, A> {
 async fn consume<T: Transcriber>(
     mut daemon: Daemon<T>,
     mut utterances: mpsc::Receiver<Job>,
-    mut reloads: mpsc::UnboundedReceiver<()>,
+    mut reloads: mpsc::UnboundedReceiver<ReloadTrigger>,
     cancel: CancellationToken,
 ) {
     loop {
@@ -983,8 +1008,8 @@ async fn consume<T: Transcriber>(
             () = cancel.cancelled() => break,
             // Handled here rather than on the event loop so the swap happens on
             // the one task that owns the daemon, and never mid-utterance.
-            Some(()) = reloads.recv() => {
-                daemon.reload();
+            Some(trigger) = reloads.recv() => {
+                daemon.reload_from(trigger);
             }
             job = utterances.recv() => match job {
                 Some(Job::Utterance(utterance)) => {

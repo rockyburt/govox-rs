@@ -2,9 +2,10 @@
 //!
 //! The daemon holds the personal dictionary in more than one place — the
 //! recogniser's bias prompt and the correction pipeline's replacements — and
-//! every one of them is fixed at startup. Editing `dictionary.toml` therefore
+//! every one of them was fixed at startup. Editing `dictionary.toml` therefore
 //! meant `systemctl --user restart govox`, which reloads the Whisper model and
-//! drops the session.
+//! drops the session. Both are reachable now, and the daemon watches the files
+//! so a save is enough; see `govox-daemon`'s `watch` module.
 //!
 //! Only some configuration can change under a running daemon. The rest — the
 //! model, the audio device, the activation key, the input method — is wired
@@ -89,6 +90,17 @@ impl ReloadOutcome {
         let sections = self.needs_restart.join(", ");
         format!("Reloaded {applied}. Restart required for: {sections}.")
     }
+
+    /// Whether this reload left the running daemon exactly as it was.
+    ///
+    /// Only true when the files parsed *and* nothing changed *and* nothing
+    /// needs a restart — a save that touched a restart-only key is not a no-op,
+    /// it is the case where the user most needs to be told. Used to keep an
+    /// automatic reload silent; a requested one always answers.
+    #[must_use]
+    pub fn is_no_op(&self) -> bool {
+        self.ok && self.applied.is_empty() && self.needs_restart.is_empty()
+    }
 }
 
 /// Top-level sections whose contents differ, in declaration order.
@@ -167,6 +179,44 @@ mod tests {
             caret_offset_y: 0,
             follow_caret: None,
         }
+    }
+
+    #[test]
+    fn a_reload_that_applied_nothing_and_needs_nothing_is_a_no_op() {
+        assert!(
+            ReloadOutcome {
+                ok: true,
+                ..ReloadOutcome::default()
+            }
+            .is_no_op()
+        );
+    }
+
+    #[test]
+    fn a_reload_that_applied_something_is_not_a_no_op() {
+        let outcome = ReloadOutcome {
+            ok: true,
+            applied: vec!["dictionary".to_owned()],
+            ..ReloadOutcome::default()
+        };
+        assert!(!outcome.is_no_op());
+    }
+
+    #[test]
+    fn a_restart_only_edit_is_not_a_no_op() {
+        // Nothing was applied, but this is the case the user most needs told:
+        // they changed the model and the running daemon still has the old one.
+        let outcome = ReloadOutcome {
+            ok: true,
+            needs_restart: vec!["recognition".to_owned()],
+            ..ReloadOutcome::default()
+        };
+        assert!(!outcome.is_no_op());
+    }
+
+    #[test]
+    fn a_failed_reload_is_never_a_no_op() {
+        assert!(!ReloadOutcome::failed("bad toml").is_no_op());
     }
 
     #[test]
