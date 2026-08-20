@@ -6,6 +6,25 @@ before 1.0.0, minor versions may change behaviour.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`replace X with Y` now types Y as you said it.** Both slots were lower-cased on their
+  way through the command grammar, so "replace rentsync with RentSync" typed `rentsync` —
+  leaving the command unable to do the thing it is most often reached for, which is fixing
+  a name the recogniser got wrong.
+
+  The two slots are different in kind and are now treated that way. The phrase being
+  searched for stays folded, since it is a search key and the search was always
+  case-insensitive; the replacement keeps its capitals, because it is text going into your
+  document. Punctuation is still stripped from both, deliberately — the correction pipeline
+  may already have put a full stop on the end of the utterance, and preserving it would type
+  a sentence ending nobody spoke.
+
+  The corpus had agreed with this bug for 239,050 records: every recorded input to that
+  stage was already lower-case, so no replay could tell the defect from correct behaviour.
+  The generator now varies case across every tier 2 verb, on both sides of the command-mode
+  gate. **21 records added, none rewritten.**
+
 ### Added
 
 - **`kill` as a shorter way to say `delete`** in the motion grammar: `kill last character`,
