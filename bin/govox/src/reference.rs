@@ -14,7 +14,7 @@ use govox_core::correction::casing::{CASE_MARKERS, Mode, SWITCH_WORDS};
 use govox_core::correction::commands::{COMMANDS, MODE_COMMANDS};
 use govox_core::correction::emoji::SPOKEN_EMOJI;
 use govox_core::correction::grammar::{
-    DIRECTION_WORDS, EDGE_WORDS, SIMPLE_EDITS, UNIT_WORDS, VERB_OPS,
+    DIRECTION_WORDS, EDGE_WORDS, PRESS_KEYS, SIMPLE_EDITS, UNIT_WORDS, VERB_OPS,
 };
 use govox_core::correction::numbers::CURRENCY;
 use govox_core::correction::punctuation::{Attach, DETERMINERS, SPOKEN_PUNCTUATION};
@@ -103,6 +103,14 @@ pub fn render(config: &Config) -> String {
         bullet(&mut out, phrase, "");
     }
     bullet(&mut out, "... start over", "restarts a streaming session");
+
+    heading(&mut out, "Keys", "always on");
+    bullet(&mut out, "press [the] <key> [key]", "");
+    // Grouped so the several spellings of one key read as one row rather than
+    // as several keys that happen to look alike.
+    for (_, spellings) in grouped(PRESS_KEYS.iter().map(|(spoken, chord)| (*spoken, *chord))) {
+        bullet(&mut out, &format!("  {}", spellings.join(", ")), "");
+    }
 
     let mode = config.editing.command_mode;
     heading(

@@ -27,6 +27,25 @@ before 1.0.0, minor versions may change behaviour.
 
 ### Added
 
+- **`press <key>`**, for the keys dictation could not otherwise reach: `press enter`,
+  `press tab`, `press escape`, `press page down`, `press up arrow`, and the rest. `press
+  the enter` and `press enter key` work too. Modelled on macOS Voice Control's `Press
+  <key>`, which is the feature govox most obviously lacked.
+
+  The key names are a **vetted table**, and that is the design rather than a detail.
+  `ydotool key` accepts a name it cannot parse, exits 0 and presses nothing, so a grammar
+  that passed spoken words through would fail silently. Every row resolves to a chord
+  `keycodes::parse_chord` is known to accept, and a test asserts that for the whole table —
+  an unreachable key fails the build instead of failing at your caret.
+
+  This makes a bare verb safe in tier 1, so it needs no command mode: `press the button`
+  names no key from the table and is dictated as text. It is also the one editing command
+  that reads no field and needs no text model, so unlike `delete previous sentence` it works
+  in a terminal and an Electron app.
+
+  Keys `KEYCODES` cannot reach — function keys, space, letters beyond the few the editing
+  chords use, and any modifier combination — are deliberately absent rather than guessed at.
+
 - **`let's type` and `let's command`**, with their un-apostrophed and singular spellings:
   `lets type` / `let type`, `lets command` / `let command`. All six are listed because
   normalisation replaces an apostrophe with a *space* rather than deleting it — "let's type"

@@ -90,6 +90,44 @@ pub const SIMPLE_EDITS: &[(&str, EditOp)] = &[
     ("capitalize that", EditOp::CapitalizeLast),
 ];
 
+/// Spoken key name → the chord name `keycodes::parse_chord` understands.
+///
+/// **Vetted, and that is the whole design.** `ydotool key` accepts a name,
+/// exits 0, and presses nothing, so a grammar that passed spoken words through
+/// would fail silently — the failure mode this project spends most of its
+/// comments on. Every value here is a name present in `keycodes::KEYCODES`,
+/// which is what makes the resulting chord translatable; a test asserts that
+/// for every row, so adding one that is not translatable fails the build rather
+/// than pressing nothing at runtime.
+///
+/// Left column is what a person says, right column is what the injector gets,
+/// so several spellings can share a key. Keys the table cannot reach — letters
+/// beyond the handful the editing chords use, function keys, space — are absent
+/// on purpose: `KEYCODES` does not carry them, and inventing codes that cannot
+/// be verified on this hardware is how a silent no-op gets shipped.
+pub const PRESS_KEYS: &[(&str, &str)] = &[
+    ("enter", "enter"),
+    ("return", "enter"),
+    ("tab", "tab"),
+    ("escape", "esc"),
+    ("esc", "esc"),
+    ("backspace", "backspace"),
+    ("delete", "delete"),
+    ("insert", "insert"),
+    ("home", "home"),
+    ("end", "end"),
+    ("page up", "pageup"),
+    ("page down", "pagedown"),
+    ("up", "up"),
+    ("down", "down"),
+    ("left", "left"),
+    ("right", "right"),
+    ("up arrow", "up"),
+    ("down arrow", "down"),
+    ("left arrow", "left"),
+    ("right arrow", "right"),
+];
+
 /// Longest first, so "characters" is tried before "character".
 ///
 /// Alternation is ordered and relying on backtracking here is fragile. Python's
@@ -120,6 +158,18 @@ static UNIT_MOTION_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     );
     Regex::new(&format!(r"^{verb} {direction}(?: {number})? {unit}$"))
         .expect("unit-motion pattern compiles")
+});
+
+/// `press <key>`, where `<key>` must be a name from [`PRESS_KEYS`].
+///
+/// Table-constrained, which is what makes a bare verb safe in tier 1: "press
+/// the button" names no key and matches nothing, so it dictates as text.
+static PRESS_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    let key = format!(
+        r"(?P<key>{})",
+        alternation(PRESS_KEYS.iter().map(|(spoken, _)| *spoken))
+    );
+    Regex::new(&format!(r"^press (?:the )?{key}(?: key)?$")).expect("press pattern compiles")
 });
 
 static MOVE_EDGE_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
@@ -232,6 +282,20 @@ pub fn match_edit(normalized: &str) -> Option<EditAction> {
         return Some(EditAction::simple(op));
     }
 
+    if let Some(caps) = PRESS_PATTERN.captures(normalized) {
+        let spoken = caps.name("key").expect("key group").as_str();
+        return Some(EditAction {
+            op: EditOp::PressKey,
+            unit: None,
+            direction: None,
+            count: 1,
+            // Resolved here rather than at compile time, so the only string
+            // that can reach the injector came out of the vetted table.
+            phrase: Some(lookup(PRESS_KEYS, spoken)?.to_owned()),
+            replacement: None,
+        });
+    }
+
     if let Some(caps) = UNIT_MOTION_PATTERN.captures(normalized) {
         let count = parse_count(caps.name("count").map(|m| m.as_str()));
         if count < 1 {
@@ -267,6 +331,71 @@ pub fn match_edit(normalized: &str) -> Option<EditAction> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_spoken_key_resolves_to_a_translatable_chord() {
+        // The point of the vetted table. `ydotool key` would accept an
+        // untranslatable name, exit 0 and press nothing, so a row whose chord
+        // is not in `KEYCODES` must fail here rather than at someone's caret.
+        for (spoken, chord) in PRESS_KEYS {
+            assert!(
+                crate::keycodes::parse_chord(chord).is_ok(),
+                "{spoken} → {chord:?} is not a translatable chord"
+            );
+        }
+    }
+
+    #[test]
+    fn press_accepts_the_ways_a_key_gets_named() {
+        for phrase in [
+            "press enter",
+            "press the enter",
+            "press enter key",
+            "press return",
+        ] {
+            let edit = phrase_edit(phrase);
+            assert_eq!(edit.op, EditOp::PressKey, "{phrase}");
+            assert_eq!(edit.phrase.as_deref(), Some("enter"), "{phrase}");
+        }
+    }
+
+    #[test]
+    fn spellings_collapse_onto_one_chord() {
+        for (spoken, expected) in [
+            ("press escape", "esc"),
+            ("press esc", "esc"),
+            ("press page down", "pagedown"),
+            ("press down arrow", "down"),
+            ("press down", "down"),
+            ("press tab", "tab"),
+        ] {
+            assert_eq!(
+                phrase_edit(spoken).phrase.as_deref(),
+                Some(expected),
+                "{spoken}"
+            );
+        }
+    }
+
+    #[test]
+    fn press_needs_a_key_from_the_table() {
+        // Tier 1 is always on, so an unvetted target must dictate as text
+        // rather than reach an API that fails silently.
+        for phrase in [
+            "press",
+            "press the button",
+            "press on",
+            "press f1",
+            "press space",
+            "press command s",
+        ] {
+            assert_eq!(match_edit(phrase), None, "{phrase} must dictate as text");
+        }
+    }
+
+    fn phrase_edit(phrase: &str) -> EditAction {
+        match_edit(phrase).unwrap_or_else(|| panic!("{phrase} must parse"))
+    }
 
     #[test]
     fn kill_is_delete_for_every_unit_the_grammar_knows() {

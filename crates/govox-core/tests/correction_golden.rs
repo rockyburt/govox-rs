@@ -99,6 +99,7 @@ fn op_name(edit: &EditAction) -> &'static str {
         O::SelectUnit => "select_unit",
         O::MoveUnit => "move_unit",
         O::MoveToEdge => "move_to_edge",
+        O::PressKey => "press_key",
         O::UppercaseLast => "uppercase_last",
         O::LowercaseLast => "lowercase_last",
         O::CapitalizeLast => "capitalize_last",
@@ -378,6 +379,7 @@ fn edit_from(value: &Value) -> EditAction {
         "select_unit" => O::SelectUnit,
         "move_unit" => O::MoveUnit,
         "move_to_edge" => O::MoveToEdge,
+        "press_key" => O::PressKey,
         "uppercase_last" => O::UppercaseLast,
         "lowercase_last" => O::LowercaseLast,
         "capitalize_last" => O::CapitalizeLast,
@@ -714,6 +716,27 @@ fn table_driven_records() -> Vec<(&'static str, Value)> {
                 }
                 out.push(("apply_rules", args));
             }
+        }
+    }
+
+    // Every spoken key name, through the grammar and through the front door.
+    // The table is the security boundary for a silent-failure API, so every row
+    // of it should be recorded rather than sampled.
+    for (spoken, _) in grammar::PRESS_KEYS {
+        for text in [
+            format!("press {spoken}"),
+            format!("press the {spoken}"),
+            format!("press {spoken} key"),
+        ] {
+            out.push(("match_edit", json!({ "normalized": text })));
+            out.push((
+                "detect_command",
+                json!({
+                    "text": text,
+                    "mode_switching": false,
+                    "command_mode": false,
+                }),
+            ));
         }
     }
 

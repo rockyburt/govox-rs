@@ -91,6 +91,14 @@ pub enum EditOp {
     UppercaseLast,
     LowercaseLast,
     CapitalizeLast,
+    /// "press enter", "press escape": one key, named by the speaker.
+    ///
+    /// The key travels in `phrase` as an already-resolved *chord name* rather
+    /// than in a slot of its own, so the recorded shape of an `EditAction` is
+    /// unchanged and the golden corpus keeps its ~239k records. The grammar
+    /// only ever puts a name from its own table there, so what reaches the
+    /// injector is a string `keycodes::parse_chord` is known to accept.
+    PressKey,
     /// Tier 2: targets named by their content rather than by structure. These
     /// take a free-form slot, so they only ever fire in command mode — "delete
     /// the old file" is a sentence, not an instruction.

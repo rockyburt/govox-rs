@@ -281,6 +281,7 @@ pub fn compile_edit(action: &EditAction, model: &dyn TextModel) -> EditPlan {
     match action.op {
         EditOp::DeleteLast => return compile_delete_last(model),
         EditOp::SelectLast => return compile_select_last(model),
+        EditOp::PressKey => return compile_press_key(action),
         _ => {}
     }
 
@@ -440,6 +441,19 @@ fn compile_move_to_edge(action: &EditAction) -> EditPlan {
 /// call reports success on GTK4 and then produces no selection at all, and
 /// writing through the accessibility bus is not something this codebase does
 /// anyway — Chromium accepts reads and silently drops writes.
+/// One key press, from a chord the grammar already resolved.
+///
+/// Needs no text model and reads no field: pressing a key is the same act
+/// wherever the caret is, which is what makes this the one editing command that
+/// works in a terminal and an Electron app as readily as in a GTK entry.
+fn compile_press_key(action: &EditAction) -> EditPlan {
+    match action.phrase.as_deref().filter(|c| !c.is_empty()) {
+        Some(chord) => EditPlan::keys(vec![chord.to_owned()]),
+        // Unreachable through the grammar, which fills the slot from its table.
+        None => EditPlan::refuse("no key named to press"),
+    }
+}
+
 fn compile_phrase_edit(action: &EditAction, model: &dyn TextModel) -> EditPlan {
     let Some(phrase) = action.phrase.as_deref().filter(|p| !p.is_empty()) else {
         return EditPlan::refuse("that command needs something to find");
