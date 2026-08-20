@@ -92,6 +92,9 @@ pub fn render(config: &Config) -> String {
     bullet(&mut out, "  direction", &words(DIRECTION_WORDS));
     bullet(&mut out, "  unit", &words(UNIT_WORDS));
     bullet(&mut out, "  for example", "\"delete previous three words\"");
+    // The short forms are the point of the `kill` verb; a listing that only
+    // ever shows the long one hides the reason it exists.
+    bullet(&mut out, "  or, shorter", "\"kill last word\"");
     bullet(&mut out, "move to <edge> of [the] <unit>", "");
     bullet(&mut out, "  edge", &words(EDGE_WORDS));
 

@@ -6,6 +6,24 @@ before 1.0.0, minor versions may change behaviour.
 
 ## [Unreleased]
 
+### Added
+
+- **`kill` as a shorter way to say `delete`** in the motion grammar: `kill last character`,
+  `kill last word`, `kill last sentence`, and `kill last three words`. `last` was already a
+  direction word, so these parse on the existing `<verb> <direction> [count] <unit>` rule —
+  the change is one table entry, not a new pattern.
+
+  The reason is how long the phrase takes to say. Deleting the previous word is the most
+  frequent edit there is, and "delete previous word" is six syllables against "kill last
+  word"'s three. `delete` is unchanged and both spellings work everywhere.
+
+  These are **tier 1**, so they work in ordinary dictation without command mode. That is
+  what makes a bare verb worth being careful about: `kill` matches only with a direction
+  *and* a unit, so "kill the process" is dictated as text, and it is deliberately absent
+  from the free-form `delete <phrase>` patterns, which stay gated behind command mode.
+
+  All 239,050 golden records replayed unchanged — no existing input reaches the new verb.
+
 ## [0.2.0] — 2026-08-19
 
 The release that put numbers on itself. 0.1.0 shipped a working pipeline and said, in as

@@ -43,8 +43,18 @@ pub const DIRECTION_WORDS: &[(&str, Direction)] = &[
 /// "extend selection" is deliberately the same op as "select": shift+motion
 /// *extends* an existing selection natively, so the chords are identical. It
 /// exists as a phrase because it is what people say.
+///
+/// "kill" is the same op as "delete", and exists for the length of the spoken
+/// phrase rather than for the meaning. "delete previous word" is six syllables
+/// for the most frequent edit there is; "kill last word" is three. Both stay,
+/// since neither costs anything and people reach for different words under
+/// frustration. It is safe as a bare verb because tier 1 requires a direction
+/// *and* a unit — "kill the process" matches nothing here, and tier 2's
+/// free-form patterns take `delete` and `select` but not `kill`, so no sentence
+/// beginning with it can be swallowed as a command.
 pub const VERB_OPS: &[(&str, EditOp)] = &[
     ("delete", EditOp::DeleteUnit),
+    ("kill", EditOp::DeleteUnit),
     ("select", EditOp::SelectUnit),
     ("extend selection", EditOp::SelectUnit),
     ("move", EditOp::MoveUnit),
@@ -238,4 +248,60 @@ pub fn match_edit(normalized: &str) -> Option<EditAction> {
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn kill_is_delete_for_every_unit_the_grammar_knows() {
+        for (phrase, unit) in [
+            ("kill last character", Unit::Character),
+            ("kill last word", Unit::Word),
+            ("kill last sentence", Unit::Sentence),
+        ] {
+            let edit = match_edit(phrase).unwrap_or_else(|| panic!("{phrase} must parse"));
+            assert_eq!(edit.op, EditOp::DeleteUnit, "{phrase}");
+            assert_eq!(edit.unit, Some(unit), "{phrase}");
+            assert_eq!(edit.direction, Some(Direction::Previous), "{phrase}");
+            assert_eq!(edit.count, 1, "{phrase}");
+        }
+    }
+
+    #[test]
+    fn kill_and_delete_produce_the_identical_intent() {
+        // The whole point of the alias: shorter to say, same op. If these ever
+        // diverge, one of them compiles to keystrokes the other does not.
+        for (short, long) in [
+            ("kill last word", "delete previous word"),
+            ("kill last three words", "delete previous three words"),
+            ("kill next sentence", "delete next sentence"),
+        ] {
+            assert_eq!(match_edit(short), match_edit(long), "{short} vs {long}");
+        }
+    }
+
+    #[test]
+    fn kill_needs_a_direction_and_a_unit_so_ordinary_speech_is_left_alone() {
+        // Tier 1 is always on — it does not wait for command mode — so a bare
+        // verb must not be able to swallow a sentence. None of these name both
+        // a direction and a unit.
+        for phrase in [
+            "kill",
+            "kill it",
+            "kill the process",
+            "kill last",
+            "kill the last word i said",
+        ] {
+            assert_eq!(match_edit(phrase), None, "{phrase} must dictate as text");
+        }
+    }
+
+    #[test]
+    fn kill_is_not_a_phrase_verb() {
+        // Tier 2 takes `delete <phrase>` and `select <phrase>`; `kill` is
+        // deliberately absent, so it cannot delete a free-form target.
+        assert_eq!(match_phrase_edit("kill the old draft"), None);
+    }
 }
