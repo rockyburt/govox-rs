@@ -29,10 +29,22 @@ pub const MODE_COMMANDS: &[(&str, bool)] = &[
     ("command mode", true),
     ("start command mode", true),
     ("start commands", true),
+    ("lets command", true),
+    ("let s command", true),
+    ("let command", true),
     ("dictation mode", false),
     ("dictate", false),
     ("text mode", false),
     ("type mode", false),
+    // "let's type" arrives here as "let s type": normalisation replaces the
+    // apostrophe with a space rather than deleting it, so the contraction
+    // splits into two tokens. All three spellings are listed because which one
+    // the recogniser produces is not ours to decide — it may or may not punctuate
+    // the contraction, and a phrase that works only when whisper felt like
+    // adding an apostrophe is worse than no phrase at all.
+    ("lets type", false),
+    ("let s type", false),
+    ("let type", false),
     ("stop command mode", false),
     ("exit command mode", false),
     ("stop commands", false),
@@ -200,6 +212,28 @@ mod tests {
                 PipelineAction::Mode {
                     command_mode: false
                 },
+                "{phrase}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_contraction_is_matched_however_it_was_punctuated() {
+        // The apostrophe becomes a space, not nothing, so "let's type" and
+        // "lets type" reach the table as different strings. Both must land.
+        for phrase in ["let's type", "lets type", "let type", "Let's type."] {
+            assert_eq!(
+                detect_command(phrase, true, true),
+                PipelineAction::Mode {
+                    command_mode: false
+                },
+                "{phrase}"
+            );
+        }
+        for phrase in ["let's command", "lets command", "let command"] {
+            assert_eq!(
+                detect_command(phrase, true, false),
+                PipelineAction::Mode { command_mode: true },
                 "{phrase}"
             );
         }

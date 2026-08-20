@@ -27,6 +27,13 @@ before 1.0.0, minor versions may change behaviour.
 
 ### Added
 
+- **`let's type` and `let's command`**, with their un-apostrophed and singular spellings:
+  `lets type` / `let type`, `lets command` / `let command`. All six are listed because
+  normalisation replaces an apostrophe with a *space* rather than deleting it — "let's type"
+  reaches the table as `let s type` — and whether the recogniser punctuates a contraction is
+  not ours to decide. A phrase that only works when whisper felt like adding an apostrophe
+  is worse than no phrase.
+
 - **Shorter ways to leave command mode**: `dictate`, `text mode` and `type mode`, alongside
   the existing `dictation mode`, `stop command mode`, `exit command mode` and `stop
   commands`. Leaving is the phrase worth shortening, because it is what you say to get back
