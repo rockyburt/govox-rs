@@ -1,10 +1,13 @@
 //! Bakes the *build's* version in, not just the manifest's.
 //!
-//! `CARGO_PKG_VERSION` is `0.1.0` for every build made since the 0.1.0 tag,
-//! which at the time of writing is fourteen commits and seven user-visible
-//! changes ago. The About menu and `--version` exist to answer "what am I
-//! actually running?", and a string that cannot distinguish the release from a
-//! `develop` build fourteen commits later fails at exactly that.
+//! `CARGO_PKG_VERSION` is the same string for every build made since the last
+//! release tag, however many commits and user-visible changes ago that was. The
+//! About menu and `--version` exist to answer "what am I actually running?",
+//! and a string that cannot distinguish the release from a `develop` build
+//! fourteen commits later fails at exactly that.
+//!
+//! The examples below use `0.1.0` as the tagged version; the mechanism does not
+//! depend on which release it is.
 //!
 //! The answer is the manifest version with the commit attached as **semver
 //! build metadata**:
@@ -27,8 +30,8 @@
 //!
 //! Build metadata after `+` is ignored for precedence, so `0.1.0+14.a18ad6e`
 //! ranks equal to `0.1.0` rather than below it. Equal is not perfect, but it is
-//! the honest answer while the manifest still says 0.1.0, and it is not wrong
-//! in the way the alternative is.
+//! the honest answer while the manifest still says the tagged version, and it
+//! is not wrong in the way the alternative is.
 //!
 //! ## Composed, not parsed
 //!

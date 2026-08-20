@@ -6,6 +6,54 @@ before 1.0.0, minor versions may change behaviour.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`replace X with Y` now types Y as you said it.** Both slots were lower-cased on their
+  way through the command grammar, so "replace rentsync with RentSync" typed `rentsync` —
+  leaving the command unable to do the thing it is most often reached for, which is fixing
+  a name the recogniser got wrong.
+
+  The two slots are different in kind and are now treated that way. The phrase being
+  searched for stays folded, since it is a search key and the search was always
+  case-insensitive; the replacement keeps its capitals, because it is text going into your
+  document. Punctuation is still stripped from both, deliberately — the correction pipeline
+  may already have put a full stop on the end of the utterance, and preserving it would type
+  a sentence ending nobody spoke.
+
+  The corpus had agreed with this bug for 239,050 records: every recorded input to that
+  stage was already lower-case, so no replay could tell the defect from correct behaviour.
+  The generator now varies case across every tier 2 verb, on both sides of the command-mode
+  gate. **21 records added, none rewritten.**
+
+### Added
+
+- **`kill` as a shorter way to say `delete`** in the motion grammar: `kill last character`,
+  `kill last word`, `kill last sentence`, and `kill last three words`. `last` was already a
+  direction word, so these parse on the existing `<verb> <direction> [count] <unit>` rule —
+  the change is one table entry, not a new pattern.
+
+  The reason is how long the phrase takes to say. Deleting the previous word is the most
+  frequent edit there is, and "delete previous word" is six syllables against "kill last
+  word"'s three. `delete` is unchanged and both spellings work everywhere.
+
+  These are **tier 1**, so they work in ordinary dictation without command mode. That is
+  what makes a bare verb worth being careful about: `kill` matches only with a direction
+  *and* a unit, so "kill the process" is dictated as text, and it is deliberately absent
+  from the free-form `delete <phrase>` patterns, which stay gated behind command mode.
+
+  All 239,050 golden records replayed unchanged — no existing input reaches the new verb.
+
+## [0.2.0] — 2026-08-19
+
+The release that put numbers on itself. 0.1.0 shipped a working pipeline and said, in as
+many words, that its accuracy was not measured. This one measures it — and the measurement
+immediately found that every accuracy figure the project had published described a code
+path the daemon does not take. Closing that gap is most of what is below.
+
+The rest is the edit-and-try loop: saving a config or dictionary file now applies it, the
+tray reports what is actually in effect rather than what was configured, and `govox
+commands` lists every phrase govox understands.
+
 ### Added
 
 - **An About submenu in the tray** — version, licence, model, backend and GPU index,
@@ -265,6 +313,28 @@ before 1.0.0, minor versions may change behaviour.
 - **A failed decode reports as `RecognitionFailed`**, not `InjectionRejected`. Model faults
   used to be logged as injection faults, sending a reader to the wrong subsystem.
 
+### Known limitations
+
+- **Streaming still trails a whole-utterance decode**, though no longer by much: corrected
+  WER 0.089 against 0.082 on the same 29 clips under `small`. It was 0.247 against 0.124
+  when first measured. The remaining gap is a LocalAgreement question and is open.
+- **Tested on one desktop only** — GNOME on Wayland, Ubuntu 26.04, one pair of GPUs.
+  Other desktops, X11 sessions and distributions are unexplored rather than known-broken.
+  `docs/reference/environments.md` records exactly what has and has not been run.
+- **Whisper hallucinates on silence**, answering with stock phrases such as
+  `www.github.com`. There are guards at both ends of a session plus a content check, but a
+  new variant may still slip through.
+- **`ydotool` is required** for the non-IBus path, which means its daemon running with
+  access to `/dev/uinput`.
+- **The GPU backend is a compile-time choice.** Vulkan is the default; CUDA and CPU-only
+  are separate builds, and neither has been exercised. `device = "cuda"` on a CPU build is
+  a startup error naming the fix, never a silent fallback.
+- **Streaming preview cadence is bounded by decode time**, so a large model makes the live
+  text arrive in larger, less frequent jumps.
+- **The accuracy corpus is personal.** Its 29 clips are transcriptions that failed on this
+  machine, in one voice and one accent, and the recordings stay out of git. The scores are
+  a regression signal for changes to this pipeline, not a claim about whisper in general.
+
 ## [0.1.0] — 2026-08-14
 
 First release. govox dictates into any application on a Wayland desktop: press a key,
@@ -325,5 +395,6 @@ Reproduce with `tools/build-release.sh`.
 Whisper models are **not** bundled; the first run downloads the configured model from
 Hugging Face, so it needs network and several GB of disk once.
 
-[Unreleased]: https://github.com/rockyburt/govox-rs/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/rockyburt/govox-rs/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/rockyburt/govox-rs/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/rockyburt/govox-rs/releases/tag/v0.1.0

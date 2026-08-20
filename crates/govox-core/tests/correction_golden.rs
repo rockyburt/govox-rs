@@ -231,6 +231,9 @@ fn evaluate(stage: &str, args: &Value) -> Option<Value> {
             Some(edit) => edit_json(&edit),
             None => Value::Null,
         },
+        // The `normalized` key predates the split between the folded and the
+        // case-preserving normalisations, and is kept so ~2.5k records stay
+        // byte-identical. What it now carries is the case-preserving form.
         "match_phrase_edit" => match grammar::match_phrase_edit(&text(args, "normalized")) {
             Some(edit) => edit_json(&edit),
             None => Value::Null,
@@ -711,6 +714,38 @@ fn table_driven_records() -> Vec<(&'static str, Value)> {
                 }
                 out.push(("apply_rules", args));
             }
+        }
+    }
+
+    // The tier 2 slots against case, which the corpus had no record of: every
+    // `match_phrase_edit` input in it was already folded, so nothing had ever
+    // asked what happens to a capital. That is what let the replacement slot be
+    // lower-cased for as long as it was — the command could not fix a name, and
+    // 239k records agreed it was fine. `phrase` must fold (it is a search key)
+    // while `replacement` must not (it is typed into the document), and only a
+    // cased input can tell the two apart.
+    for text in [
+        "replace rocky with Rocky",
+        "replace rentsync with RentSync",
+        "Replace the old file with the New File",
+        "replace the old file with the new file",
+        "Delete The Old Draft",
+        "Select The Heading",
+        "move before The Table",
+        "move after The Table",
+    ] {
+        out.push(("match_phrase_edit", json!({ "normalized": text })));
+        for command_mode in [true, false] {
+            // Through the front door as well: tier 2 is gated, and the gate is
+            // what decides whether the cased form is ever reached.
+            out.push((
+                "detect_command",
+                json!({
+                    "text": text,
+                    "mode_switching": false,
+                    "command_mode": command_mode,
+                }),
+            ));
         }
     }
 
