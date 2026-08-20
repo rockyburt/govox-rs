@@ -181,6 +181,15 @@ pub fn apply_number_formatting(text: &str) -> String {
 
     while index < words.len() {
         let start = index;
+        // "numeral seven" is how you ask for 7 where Rule 2 below would keep
+        // the word. It only counts immediately before a number, so "roman
+        // numeral" and a lone "numeral" are ordinary words.
+        let forced = strip(words[index]).to_lowercase() == "numeral"
+            && index + 1 < words.len()
+            && is_number_token(&strip(words[index + 1]).to_lowercase());
+        if forced {
+            index += 1;
+        }
         let mut run: Vec<String> = Vec::new();
         while index < words.len() {
             let token = strip(words[index]).to_lowercase();
@@ -236,7 +245,7 @@ pub fn apply_number_formatting(text: &str) -> String {
 
         // Rule 2: a bare small number only converts next to a unit, so "one
         // idea" stays words while "one dollar" becomes "$1".
-        if !multi_word && !unit_follows && value < 100 {
+        if !multi_word && !unit_follows && value < 100 && !forced {
             out.extend(words[start..index].iter().map(|w| (*w).to_owned()));
             continue;
         }
@@ -280,4 +289,34 @@ pub fn attach_units_to_digits(text: &str) -> String {
             None => format!("{number}%"),
         }
     })
+}
+
+#[cfg(test)]
+mod numeral_tests {
+    use super::apply_number_formatting as f;
+
+    #[test]
+    fn numeral_forces_a_bare_small_number_to_digits() {
+        assert_eq!(f("numeral seven"), "7");
+        assert_eq!(f("i want numeral three"), "i want 3");
+        assert_eq!(f("numeral one idea"), "1 idea");
+    }
+
+    #[test]
+    fn without_it_rule_two_still_keeps_the_word() {
+        assert_eq!(f("i have one idea"), "i have one idea");
+    }
+
+    #[test]
+    fn numeral_is_an_ordinary_word_away_from_a_number() {
+        assert_eq!(f("roman numeral"), "roman numeral");
+        assert_eq!(f("the numeral"), "the numeral");
+        assert_eq!(f("numeral please"), "numeral please");
+    }
+
+    #[test]
+    fn numbers_that_already_converted_are_unaffected() {
+        assert_eq!(f("twenty five"), "25");
+        assert_eq!(f("numeral twenty five"), "25");
+    }
 }

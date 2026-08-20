@@ -105,6 +105,11 @@ pub const SPOKEN_PUNCTUATION: &[(&str, &str, Attach)] = &[
     ("asterisk", "*", Attach::Spaced),
     ("tilde", "~", Attach::Spaced),
     ("underscore", "_", Attach::Tight),
+    // "no space" is a mark whose mark is nothing. `Tight` already means "close
+    // up on both sides", so joining two words is what an empty tight mark does
+    // — no new stage, no new state, and it inherits the determiner suppression
+    // that stops "the no space rule" from being eaten.
+    ("no space", "", Attach::Tight),
     // "forward slash" must precede "slash": alternation is ordered, and the
     // bare phrase would otherwise match first and leave "forward" behind as a
     // prefix word. "backslash" needs no such care — `\b` cannot split a word.
@@ -336,5 +341,17 @@ mod tests {
     #[test]
     fn the_plural_of_dot_is_not_a_mark() {
         assert_eq!(punct("connect the dots"), "connect the dots");
+    }
+
+    #[test]
+    fn no_space_joins_the_words_on_either_side() {
+        // A mark whose mark is nothing: `Tight` supplies the behaviour.
+        assert_eq!(punct("hello no space world"), "helloworld");
+        assert_eq!(punct("camel no space case no space name"), "camelcasename");
+    }
+
+    #[test]
+    fn no_space_after_a_determiner_is_prose() {
+        assert_eq!(punct("the no space rule"), "the no space rule");
     }
 }

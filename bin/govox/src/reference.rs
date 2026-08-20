@@ -219,6 +219,7 @@ pub fn render(config: &Config) -> String {
         "  a lone number needs a unit",
         "\"I have one idea\" is left alone",
     );
+    bullet(&mut out, "numeral seven", "7   overrides that rule");
 
     out
 }
@@ -258,8 +259,15 @@ mod tests {
     fn a_setting_that_is_off_says_how_to_turn_it_on() {
         let out = render(&defaults());
         assert!(out.contains("[correction] spoken_emoji = true"));
-        assert!(out.contains("[correction] case_control = true"));
+        assert!(out.contains("[correction] number_formatting = true"));
         assert!(out.contains("[editing] command_mode = true"));
+
+        // `case_control` was the third example here until it became a default;
+        // an off-by-default setting is what this test needs, so it moved rather
+        // than being dropped.
+        let mut off = defaults();
+        off.correction.case_control = false;
+        assert!(render(&off).contains("[correction] case_control = true"));
     }
 
     #[test]

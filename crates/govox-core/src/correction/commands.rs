@@ -9,8 +9,14 @@ use regex::Regex;
 use super::grammar::{match_edit, match_phrase_edit};
 use crate::domain::PipelineAction;
 
-pub const COMMANDS: &[(&str, &str)] =
-    &[("new line", "newline"), ("new paragraph", "new_paragraph")];
+pub const COMMANDS: &[(&str, &str)] = &[
+    ("new line", "newline"),
+    ("new paragraph", "new_paragraph"),
+    // A command rather than the text " ", so it reaches a terminal the same way
+    // "new line" does: the injector presses the key instead of typing a
+    // character the clipboard path would have to carry.
+    ("space bar", "space"),
+];
 
 /// Phrases that switch mode rather than producing text.
 ///
@@ -202,6 +208,14 @@ mod tests {
                 "{text}"
             );
         }
+    }
+
+    #[test]
+    fn space_bar_is_a_command_not_text() {
+        assert_eq!(
+            detect_command("space bar", false, false),
+            PipelineAction::Command("space".to_owned())
+        );
     }
 
     #[test]

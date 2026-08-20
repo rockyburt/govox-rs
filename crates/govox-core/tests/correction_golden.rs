@@ -740,6 +740,28 @@ fn table_driven_records() -> Vec<(&'static str, Value)> {
         }
     }
 
+    // Formatting commands through the front door. "space bar" joined them and
+    // nothing had been recording that COMMANDS reaches `detect_command` at all.
+    for (phrase, _) in commands::COMMANDS {
+        out.push((
+            "detect_command",
+            json!({
+                "text": phrase,
+                "mode_switching": false,
+                "command_mode": false,
+            }),
+        ));
+    }
+
+    // "numeral <n>" against every number word, since it exists to override the
+    // bare-small-number rule and that rule is keyed on the value.
+    for (word, _) in numbers::NUMBER_WORDS {
+        out.push((
+            "apply_number_formatting",
+            json!({ "text": format!("numeral {word}") }),
+        ));
+    }
+
     // Every mode phrase, at both settings of the switch that enables them. A
     // mode phrase is matched in either mode, so adding one silently takes that
     // phrase away from ordinary dictation — the corpus should say so.

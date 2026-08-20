@@ -78,6 +78,7 @@ fn action_text(action: &InsertionAction) -> &str {
         InsertionAction::Text(text) => text,
         InsertionAction::Command(name) if name == "newline" => "\n",
         InsertionAction::Command(name) if name == "new_paragraph" => "\n\n",
+        InsertionAction::Command(name) if name == "space" => " ",
         _ => "",
     }
 }

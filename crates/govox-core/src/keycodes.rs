@@ -43,6 +43,7 @@ const KEYCODES: &[(&str, u16)] = &[
     ("c", 46),
     ("v", 47),
     ("alt", 56),
+    ("space", 57),
     ("home", 102),
     ("up", 103),
     ("pageup", 104),

@@ -206,7 +206,7 @@ pub struct CorrectionConfig {
     pub spoken_emoji: bool,
     #[serde(default)]
     pub number_formatting: bool,
-    #[serde(default)]
+    #[serde(default = "crate::config::default_true")]
     pub case_control: bool,
 }
 
@@ -943,6 +943,29 @@ mod tests {
         assert_eq!(config.recognition.advanced.log_prob_threshold, -1.0);
         assert_eq!(config.recognition.advanced.no_speech_threshold, 0.6);
         assert!(!config.recognition.advanced.condition_on_previous_text);
+    }
+
+    /// `correction.case_control` is on `RUST_ONLY_KEYS`, so the config golden
+    /// strips it before writing and cannot pin its default. This is the guard.
+    #[test]
+    fn case_control_is_on_by_default_in_both_places() {
+        let dir = scratch("case-control-default");
+        let config = Config::load_from(None, &env_with_config_home(&dir)).unwrap();
+        // From the shipped default.toml…
+        assert!(config.correction.case_control);
+
+        // …and still on when a user file edits the section without mentioning
+        // it, which is how most people will meet this setting.
+        let dir = scratch("case-control-user");
+        std::fs::create_dir_all(dir.join("govox")).unwrap();
+        std::fs::write(
+            dir.join("govox/config.toml"),
+            "[correction]\nspoken_emoji = true\n",
+        )
+        .unwrap();
+        let config = Config::load_from(None, &env_with_config_home(&dir)).unwrap();
+        assert!(config.correction.case_control);
+        assert!(config.correction.spoken_emoji);
     }
 
     #[test]

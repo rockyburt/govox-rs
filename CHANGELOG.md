@@ -25,7 +25,32 @@ before 1.0.0, minor versions may change behaviour.
   The generator now varies case across every tier 2 verb, on both sides of the command-mode
   gate. **21 records added, none rewritten.**
 
+### Changed
+
+- **`[correction] case_control` is now on by default.** Spoken case — "all caps hello",
+  `caps`, `no caps`, and the on/off span — used to be opt-in because "caps" is an ordinary
+  English word and a marker firing inside prose does not merely fail, it eats the word after
+  it. The risk has not changed; the judgement has. Dictating a name, an acronym or a
+  constant with no way to say "capital" is a daily annoyance, while saying "caps" alone
+  mid-sentence is rare. Set `false` for the old behaviour.
+
+  Note this default is **not** pinned by `corpus/config-defaults.json`: `case_control` is on
+  that snapshot's `RUST_ONLY_KEYS` allowlist and is stripped before writing, so the golden
+  config could not have caught the change. A unit test guards it instead.
+
 ### Added
+
+- **`space bar`**, `no space` and **`numeral <n>`**, closing the last of the gaps against
+  macOS's own dictation vocabulary.
+
+  `space bar` types a space, as a *command* rather than as the text `" "`, so it reaches a
+  terminal the way `new line` does. `no space` joins the words on either side — "camel no
+  space case" → `camelcase`. `numeral seven` gives `7`, overriding the rule that a bare
+  small number stays a word, so "I have one idea" is still prose while "numeral one" is `1`.
+
+  `no space` cost no new machinery: it is a punctuation mark whose mark is the empty string,
+  and `Attach::Tight` already means "close up on both sides". It inherits the determiner
+  suppression too, so "the no space rule" is left as prose.
 
 - **`press <key>`**, for the keys dictation could not otherwise reach: `press enter`,
   `press tab`, `press escape`, `press page down`, `press up arrow`, and the rest. `press

@@ -13,6 +13,7 @@ fn command_chords(name: &str) -> Option<&'static [&'static str]> {
     match name {
         "newline" => Some(&["enter"]),
         "new_paragraph" => Some(&["enter", "enter"]),
+        "space" => Some(&["space"]),
         _ => None,
     }
 }
