@@ -71,6 +71,14 @@ impl KeyEvent {
 pub enum Transition {
     StartListening,
     StopListening,
+    /// Stop, and throw away what this session has not committed.
+    ///
+    /// Distinct from [`StopListening`](Self::StopListening) because the two
+    /// answer different questions. Stopping is "I am finished, take what I
+    /// said"; aborting is "this should not be happening", which is what the
+    /// stop key is reached for. Committing on an abort is the one outcome that
+    /// cannot be undone by pressing it again.
+    Abort,
 }
 
 impl Transition {
@@ -79,7 +87,7 @@ impl Transition {
     pub const fn state(self) -> &'static str {
         match self {
             Self::StartListening => "listening",
-            Self::StopListening => "idle",
+            Self::StopListening | Self::Abort => "idle",
         }
     }
 }
@@ -255,6 +263,14 @@ impl ActivationController {
         }
     }
 
+    /// End a running session and discard it, from outside the key path.
+    ///
+    /// The IBus engine consumes its own Escape, so that stop never reaches
+    /// `handle_event_at`; this is the same transition by another door.
+    pub fn abort(&mut self) -> Option<Transition> {
+        self.stop()
+    }
+
     /// End a running session, or report nothing if none is running.
     fn stop(&mut self) -> Option<Transition> {
         if !self.listening {
@@ -262,7 +278,7 @@ impl ActivationController {
         }
         self.listening = false;
         self.toggle_active = false;
-        Some(Transition::StopListening)
+        Some(Transition::Abort)
     }
 
     fn track_modifier(&mut self, event: &KeyEvent) {
@@ -407,10 +423,7 @@ mod tests {
     fn a_double_tapped_stop_key_ends_a_session() {
         let mut c = listening_double_tap();
         assert_eq!(c.handle_event_at(&down(STOP), 1.0), None, "first tap");
-        assert_eq!(
-            c.handle_event_at(&down(STOP), 1.2),
-            Some(Transition::StopListening)
-        );
+        assert_eq!(c.handle_event_at(&down(STOP), 1.2), Some(Transition::Abort));
         assert!(!c.listening());
     }
 
@@ -466,7 +479,7 @@ mod tests {
             assert_eq!(c.handle_event_at(&down(STOP), 1.0), None, "{mode:?}");
             assert_eq!(
                 c.handle_event_at(&down(STOP), 1.2),
-                Some(Transition::StopListening),
+                Some(Transition::Abort),
                 "{mode:?}"
             );
         }
@@ -487,6 +500,23 @@ mod tests {
         let c = stopping(ActivationMode::DoubleTap);
         assert_eq!(c.active_keys().names(), [TOGGLE], "activation is unchanged");
         assert_eq!(c.watched_keys(), vec![TOGGLE.to_owned(), STOP.to_owned()]);
+    }
+
+    #[test]
+    fn abort_from_outside_the_key_path_ends_the_session() {
+        // The IBus engine consumes its own Escape, so that stop never reaches
+        // `handle_event_at`.
+        let mut c = listening_double_tap();
+        assert_eq!(c.abort(), Some(Transition::Abort));
+        assert!(!c.listening());
+        // And is a no-op the second time, so a duplicate cannot stop the next
+        // session before it starts.
+        assert_eq!(c.abort(), None);
+    }
+
+    #[test]
+    fn abort_reports_idle_like_any_stop() {
+        assert_eq!(Transition::Abort.state(), Transition::StopListening.state());
     }
 
     #[test]

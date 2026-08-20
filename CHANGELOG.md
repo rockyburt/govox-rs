@@ -42,6 +42,15 @@ before 1.0.0, minor versions may change behaviour.
   keys through us. It works in all three activation modes, does nothing when idle, and a key
   pressed between the taps breaks them — "Esc x Esc" in vim is not a request to stop.
 
+  **The stop key discards.** Whatever the session has not already committed is thrown away
+  rather than typed: the streaming hypothesis, the buffered audio, the preedit. That is the
+  difference between it and every other way of stopping — the tray, the overlay's button and
+  the activation key all mean "I am done, take what I said", while this one is reached for
+  when dictation should not be happening at all. A stop that commits first is not an escape
+  hatch; it is the outcome you were trying to avoid, and pressing it again cannot undo it.
+  Utterances dispatched earlier in the same session have already been typed and are not
+  recalled.
+
   This makes `process_key_event` conditional where it was unconditionally inert. It still
   never logs, counts by key, or retains anything: the added comparison is against one
   constant, records nothing, and every other key returns on the line it always did.

@@ -301,7 +301,7 @@ pub async fn run(
         tokio::spawn(async move {
             while stop_rx.recv().await.is_some() {
                 if stops
-                    .send(Event::StopRequested("escape in a preedit field"))
+                    .send(Event::AbortRequested("escape in a preedit field"))
                     .await
                     .is_err()
                 {
@@ -516,6 +516,11 @@ enum Event {
     /// button and an Escape the IBus engine consumed — and "nothing happened"
     /// is only diagnosable if the log says which one asked.
     StopRequested(&'static str),
+    /// Stop *and discard*, from the stop key the IBus engine consumed.
+    ///
+    /// Separate from `StopRequested` because the overlay's stop button means
+    /// "I am done", while the stop key means "this should not be happening".
+    AbortRequested(&'static str),
 }
 
 struct EventLoop<'a, A: Announcer> {
@@ -782,6 +787,18 @@ impl<A: Announcer> EventLoop<'_, A> {
             match event {
                 Event::Key(key) => self.on_key(&key).await,
                 Event::Frame(frame) => self.on_frame(&frame).await,
+                Event::AbortRequested(reason) => {
+                    tracing::debug!(
+                        listening = self.controller.listening(),
+                        reason,
+                        "abort asked"
+                    );
+                    if let Some(transition) = self.controller.abort() {
+                        tracing::info!(reason, "aborting the session");
+                        self.announcer.set_state(transition.state());
+                        self.abort_session().await;
+                    }
+                }
                 Event::StopRequested(reason) => {
                     // Logged on arrival as well as on effect: a request while
                     // idle is a no-op, and "nothing happened" otherwise cannot
@@ -879,6 +896,9 @@ impl<A: Announcer> EventLoop<'_, A> {
             // out the hangover, which is what `flush` is for.
             Transition::StopListening => {
                 self.stop_session().await;
+            }
+            Transition::Abort => {
+                self.abort_session().await;
             }
         }
     }
@@ -1013,6 +1033,42 @@ impl<A: Announcer> EventLoop<'_, A> {
     fn set_ime_session(&self, active: bool) {
         if let Some(state) = &self.ime_state {
             state.set_session_active(active);
+        }
+    }
+
+    /// Stop, and throw away what has not been committed.
+    ///
+    /// The difference from [`stop_session`](Self::stop_session) is the whole
+    /// point of the stop key: it is reached for when dictation should not be
+    /// happening, and a stop that commits first is not an escape hatch — it is
+    /// the outcome you were trying to avoid, and the one press cannot undo.
+    ///
+    /// Only the *uncommitted* session is discarded. Utterances dispatched
+    /// earlier in the session have already been typed, and nothing here can
+    /// unring that; ending is still sequenced behind them so the input method
+    /// is not torn down from under a commit in flight.
+    async fn abort_session(&mut self) {
+        self.set_ime_session(false);
+        self.last_anchor = None;
+        self.last_compact = None;
+        self.app_rule = None;
+
+        // Never `finish`: that decodes the tail and commits it. Reset drops the
+        // audio and the hypothesis together.
+        self.streaming_active = false;
+        if let Some(processor) = self.streaming.as_mut() {
+            processor.reset();
+        }
+        // The segmenter's buffer goes the same way — flushed to empty it, and
+        // the utterance dropped rather than dispatched.
+        let _ = self.segmenter.flush();
+        self.session_text.clear();
+
+        tracing::info!("session aborted; nothing uncommitted was typed");
+
+        if self.utterances.try_send(Job::EndSession).is_err() {
+            tracing::warn!("recognition is backlogged; ending the aborted session directly");
+            crate::daemon::end_session(self.preedit.as_ref(), &self.shared);
         }
     }
 

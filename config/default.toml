@@ -151,7 +151,13 @@ queue_size = 8
 #     the same window as `double_tap_ms`, and the stray single one is left alone.
 #
 # The double tap therefore always works; the single one is a nicety where the
-# desktop routes keys through us. Set to "" to disable, or to any key from
+# desktop routes keys through us.
+#
+# It DISCARDS. Whatever the session has not already committed — the streaming
+# hypothesis, the buffered audio, the preedit — is thrown away rather than
+# typed. Every other way of stopping means "I am done, take what I said"; this
+# one is for when dictation should not be happening, and a stop that commits
+# first is the outcome you were trying to avoid. Set to "" to disable, or to any key from
 # `govox keys` — but prefer one you do not need mid-sentence, since outside
 # preedit the presses reach your application either way.
 stop_key = "KEY_ESC"
