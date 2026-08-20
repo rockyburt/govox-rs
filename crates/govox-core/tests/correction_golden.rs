@@ -717,6 +717,22 @@ fn table_driven_records() -> Vec<(&'static str, Value)> {
         }
     }
 
+    // Every mode phrase, at both settings of the switch that enables them. A
+    // mode phrase is matched in either mode, so adding one silently takes that
+    // phrase away from ordinary dictation — the corpus should say so.
+    for (phrase, _) in commands::MODE_COMMANDS {
+        for mode_switching in [true, false] {
+            out.push((
+                "detect_command",
+                json!({
+                    "text": phrase,
+                    "mode_switching": mode_switching,
+                    "command_mode": false,
+                }),
+            ));
+        }
+    }
+
     // The tier 2 slots against case, which the corpus had no record of: every
     // `match_phrase_edit` input in it was already folded, so nothing had ever
     // asked what happens to a capital. That is what let the replacement slot be

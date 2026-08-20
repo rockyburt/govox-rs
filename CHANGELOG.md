@@ -27,6 +27,16 @@ before 1.0.0, minor versions may change behaviour.
 
 ### Added
 
+- **Shorter ways to leave command mode**: `dictate`, `text mode` and `type mode`, alongside
+  the existing `dictation mode`, `stop command mode`, `exit command mode` and `stop
+  commands`. Leaving is the phrase worth shortening, because it is what you say to get back
+  to writing.
+
+  A mode phrase is matched in **either** mode, so adding one costs the ability to dictate
+  that phrase as text ever again. That is why the aliases are what they are: "done" and
+  "stop" are ordinary things to say on their own and were rejected for it. Whole-utterance
+  still applies — "I will dictate" is text.
+
 - **`kill` as a shorter way to say `delete`** in the motion grammar: `kill last character`,
   `kill last word`, `kill last sentence`, and `kill last three words`. `last` was already a
   direction word, so these parse on the existing `<verb> <direction> [count] <unit>` rule —

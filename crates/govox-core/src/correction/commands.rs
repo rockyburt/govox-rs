@@ -17,11 +17,22 @@ pub const COMMANDS: &[(&str, &str)] =
 /// Several spellings per direction because this is the one command a user
 /// reaches for when govox is *already* misbehaving, and having to remember the
 /// exact wording then is a bad joke.
+/// The short spellings on the dictation side are aliases, not replacements:
+/// leaving command mode is the thing you want said in as few syllables as
+/// possible, because it is what you reach for to get back to writing.
+///
+/// A mode phrase is matched in **both** modes, so adding one costs the ability
+/// to ever dictate that phrase as text. That is what rules out "done" and
+/// "stop", which are ordinary things to say alone; "dictate", "text mode" and
+/// "type mode" are not.
 pub const MODE_COMMANDS: &[(&str, bool)] = &[
     ("command mode", true),
     ("start command mode", true),
     ("start commands", true),
     ("dictation mode", false),
+    ("dictate", false),
+    ("text mode", false),
+    ("type mode", false),
     ("stop command mode", false),
     ("exit command mode", false),
     ("stop commands", false),
@@ -177,6 +188,51 @@ mod tests {
                 replacement_for(text).as_deref(),
                 Some("the new file"),
                 "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_short_aliases_return_to_dictation() {
+        for phrase in ["dictate", "text mode", "type mode", "dictation mode"] {
+            assert_eq!(
+                detect_command(phrase, true, true),
+                PipelineAction::Mode {
+                    command_mode: false
+                },
+                "{phrase}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_alias_is_heard_from_dictation_mode_too() {
+        // Mode phrases are looked up regardless of which mode is current, which
+        // is the reason the alias had to be a phrase nobody dictates as text.
+        assert_eq!(
+            detect_command("dictate", true, false),
+            PipelineAction::Mode {
+                command_mode: false
+            }
+        );
+    }
+
+    #[test]
+    fn an_alias_is_inert_with_mode_switching_off() {
+        // `[editing] command_mode = false` must leave no dormant phrase.
+        assert!(matches!(
+            detect_command("dictate", false, false),
+            PipelineAction::Text(_)
+        ));
+    }
+
+    #[test]
+    fn only_the_bare_alias_switches_mode() {
+        // Whole-utterance, so an alias inside a sentence is still just words.
+        for phrase in ["dictate this", "i will dictate", "text mode is nice"] {
+            assert!(
+                matches!(detect_command(phrase, true, false), PipelineAction::Text(_)),
+                "{phrase}"
             );
         }
     }
