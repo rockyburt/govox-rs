@@ -46,6 +46,12 @@ fn purpose_name(purpose: u32) -> String {
     .to_owned()
 }
 
+/// `IBUS_KEY_Escape`, from `ibuskeysyms.h`. The X11 keysym, not a keycode.
+const IBUS_KEY_ESCAPE: u32 = 0xff1b;
+
+/// `IBUS_RELEASE_MASK`, bit 30 of the modifier state: this event is a release.
+const IBUS_RELEASE_MASK: u32 = 1 << 30;
+
 /// Everything the focused client has told us about its field.
 ///
 /// Each entry describes **one** field and none is re-reported by a client that
@@ -73,6 +79,14 @@ struct Inner {
     caret_logged: bool,
     surrounding_logged: bool,
     content_types_seen: HashSet<(u32, u32)>,
+    /// Whether a dictation session is running, as the daemon last said.
+    ///
+    /// The engine consults this and nothing else before consuming a key: with
+    /// no session there is nothing to stop, so Escape must reach the
+    /// application untouched.
+    session_active: bool,
+    /// Told when the engine consumed a stop key.
+    stop_tx: Option<tokio::sync::mpsc::UnboundedSender<()>>,
 }
 
 impl FieldState {
@@ -85,6 +99,38 @@ impl FieldState {
     #[must_use]
     pub fn active(&self) -> Option<OwnedObjectPath> {
         self.lock().active.clone()
+    }
+
+    /// Where to report a consumed stop key, and the session state that decides
+    /// whether one can be consumed at all.
+    pub fn set_stop_channel(&self, tx: tokio::sync::mpsc::UnboundedSender<()>) {
+        self.lock().stop_tx = Some(tx);
+    }
+
+    /// The daemon telling us a session started or ended.
+    pub fn set_session_active(&self, active: bool) {
+        self.lock().session_active = active;
+    }
+
+    /// Consume this key as a stop, or decline it.
+    ///
+    /// Returns whether the key was consumed, which is what
+    /// [`Engine::process_key_event`] hands back to IBus. Consuming is the whole
+    /// point: it is the only path on which govox can stop a key reaching the
+    /// application, which is what makes a *single* Escape safe here when the
+    /// evdev path needs two.
+    fn take_stop(&self, is_escape: bool) -> bool {
+        let inner = self.lock();
+        if !is_escape || !inner.session_active {
+            return false;
+        }
+        match &inner.stop_tx {
+            // Only consume if the request can actually be delivered. Swallowing
+            // the key and then failing to stop would leave dictation running
+            // *and* eat the Escape — the worst of both.
+            Some(tx) => tx.send(()).is_ok(),
+            None => false,
+        }
     }
 
     /// What kind of field has focus, by name.
@@ -191,15 +237,30 @@ pub struct Engine {
 
 #[zbus::interface(name = "org.freedesktop.IBus.Engine")]
 impl Engine {
-    /// Pass every key straight through to the application.
+    /// Pass every key straight through, except a single Escape that ends a
+    /// running session.
     ///
     /// An active input method sees every keystroke in the focused field. That
     /// is inherent to being one, and it is a surface govox does not otherwise
-    /// have — so this returns immediately and **never logs, counts by key, or
-    /// retains anything**. Do not add telemetry here; whatever the question is,
-    /// this is not the place to answer it.
-    fn process_key_event(&self, _keyval: u32, _keycode: u32, _state: u32) -> bool {
-        false
+    /// have — so this **never logs, counts by key, or retains anything**. Do
+    /// not add telemetry here; whatever the question is, this is not the place
+    /// to answer it. The one comparison below is against a single constant, it
+    /// records nothing about the key, and every other key returns on the same
+    /// line it always did.
+    ///
+    /// Why this is the exception: consuming is the only way to stop a key
+    /// reaching the application, which is what lets a *single* Escape end
+    /// dictation here — the evdev path cannot swallow, so it needs a double
+    /// tap. The cost is that Escape behaves differently between an IBus-routed
+    /// field and one that ignores IBus; that is documented rather than hidden,
+    /// because the alternative is a stop key that sometimes leaks through.
+    fn process_key_event(&self, keyval: u32, _keycode: u32, state: u32) -> bool {
+        // Presses only. A release carries IBUS_RELEASE_MASK, and consuming it
+        // as well would send a second stop for one keypress.
+        if state & IBUS_RELEASE_MASK != 0 {
+            return false;
+        }
+        self.state.take_stop(keyval == IBUS_KEY_ESCAPE)
     }
 
     /// The client telling us where the caret is, in screen coordinates.
@@ -400,5 +461,52 @@ mod tests {
         assert_eq!(caret, 0);
         assert!(!visible);
         assert_eq!(mode, PreeditFocusMode::CLEAR.as_u32());
+    }
+
+    #[test]
+    fn escape_is_consumed_only_while_a_session_runs() {
+        let state = FieldState::new();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        state.set_stop_channel(tx);
+
+        // Idle: the application must get its Escape.
+        assert!(!state.take_stop(true));
+        assert!(rx.try_recv().is_err());
+
+        state.set_session_active(true);
+        assert!(state.take_stop(true), "consumed while listening");
+        assert!(rx.try_recv().is_ok(), "and the stop was delivered");
+
+        state.set_session_active(false);
+        assert!(!state.take_stop(true));
+    }
+
+    #[test]
+    fn every_other_key_passes_through() {
+        let state = FieldState::new();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        state.set_stop_channel(tx);
+        state.set_session_active(true);
+        assert!(!state.take_stop(false));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn nothing_is_consumed_without_somewhere_to_report_it() {
+        // Swallowing the key and then failing to stop would leave dictation
+        // running and eat the Escape — the worst of both.
+        let state = FieldState::new();
+        state.set_session_active(true);
+        assert!(!state.take_stop(true));
+    }
+
+    #[test]
+    fn a_dropped_receiver_stops_consuming() {
+        let state = FieldState::new();
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        state.set_stop_channel(tx);
+        state.set_session_active(true);
+        drop(rx);
+        assert!(!state.take_stop(true));
     }
 }

@@ -40,6 +40,7 @@ pub mod engine;
 pub mod session;
 pub mod variant;
 
+pub use engine::FieldState;
 pub use session::{BUS_NAME, IbusSession};
 
 /// Why an IBus engine could not be used.

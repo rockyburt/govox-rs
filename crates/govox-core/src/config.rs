@@ -225,10 +225,22 @@ pub struct ActivationConfig {
     pub queue_size: u32,
     #[serde(default = "default_double_tap_ms")]
     pub double_tap_ms: u32,
+    /// Ends a session without starting one, double-tapped.
+    ///
+    /// Double-tapped for the same reason the toggle is: govox observes evdev
+    /// without grabbing it, so a single Escape here would end dictation *and*
+    /// still reach the focused app. Requiring two makes the stray one harmless.
+    /// Empty disables it.
+    #[serde(default = "default_stop_key")]
+    pub stop_key: ActivationKeys,
 }
 
 fn default_double_tap_ms() -> u32 {
     400
+}
+
+fn default_stop_key() -> ActivationKeys {
+    ActivationKeys::from(vec!["KEY_ESC".to_owned()])
 }
 
 /// One activation key, or several that mean the same thing.
@@ -966,6 +978,37 @@ mod tests {
         let config = Config::load_from(None, &env_with_config_home(&dir)).unwrap();
         assert!(config.correction.case_control);
         assert!(config.correction.spoken_emoji);
+    }
+
+    /// Also on `RUST_ONLY_KEYS`, so the config golden strips it and cannot pin
+    /// this default either. See `case_control_is_on_by_default_in_both_places`.
+    #[test]
+    fn the_stop_key_defaults_to_escape() {
+        let dir = scratch("stop-key-default");
+        let config = Config::load_from(None, &env_with_config_home(&dir)).unwrap();
+        assert_eq!(config.activation.stop_key.names(), ["KEY_ESC"]);
+
+        // And a user file that sets other activation keys keeps it.
+        let dir = scratch("stop-key-user");
+        std::fs::create_dir_all(dir.join("govox")).unwrap();
+        std::fs::write(
+            dir.join("govox/config.toml"),
+            "[activation]\ntoggle_key = \"KEY_SCROLLLOCK\"\n",
+        )
+        .unwrap();
+        let config = Config::load_from(None, &env_with_config_home(&dir)).unwrap();
+        assert_eq!(config.activation.stop_key.names(), ["KEY_ESC"]);
+
+        // Empty disables it, rather than being rejected.
+        let dir = scratch("stop-key-off");
+        std::fs::create_dir_all(dir.join("govox")).unwrap();
+        std::fs::write(
+            dir.join("govox/config.toml"),
+            "[activation]\nstop_key = []\n",
+        )
+        .unwrap();
+        let config = Config::load_from(None, &env_with_config_home(&dir)).unwrap();
+        assert!(config.activation.stop_key.is_empty());
     }
 
     #[test]

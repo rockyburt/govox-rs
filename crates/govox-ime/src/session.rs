@@ -72,6 +72,16 @@ pub struct IbusSession {
 }
 
 impl IbusSession {
+    /// The shared field state, for wiring the stop key.
+    ///
+    /// Exposed so the daemon can hand the engine a channel and keep it told
+    /// whether a session is running — the two things it needs before it may
+    /// consume an Escape. See `Engine::process_key_event`.
+    #[must_use]
+    pub fn state(&self) -> Arc<FieldState> {
+        Arc::clone(&self.state)
+    }
+
     /// Register the component, export the factory, and start serving.
     ///
     /// The ordering is load-bearing and is the second trap `govox-py`

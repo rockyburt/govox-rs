@@ -93,6 +93,9 @@ pub struct ActivationController {
     pub mode: ActivationMode,
     pub push_to_talk_key: ActivationKeys,
     pub toggle_key: ActivationKeys,
+    /// Ends a session, double-tapped, in every mode.
+    pub stop_key: ActivationKeys,
+    last_stop_tap_ts: Option<f64>,
     pub double_tap_s: f64,
     listening: bool,
     toggle_active: bool,
@@ -120,7 +123,16 @@ impl ActivationController {
             toggle_active: false,
             held_modifiers: BTreeSet::new(),
             last_tap_ts: None,
+            stop_key: ActivationKeys::from(Vec::new()),
+            last_stop_tap_ts: None,
         }
+    }
+
+    /// The stop key, which is off unless one is set.
+    #[must_use]
+    pub fn with_stop_key(mut self, stop_key: impl Into<ActivationKeys>) -> Self {
+        self.stop_key = stop_key.into();
+        self
     }
 
     #[must_use]
@@ -131,6 +143,7 @@ impl ActivationController {
             config.toggle_key.clone(),
             f64::from(config.double_tap_ms) / 1000.0,
         )
+        .with_stop_key(config.stop_key.clone())
     }
 
     /// The keys this controller acts on, given its mode.
@@ -145,6 +158,24 @@ impl ActivationController {
             ActivationMode::PushToTalk => &self.push_to_talk_key,
             _ => &self.toggle_key,
         }
+    }
+
+    /// Every key worth opening a keyboard for: the mode's, plus the stop key.
+    ///
+    /// Separate from [`active_keys`](Self::active_keys), which stays the
+    /// *activation* key alone. Startup fails when no keyboard can emit that
+    /// one, and folding Escape in would make almost any keyboard satisfy the
+    /// check — Escape is on all of them, which is exactly why it is a good stop
+    /// key and a bad thing to prove a keyboard by.
+    #[must_use]
+    pub fn watched_keys(&self) -> Vec<String> {
+        let mut keys = self.active_keys().names().to_vec();
+        for key in self.stop_key.names() {
+            if !keys.contains(key) {
+                keys.push(key.clone());
+            }
+        }
+        keys
     }
 
     #[must_use]
@@ -176,11 +207,62 @@ impl ActivationController {
     /// Required for double-tap; equivalent to [`handle_event`](Self::handle_event)
     /// in the other two modes.
     pub fn handle_event_at(&mut self, event: &KeyEvent, now_s: f64) -> Option<Transition> {
+        // Before the mode's own handling, and in every mode: stopping is not a
+        // toggle, and a stop key that only worked in one mode would be a
+        // footgun rather than an escape hatch.
+        if let Some(stop) = self.handle_stop(event, now_s) {
+            return Some(stop);
+        }
         if self.mode != ActivationMode::DoubleTap {
             return self.handle_event(event);
         }
         self.track_modifier(event);
         self.handle_double_tap(event, now_s)
+    }
+
+    /// Double-tapped stop key, in any mode.
+    ///
+    /// Only ends a session that is running: with nothing to stop there is
+    /// nothing to do, and staying silent keeps a double-tapped Escape from
+    /// being anything at all when govox is idle.
+    ///
+    /// The tap window is the toggle's, because it is the same gesture and a
+    /// second timing to tune would be two ways to get it wrong.
+    fn handle_stop(&mut self, event: &KeyEvent, now_s: f64) -> Option<Transition> {
+        if self.stop_key.is_empty() {
+            return None;
+        }
+        let KeyEvent::Down(key) = event else {
+            return None;
+        };
+        if !self.stop_key.matches(key) {
+            // Any other key breaks a pending stop tap, exactly as it breaks a
+            // pending toggle tap — "Esc x Esc" in vim is not a request to stop.
+            if !is_modifier(key) {
+                self.last_stop_tap_ts = None;
+            }
+            return None;
+        }
+        match self.last_stop_tap_ts {
+            Some(previous) if now_s - previous <= self.double_tap_s => {
+                self.last_stop_tap_ts = None;
+                self.stop()
+            }
+            _ => {
+                self.last_stop_tap_ts = Some(now_s);
+                None
+            }
+        }
+    }
+
+    /// End a running session, or report nothing if none is running.
+    fn stop(&mut self) -> Option<Transition> {
+        if !self.listening {
+            return None;
+        }
+        self.listening = false;
+        self.toggle_active = false;
+        Some(Transition::StopListening)
     }
 
     fn track_modifier(&mut self, event: &KeyEvent) {
@@ -302,6 +384,109 @@ mod tests {
 
     fn controller(mode: ActivationMode) -> ActivationController {
         ActivationController::new(mode, PTT, TOGGLE, 0.4)
+    }
+
+    const STOP: &str = "KEY_ESC";
+
+    fn stopping(mode: ActivationMode) -> ActivationController {
+        controller(mode).with_stop_key(STOP)
+    }
+
+    /// Start a session the way the mode does, so stopping has something to stop.
+    fn listening_double_tap() -> ActivationController {
+        let mut c = stopping(ActivationMode::DoubleTap);
+        c.handle_event_at(&down(TOGGLE), 0.0);
+        assert_eq!(
+            c.handle_event_at(&down(TOGGLE), 0.1),
+            Some(Transition::StartListening)
+        );
+        c
+    }
+
+    #[test]
+    fn a_double_tapped_stop_key_ends_a_session() {
+        let mut c = listening_double_tap();
+        assert_eq!(c.handle_event_at(&down(STOP), 1.0), None, "first tap");
+        assert_eq!(
+            c.handle_event_at(&down(STOP), 1.2),
+            Some(Transition::StopListening)
+        );
+        assert!(!c.listening());
+    }
+
+    #[test]
+    fn a_single_stop_tap_does_nothing() {
+        // The whole reason it is a double tap: govox does not grab the key, so
+        // the Escape reaches the application either way.
+        let mut c = listening_double_tap();
+        assert_eq!(c.handle_event_at(&down(STOP), 1.0), None);
+        assert!(c.listening());
+    }
+
+    #[test]
+    fn two_slow_stop_taps_are_not_a_double_tap() {
+        let mut c = listening_double_tap();
+        assert_eq!(c.handle_event_at(&down(STOP), 1.0), None);
+        assert_eq!(c.handle_event_at(&down(STOP), 2.0), None);
+        assert!(c.listening());
+    }
+
+    #[test]
+    fn a_key_between_the_taps_breaks_them() {
+        // "Esc x Esc" in vim is not a request to stop dictating.
+        let mut c = listening_double_tap();
+        assert_eq!(c.handle_event_at(&down(STOP), 1.0), None);
+        assert_eq!(c.handle_event_at(&down("KEY_X"), 1.05), None);
+        assert_eq!(c.handle_event_at(&down(STOP), 1.1), None);
+        assert!(c.listening());
+    }
+
+    #[test]
+    fn stopping_when_idle_reports_nothing() {
+        let mut c = stopping(ActivationMode::DoubleTap);
+        assert_eq!(c.handle_event_at(&down(STOP), 1.0), None);
+        assert_eq!(c.handle_event_at(&down(STOP), 1.2), None);
+        assert!(!c.listening());
+    }
+
+    #[test]
+    fn the_stop_key_works_in_every_mode() {
+        for mode in [ActivationMode::Toggle, ActivationMode::PushToTalk] {
+            let mut c = stopping(mode);
+            // Start however this mode starts.
+            let start = match mode {
+                ActivationMode::PushToTalk => down(PTT),
+                _ => down(TOGGLE),
+            };
+            assert_eq!(
+                c.handle_event_at(&start, 0.0),
+                Some(Transition::StartListening),
+                "{mode:?}"
+            );
+            assert_eq!(c.handle_event_at(&down(STOP), 1.0), None, "{mode:?}");
+            assert_eq!(
+                c.handle_event_at(&down(STOP), 1.2),
+                Some(Transition::StopListening),
+                "{mode:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn no_stop_key_means_no_stop_behaviour() {
+        let mut c = controller(ActivationMode::DoubleTap);
+        c.handle_event_at(&down(TOGGLE), 0.0);
+        c.handle_event_at(&down(TOGGLE), 0.1);
+        assert_eq!(c.handle_event_at(&down(STOP), 1.0), None);
+        assert_eq!(c.handle_event_at(&down(STOP), 1.2), None);
+        assert!(c.listening(), "Escape must be inert with no stop key set");
+    }
+
+    #[test]
+    fn the_stop_key_is_watched_but_is_not_an_activation_key() {
+        let c = stopping(ActivationMode::DoubleTap);
+        assert_eq!(c.active_keys().names(), [TOGGLE], "activation is unchanged");
+        assert_eq!(c.watched_keys(), vec![TOGGLE.to_owned(), STOP.to_owned()]);
     }
 
     #[test]

@@ -37,8 +37,19 @@ const GOLDEN: &str = include_str!("../../../corpus/config-defaults.json");
 /// - `correction.case_control` — spoken case markers ("all caps hello"). Has no
 ///   equivalent in the implementation this snapshot came from; it is modelled
 ///   on macOS Dictation, which is the UX reference wherever parity does not
-///   bind. Off by default, so the snapshot's *behaviour* is unchanged.
-const RUST_ONLY_KEYS: &[&str] = &["recognition.gpu_device", "correction.case_control"];
+///   bind. **On** by default since 0.2.0; it was off when it was added here.
+/// - `activation.stop_key` — double-tapped Escape ends a session. Also from
+///   macOS, and also with no counterpart in the snapshot.
+///
+/// Being on this list means the snapshot cannot pin the key's **default**,
+/// because it is stripped before the file is written. Every entry therefore
+/// needs its own test in `config.rs`, or its default is unguarded — which is
+/// how `case_control` could be flipped without a single test noticing.
+const RUST_ONLY_KEYS: &[&str] = &[
+    "recognition.gpu_device",
+    "correction.case_control",
+    "activation.stop_key",
+];
 
 /// Compare two JSON values, collecting every difference as a dotted path.
 ///

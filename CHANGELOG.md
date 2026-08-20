@@ -25,6 +25,27 @@ before 1.0.0, minor versions may change behaviour.
   The generator now varies case across every tier 2 verb, on both sides of the command-mode
   gate. **21 records added, none rewritten.**
 
+### Added
+
+- **A stop key: `[activation] stop_key`, Escape by default.** Ends a session without
+  starting one — the escape hatch for dictation running when you did not want it, and what
+  macOS uses. It behaves differently in two places, and the difference cannot be hidden:
+
+  - In a field routed through IBus preedit (`[ime] enabled = true`), a **single** Escape
+    ends the session and the application never sees the key. An input method is the only
+    position from which govox can *consume* a keystroke.
+  - Everywhere else govox watches evdev without grabbing it, so an Escape it acted on would
+    still reach the app. There it takes a **double tap** inside the `double_tap_ms` window,
+    and a stray single Escape is left alone.
+
+  So the double tap always works and the single one is a nicety where the desktop routes
+  keys through us. It works in all three activation modes, does nothing when idle, and a key
+  pressed between the taps breaks them — "Esc x Esc" in vim is not a request to stop.
+
+  This makes `process_key_event` conditional where it was unconditionally inert. It still
+  never logs, counts by key, or retains anything: the added comparison is against one
+  constant, records nothing, and every other key returns on the line it always did.
+
 ### Changed
 
 - **`[correction] case_control` is now on by default.** Spoken case — "all caps hello",

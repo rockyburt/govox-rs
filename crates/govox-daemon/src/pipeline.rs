@@ -101,11 +101,14 @@ pub async fn run(
     );
 
     let mut controller = ActivationController::from_config(&config.activation);
-    let keys = controller.active_keys().names().to_vec();
+    // Which keyboards to open, versus which key must exist somewhere. The stop
+    // key is watched but is not proof of a usable keyboard — see `watched_keys`.
+    let keys = controller.watched_keys();
+    let activation_keys = controller.active_keys().names().to_vec();
 
     // Any one keyboard emitting any one of the keys is enough: a split or
     // external keyboard may carry only the left Control.
-    let devices = find_keyboard_devices(&keys);
+    let devices = find_keyboard_devices(&activation_keys);
     if devices.is_empty() {
         return Err(PipelineError::NoKeyboard {
             key: controller.active_keys().describe(),
@@ -186,9 +189,17 @@ pub async fn run(
     // The input method, when the desktop has one and the user asked for it.
     // A failure here is a degrade, never a stop: without it dictation behaves
     // exactly as it did before preedit existed.
+    // Also the stop-key surface: an active engine is the only place govox can
+    // *consume* a key, so a single Escape ends a session here where the evdev
+    // path needs two. `ime_state` is None when there is no engine, which is
+    // what makes the double tap the thing that always works.
+    let mut ime_state: Option<Arc<govox_ime::FieldState>> = None;
     let preedit: Option<Arc<dyn PreeditSink>> = if ime_config.enabled {
         match IbusSession::start(&ime_config).await {
-            Ok(session) => Some(Arc::new(session)),
+            Ok(session) => {
+                ime_state = Some(session.state());
+                Some(Arc::new(session))
+            }
             Err(error) => {
                 tracing::info!(%error, "continuing without preedit dictation");
                 None
@@ -278,9 +289,28 @@ pub async fn run(
             // `try_send`, not `blocking_send`: this runs on the helper's stdout
             // reader thread, and a full queue means the loop is already behind
             // — the user re-clicks long before a blocking send would return.
-            let _ = stops.try_send(Event::StopRequested);
+            let _ = stops.try_send(Event::StopRequested("overlay clicked"));
         }));
     }
+    // An Escape the engine consumed arrives as the same event the overlay's
+    // stop button sends, so there is one way to stop and one place it happens.
+    if let Some(state) = &ime_state {
+        let (stop_tx, mut stop_rx) = mpsc::unbounded_channel::<()>();
+        state.set_stop_channel(stop_tx);
+        let stops = events_tx.clone();
+        tokio::spawn(async move {
+            while stop_rx.recv().await.is_some() {
+                if stops
+                    .send(Event::StopRequested("escape in a preedit field"))
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        });
+    }
+
     // Reload is a *message*, not a direct call: the swap then happens on the
     // task that owns the daemon rather than on whichever thread the tray menu
     // was clicked from. That is what removes govox-py's cross-thread rebinding.
@@ -347,6 +377,7 @@ pub async fn run(
         vad: SileroVad::new(sample_rate)?,
         utterances: utterances_tx,
         announcer: Arc::clone(&announcer),
+        ime_state,
         silence: SilenceMonitor::new(silence_timeout_s),
         level: LevelSmoother::default(),
         reloads: reloads_tx,
@@ -480,7 +511,11 @@ enum Event {
     ///
     /// An event rather than a direct call because it arrives on the helper's
     /// stdout reader thread, and the activation state belongs to the loop.
-    StopRequested,
+    ///
+    /// Carries why, because there are now two senders — the overlay's stop
+    /// button and an Escape the IBus engine consumed — and "nothing happened"
+    /// is only diagnosable if the log says which one asked.
+    StopRequested(&'static str),
 }
 
 struct EventLoop<'a, A: Announcer> {
@@ -489,6 +524,12 @@ struct EventLoop<'a, A: Announcer> {
     vad: SileroVad,
     utterances: mpsc::Sender<Job>,
     announcer: Arc<A>,
+    /// The IBus engine's view of whether a session is running.
+    ///
+    /// It consumes an Escape only while one is, so this must track the session
+    /// and not merely the engine's existence — otherwise Escape would be eaten
+    /// in every preedit-capable field whether govox was listening or not.
+    ime_state: Option<Arc<govox_ime::FieldState>>,
     /// Auto-stop a latched session that has gone quiet.
     silence: SilenceMonitor,
     /// Drives the overlay's level meter from capture amplitude.
@@ -741,12 +782,16 @@ impl<A: Announcer> EventLoop<'_, A> {
             match event {
                 Event::Key(key) => self.on_key(&key).await,
                 Event::Frame(frame) => self.on_frame(&frame).await,
-                Event::StopRequested => {
-                    // Logged on arrival as well as on effect: a click while
+                Event::StopRequested(reason) => {
+                    // Logged on arrival as well as on effect: a request while
                     // idle is a no-op, and "nothing happened" otherwise cannot
-                    // be told apart from "the click never arrived".
-                    tracing::debug!(listening = self.controller.listening(), "overlay clicked");
-                    self.auto_stop("overlay clicked").await;
+                    // be told apart from "the request never arrived".
+                    tracing::debug!(
+                        listening = self.controller.listening(),
+                        reason,
+                        "stop asked"
+                    );
+                    self.auto_stop(reason).await;
                 }
                 Event::Tray(command) => match command {
                     TrayCommand::Reload => {
@@ -779,6 +824,7 @@ impl<A: Announcer> EventLoop<'_, A> {
         match transition {
             // A fresh session must not inherit half a phrase from the last one.
             Transition::StartListening => {
+                self.set_ime_session(true);
                 crate::daemon::begin_session(
                     self.preedit.as_ref(),
                     self.text_model.as_ref(),
@@ -961,7 +1007,20 @@ impl<A: Announcer> EventLoop<'_, A> {
     ///
     /// The one stop path, shared by the hotkey and the silence timer, so an
     /// automatic stop really is indistinguishable from a manual one.
+    /// Tell the IBus engine whether a session is running.
+    ///
+    /// A no-op without an engine, which is the common case.
+    fn set_ime_session(&self, active: bool) {
+        if let Some(state) = &self.ime_state {
+            state.set_session_active(active);
+        }
+    }
+
     async fn stop_session(&mut self) {
+        // First, so an Escape arriving while the commit is still in flight is
+        // passed to the application rather than consumed by an engine that is
+        // about to have nothing to stop.
+        self.set_ime_session(false);
         // The next session re-sends its anchor rather than being deduplicated
         // against this one's last position, which would leave the card where
         // the previous field's caret happened to be.

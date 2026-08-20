@@ -138,6 +138,23 @@ mode = "double_tap"
 push_to_talk_key = "KEY_PAUSE"
 toggle_key = ["KEY_LEFTCTRL", "KEY_RIGHTCTRL"]
 queue_size = 8
+# Ends a session without starting one — the escape hatch for dictation running
+# when you did not want it. Also macOS's, where Escape ends dictation.
+#
+# It behaves differently in two places, and the difference is not hideable:
+#
+#   * In a field routed through IBus preedit ([ime] enabled = true), a SINGLE
+#     Escape ends the session and the application never sees the key. An input
+#     method is the only position from which govox can consume a keystroke.
+#   * Everywhere else, govox is watching evdev without grabbing it, so an Escape
+#     it acted on would still reach the app. There it takes a DOUBLE tap, inside
+#     the same window as `double_tap_ms`, and the stray single one is left alone.
+#
+# The double tap therefore always works; the single one is a nicety where the
+# desktop routes keys through us. Set to "" to disable, or to any key from
+# `govox keys` — but prefer one you do not need mid-sentence, since outside
+# preedit the presses reach your application either way.
+stop_key = "KEY_ESC"
 
 [editing]
 # How long "delete that" keeps trusting its record of the last dictated text.
