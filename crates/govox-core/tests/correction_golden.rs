@@ -762,6 +762,39 @@ fn table_driven_records() -> Vec<(&'static str, Value)> {
         ));
     }
 
+    // Modifier chords. Every modifier against one key, and every chord key
+    // against one modifier — the cross product would be 9 × 49 records to pin
+    // a `join("+")`, while these two axes catch a table row that does not
+    // translate, which is the failure that matters.
+    for (spoken, _) in grammar::MODIFIER_WORDS {
+        out.push((
+            "match_edit",
+            json!({ "normalized": format!("press {spoken} s") }),
+        ));
+    }
+    for (spoken, _) in grammar::CHORD_KEYS {
+        for text in [
+            format!("press control {spoken}"),
+            // The bare form, which must stay text.
+            format!("press {spoken}"),
+        ] {
+            out.push(("match_edit", json!({ "normalized": text })));
+        }
+    }
+    for text in [
+        "press control shift z",
+        "press control control s",
+        "press shift tab",
+        "press control enter",
+        "press the control s",
+    ] {
+        out.push(("match_edit", json!({ "normalized": text })));
+        out.push((
+            "detect_command",
+            json!({ "text": text, "mode_switching": false, "command_mode": false }),
+        ));
+    }
+
     // Every mode phrase, at both settings of the switch that enables them. A
     // mode phrase is matched in either mode, so adding one silently takes that
     // phrase away from ordinary dictation — the corpus should say so.

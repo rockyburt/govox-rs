@@ -128,6 +128,85 @@ pub const PRESS_KEYS: &[(&str, &str)] = &[
     ("right arrow", "right"),
 ];
 
+/// Spoken modifier → the chord token `keycodes` knows it by.
+///
+/// "command" and "windows" map to `meta` because that is the key people mean by
+/// them; the Linux name is neither.
+pub const MODIFIER_WORDS: &[(&str, &str)] = &[
+    ("control", "ctrl"),
+    ("ctrl", "ctrl"),
+    ("shift", "shift"),
+    ("alt", "alt"),
+    ("option", "alt"),
+    ("command", "meta"),
+    ("super", "meta"),
+    ("meta", "meta"),
+    ("windows", "meta"),
+];
+
+/// Keys reachable **only** with a modifier in front of them.
+///
+/// Letters, digits and function keys are here rather than in [`PRESS_KEYS`]
+/// because a bare "press a" is a plausible thing to say — "press a button" is
+/// not, but the whole-utterance "press a" is — and a single letter is the
+/// easiest thing in the language for a recogniser to hear by mistake. Requiring
+/// "press control a" costs nothing, since a lone letter keypress is not a thing
+/// anyone dictates: they would just say the letter.
+///
+/// Function keys are here for a different reason: nothing is lost by requiring
+/// the modifier form to be spelled out, and "press f 1" mishears easily.
+pub const CHORD_KEYS: &[(&str, &str)] = &[
+    ("a", "a"),
+    ("b", "b"),
+    ("c", "c"),
+    ("d", "d"),
+    ("e", "e"),
+    ("f", "f"),
+    ("g", "g"),
+    ("h", "h"),
+    ("i", "i"),
+    ("j", "j"),
+    ("k", "k"),
+    ("l", "l"),
+    ("m", "m"),
+    ("n", "n"),
+    ("o", "o"),
+    ("p", "p"),
+    ("q", "q"),
+    ("r", "r"),
+    ("s", "s"),
+    ("t", "t"),
+    ("u", "u"),
+    ("v", "v"),
+    ("w", "w"),
+    ("x", "x"),
+    ("y", "y"),
+    ("z", "z"),
+    ("0", "0"),
+    ("1", "1"),
+    ("2", "2"),
+    ("3", "3"),
+    ("4", "4"),
+    ("5", "5"),
+    ("6", "6"),
+    ("7", "7"),
+    ("8", "8"),
+    ("9", "9"),
+    ("f1", "f1"),
+    ("f2", "f2"),
+    ("f3", "f3"),
+    ("f4", "f4"),
+    ("f5", "f5"),
+    ("f6", "f6"),
+    ("f7", "f7"),
+    ("f8", "f8"),
+    ("f9", "f9"),
+    ("f10", "f10"),
+    ("f11", "f11"),
+    ("f12", "f12"),
+    ("space", "space"),
+];
+
 /// Longest first, so "characters" is tried before "character".
 ///
 /// Alternation is ordered and relying on backtracking here is fragile. Python's
@@ -170,6 +249,26 @@ static PRESS_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
         alternation(PRESS_KEYS.iter().map(|(spoken, _)| *spoken))
     );
     Regex::new(&format!(r"^press (?:the )?{key}(?: key)?$")).expect("press pattern compiles")
+});
+
+/// `press <modifier>… <key>`: at least one modifier, then one key.
+///
+/// Tried before [`PRESS_PATTERN`], because "press shift tab" must not be read as
+/// the bare key "tab" with a stray word in front of it.
+static PRESS_CHORD_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    let modifier = alternation(MODIFIER_WORDS.iter().map(|(spoken, _)| *spoken));
+    // Both tables: a modifier makes "press control enter" as sensible as
+    // "press control s".
+    let key = alternation(
+        PRESS_KEYS
+            .iter()
+            .chain(CHORD_KEYS.iter())
+            .map(|(spoken, _)| *spoken),
+    );
+    Regex::new(&format!(
+        r"^press (?:the )?(?P<mods>(?:(?:{modifier}) )+)(?P<key>{key})(?: key)?$"
+    ))
+    .expect("press-chord pattern compiles")
 });
 
 static MOVE_EDGE_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
@@ -282,6 +381,36 @@ pub fn match_edit(normalized: &str) -> Option<EditAction> {
         return Some(EditAction::simple(op));
     }
 
+    // Before the bare form, so "press shift tab" is a chord rather than a key
+    // with a word in front of it.
+    if let Some(caps) = PRESS_CHORD_PATTERN.captures(normalized) {
+        let spoken = caps.name("key").expect("key group").as_str();
+        let key = lookup(PRESS_KEYS, spoken).or_else(|| lookup(CHORD_KEYS, spoken))?;
+        // Modifiers in the order spoken, de-duplicated: "control control s" is
+        // a mishearing, not a request to press it twice.
+        let mut chord: Vec<&str> = Vec::new();
+        for word in caps
+            .name("mods")
+            .expect("mods group")
+            .as_str()
+            .split_whitespace()
+        {
+            let token = lookup(MODIFIER_WORDS, word)?;
+            if !chord.contains(&token) {
+                chord.push(token);
+            }
+        }
+        chord.push(key);
+        return Some(EditAction {
+            op: EditOp::PressKey,
+            unit: None,
+            direction: None,
+            count: 1,
+            phrase: Some(chord.join("+")),
+            replacement: None,
+        });
+    }
+
     if let Some(caps) = PRESS_PATTERN.captures(normalized) {
         let spoken = caps.name("key").expect("key group").as_str();
         return Some(EditAction {
@@ -346,6 +475,61 @@ mod tests {
     }
 
     #[test]
+    fn every_chord_key_and_modifier_is_translatable() {
+        for (spoken, chord) in CHORD_KEYS {
+            assert!(
+                crate::keycodes::parse_chord(chord).is_ok(),
+                "{spoken} → {chord:?} is not translatable"
+            );
+        }
+        for (spoken, token) in MODIFIER_WORDS {
+            assert!(
+                crate::keycodes::parse_chord(&format!("{token}+a")).is_ok(),
+                "{spoken} → {token:?} is not translatable"
+            );
+        }
+    }
+
+    #[test]
+    fn modifiers_compose_in_the_order_spoken() {
+        for (phrase, expected) in [
+            ("press control s", "ctrl+s"),
+            ("press ctrl s", "ctrl+s"),
+            ("press command s", "meta+s"),
+            ("press option f", "alt+f"),
+            ("press control shift z", "ctrl+shift+z"),
+            ("press shift tab", "shift+tab"),
+            ("press alt tab", "alt+tab"),
+            ("press control enter", "ctrl+enter"),
+            ("press control f5", "ctrl+f5"),
+            ("press control 1", "ctrl+1"),
+            ("press super left", "meta+left"),
+        ] {
+            let edit = phrase_edit(phrase);
+            assert_eq!(edit.op, EditOp::PressKey, "{phrase}");
+            assert_eq!(edit.phrase.as_deref(), Some(expected), "{phrase}");
+        }
+    }
+
+    #[test]
+    fn a_repeated_modifier_is_a_mishearing_not_a_double_press() {
+        assert_eq!(
+            phrase_edit("press control control s").phrase.as_deref(),
+            Some("ctrl+s")
+        );
+    }
+
+    #[test]
+    fn a_letter_needs_a_modifier_to_be_a_key() {
+        // Bare "press a" stays text: a lone letter is the easiest thing to
+        // mishear, and nobody dictates a single letter keypress.
+        for phrase in ["press a", "press s", "press f1", "press 5", "press z"] {
+            assert_eq!(match_edit(phrase), None, "{phrase} must dictate as text");
+        }
+        assert!(match_edit("press control a").is_some());
+    }
+
+    #[test]
     fn press_accepts_the_ways_a_key_gets_named() {
         for phrase in [
             "press enter",
@@ -387,7 +571,11 @@ mod tests {
             "press on",
             "press f1",
             "press space",
-            "press command s",
+            // "press command s" was here until modifier chords existed; it is
+            // now `meta+s`, and `modifiers_compose_in_the_order_spoken` covers
+            // it. What stays true is that its *bare* forms do not match.
+            "press command",
+            "press control",
         ] {
             assert_eq!(match_edit(phrase), None, "{phrase} must dictate as text");
         }

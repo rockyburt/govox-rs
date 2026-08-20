@@ -52,6 +52,21 @@ before 1.0.0, minor versions may change behaviour.
   and `Attach::Tight` already means "close up on both sides". It inherits the determiner
   suppression too, so "the no space rule" is left as prose.
 
+- **Modifier chords**: `press control s`, `press control shift z`, `press command s`,
+  `press alt tab`, `press option f`, `press control f5`. Modifiers are `control`/`ctrl`,
+  `shift`, `alt`/`option`, and `command`/`super`/`meta`/`windows`, and they compose in the
+  order spoken. A repeated modifier is treated as a mishearing rather than a double press.
+
+  **A letter, digit or function key needs a modifier** to count as a key. Bare `press a`
+  stays text: a lone letter is the easiest thing in the language to mishear, and nobody
+  dictates a single letter keypress — they say the letter. `press enter` and the other
+  special keys are unchanged.
+
+  This needed 42 more keycodes (a–z, 0–9, f1–f12), **generated from this machine's
+  `/usr/include/linux/input-event-codes.h`** rather than typed from memory. A wrong code
+  does not fail, it presses the wrong key; an absent one makes `ydotool key` exit 0 having
+  done nothing. The original 25 rows are unchanged, which the header confirms row for row.
+
 - **`press <key>`**, for the keys dictation could not otherwise reach: `press enter`,
   `press tab`, `press escape`, `press page down`, `press up arrow`, and the rest. `press
   the enter` and `press enter key` work too. Modelled on macOS Voice Control's `Press

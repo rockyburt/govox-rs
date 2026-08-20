@@ -26,24 +26,74 @@ use std::fmt;
 
 /// Every key name govox can translate, paired with its Linux keycode.
 ///
-/// A slice of pairs rather than a map: 25 entries is far below the size where
-/// hashing wins, and a `const` slice keeps the table visible in one screen and
-/// diffable against `govox-py`'s dict.
+/// A slice of pairs rather than a map: 67 entries is still below the size where
+/// hashing wins on a lookup that happens once per keystroke, and a `const` slice
+/// keeps the table diffable.
+///
+/// Ordered by keycode, and **generated from this machine's
+/// `/usr/include/linux/input-event-codes.h`** rather than typed from memory.
+/// That is not fastidiousness: a wrong code here does not fail, it presses the
+/// wrong key, and a code that is merely absent makes `ydotool key` exit 0 having
+/// done nothing. The letters, digits and function keys were added for
+/// `press control s`-style chords; the original 25 rows are unchanged, which the
+/// header confirms row for row.
 const KEYCODES: &[(&str, u16)] = &[
     ("esc", 1),
+    ("1", 2),
+    ("2", 3),
+    ("3", 4),
+    ("4", 5),
+    ("5", 6),
+    ("6", 7),
+    ("7", 8),
+    ("8", 9),
+    ("9", 10),
+    ("0", 11),
     ("backspace", 14),
     ("tab", 15),
+    ("q", 16),
+    ("w", 17),
+    ("e", 18),
+    ("r", 19),
+    ("t", 20),
     ("y", 21),
+    ("u", 22),
+    ("i", 23),
+    ("o", 24),
+    ("p", 25),
     ("enter", 28),
     ("ctrl", 29),
     ("a", 30),
+    ("s", 31),
+    ("d", 32),
+    ("f", 33),
+    ("g", 34),
+    ("h", 35),
+    ("j", 36),
+    ("k", 37),
+    ("l", 38),
     ("shift", 42),
     ("z", 44),
     ("x", 45),
     ("c", 46),
     ("v", 47),
+    ("b", 48),
+    ("n", 49),
+    ("m", 50),
     ("alt", 56),
     ("space", 57),
+    ("f1", 59),
+    ("f2", 60),
+    ("f3", 61),
+    ("f4", 62),
+    ("f5", 63),
+    ("f6", 64),
+    ("f7", 65),
+    ("f8", 66),
+    ("f9", 67),
+    ("f10", 68),
+    ("f11", 87),
+    ("f12", 88),
     ("home", 102),
     ("up", 103),
     ("pageup", 104),

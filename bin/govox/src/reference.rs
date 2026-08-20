@@ -14,7 +14,7 @@ use govox_core::correction::casing::{CASE_MARKERS, Mode, SWITCH_WORDS};
 use govox_core::correction::commands::{COMMANDS, MODE_COMMANDS};
 use govox_core::correction::emoji::SPOKEN_EMOJI;
 use govox_core::correction::grammar::{
-    DIRECTION_WORDS, EDGE_WORDS, PRESS_KEYS, SIMPLE_EDITS, UNIT_WORDS, VERB_OPS,
+    DIRECTION_WORDS, EDGE_WORDS, MODIFIER_WORDS, PRESS_KEYS, SIMPLE_EDITS, UNIT_WORDS, VERB_OPS,
 };
 use govox_core::correction::numbers::CURRENCY;
 use govox_core::correction::punctuation::{Attach, DETERMINERS, SPOKEN_PUNCTUATION};
@@ -111,6 +111,17 @@ pub fn render(config: &Config) -> String {
     for (_, spellings) in grouped(PRESS_KEYS.iter().map(|(spoken, chord)| (*spoken, *chord))) {
         bullet(&mut out, &format!("  {}", spellings.join(", ")), "");
     }
+    bullet(
+        &mut out,
+        "press <modifier>… <key>",
+        "\"press control shift z\"",
+    );
+    bullet(&mut out, "  modifier", &words(MODIFIER_WORDS));
+    bullet(
+        &mut out,
+        "  also, with a modifier",
+        "a-z, 0-9, f1-f12, space",
+    );
 
     let mode = config.editing.command_mode;
     heading(
