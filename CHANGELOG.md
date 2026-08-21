@@ -96,6 +96,32 @@ before 1.0.0, minor versions may change behaviour.
   the session ends. In a multi-line field dictation continues. A client that never reports a
   content type counts as multi-line — continuing a session is recoverable, ending one is not.
 
+- **Spelling mode**, the third mode, from macOS Voice Control. Say **"spelling mode"** and
+  then say letters: `romeo oscar charlie kilo yankee` types `rocky`. Leave with "stop
+  spelling", "exit spelling", or any ordinary dictation phrase.
+
+  It exists for the strings recognition will never get right — an identifier, a licence
+  plate, a surname the model has not seen. The personal dictionary only helps for terms you
+  can predict in advance; this is for the ones you cannot.
+
+  **The alphabet is phonetic first.** Bare letters are the worst case for a speech model —
+  b, d, e, g, p, t, v are barely distinguishable to a *human* on a phone line — so NATO is
+  what the listing shows and what actually works. Bare letters and their written-out sounds
+  ("bee", "jay", "aitch") are accepted too, as the unreliable path. Digits, `capital <letter>`
+  for one uppercase, and the separators an identifier needs (space, dot, dash, underscore,
+  slash, at, colon).
+
+  Spelled output skips the correction pipeline entirely. Every stage in it exists to turn
+  speech into prose — casing, spacing, punctuation, the dictionary — and this is the mode
+  for strings that are not prose.
+
+  **What it cannot spell is reported, never guessed.** A wrong character in an identifier is
+  worse than a missing one, because it looks right. An utterance with nothing spellable in
+  it is discarded as a misrecognition rather than typed.
+
+  The three modes are one selection, as on macOS: entering spelling leaves command mode and
+  vice versa.
+
 - **Sleep and wake**: say **"go to sleep"** to suspend listening and **"wake up"** to
   resume, taken from macOS Voice Control. Distinct from stopping — the session, its preedit
   and its context survive, so waking carries on rather than starting again.

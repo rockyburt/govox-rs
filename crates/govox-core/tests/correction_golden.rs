@@ -35,7 +35,7 @@ use flate2::write::GzEncoder;
 use govox_core::config::CorrectionConfig;
 use govox_core::correction::{
     self, Context, CorrectionPipeline, casing, commands, dictionary, emoji, grammar, numbers,
-    punctuation,
+    punctuation, spelling,
 };
 use govox_core::domain::{
     EditAction, FieldSnapshot, InsertionAction, PersonalDictionary, PipelineAction, TextModel, Unit,
@@ -67,6 +67,7 @@ fn action_json(action: &PipelineAction) -> Value {
             json!({"kind": "mode", "command_mode": command_mode})
         }
         PipelineAction::Sleep { asleep } => json!({"kind": "sleep", "asleep": asleep}),
+        PipelineAction::Spelling { enabled } => json!({"kind": "spelling", "enabled": enabled}),
         PipelineAction::Edit(edit) => edit_json(edit),
     }
 }
@@ -260,6 +261,10 @@ fn evaluate(stage: &str, args: &Value) -> Option<Value> {
             &text(args, "text"),
             optional(args, "purpose").as_deref()
         )),
+        "spell" => match spelling::spell(&text(args, "text")) {
+            Some(out) => json!({"text": out.text, "unrecognised": out.unrecognised}),
+            None => Value::Null,
+        },
         "split_trailing_command" => match commands::split_trailing_command(
             &text(args, "text"),
             args["mode_switching"].as_bool().unwrap(),
@@ -835,6 +840,32 @@ fn table_driven_records() -> Vec<(&'static str, Value)> {
                 json!({ "text": text, "mode_switching": mode_switching }),
             ));
         }
+    }
+
+    // The spelling phrases, and the alphabet itself.
+    for (phrase, _) in commands::SPELLING_COMMANDS {
+        for mode_switching in [true, false] {
+            out.push((
+                "detect_command",
+                json!({
+                    "text": phrase,
+                    "mode_switching": mode_switching,
+                    "command_mode": false,
+                }),
+            ));
+        }
+    }
+    for text in [
+        "alpha bravo charlie",
+        "romeo oscar charlie kilo yankee",
+        "capital alpha bravo",
+        "alpha dash one two",
+        "alpha at bravo dot charlie",
+        "a b c",
+        "alpha wibble bravo",
+        "the quick brown fox jumped",
+    ] {
+        out.push(("spell", json!({ "text": text })));
     }
 
     // The sleep phrases. Ungated by `mode_switching` — they are honoured

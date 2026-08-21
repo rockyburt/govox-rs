@@ -393,6 +393,15 @@ impl<T: Transcriber> Daemon<T> {
                 Ok(())
             }
 
+            PipelineAction::Spelling { enabled } => {
+                self.set_spelling(enabled);
+                Ok(())
+            }
+
+            // Spelled before the command-mode guard below, because spelling is
+            // a way of *entering text* and command mode is a way of not.
+            PipelineAction::Text(text) if self.shared.spelling() => self.spell_out(&text),
+
             PipelineAction::Mode { command_mode } => {
                 self.set_command_mode(command_mode);
                 Ok(())
@@ -415,21 +424,7 @@ impl<T: Transcriber> Daemon<T> {
 
             PipelineAction::Edit(action) => self.apply_edit(&action),
 
-            PipelineAction::Text(text) => {
-                // The engine is live and holding this session's provisional
-                // text, so the words land as one IBus commit rather than a
-                // stream of synthetic keystrokes. Same routing as every other
-                // action — only the actuator differs — so both modes match.
-                if let Some(preedit) = self.preedit.as_ref()
-                    && self.shared.preedit_active()
-                {
-                    preedit.commit(&text);
-                } else {
-                    self.injector.insert(&InsertionAction::Text(text.clone()))?;
-                }
-                self.text_model.record_insertion(&text);
-                Ok(())
-            }
+            PipelineAction::Text(text) => self.inject_text(&text),
 
             PipelineAction::Command(name) => self.injector.insert(&InsertionAction::Command(name)),
         }
@@ -483,6 +478,80 @@ impl<T: Transcriber> Daemon<T> {
     /// exactly like govox that has stopped working. Waking is deliberately
     /// reported even when nothing was said in between, because "did it hear
     /// me?" is the only question a sleeping daemon raises.
+    /// Put text into the focused field, through whichever actuator is live.
+    ///
+    /// Extracted so spelled output takes exactly the same route as dictated
+    /// text: the engine is live and holding this session's provisional text, so
+    /// the words land as one IBus commit rather than a stream of synthetic
+    /// keystrokes. Only the actuator differs between the two paths.
+    fn inject_text(&mut self, text: &str) -> Result<(), GovoxError> {
+        if let Some(preedit) = self.preedit.as_ref()
+            && self.shared.preedit_active()
+        {
+            preedit.commit(text);
+        } else {
+            self.injector
+                .insert(&InsertionAction::Text(text.to_owned()))?;
+        }
+        self.text_model.record_insertion(text);
+        Ok(())
+    }
+
+    /// Type one spelled utterance, or say what could not be spelled.
+    ///
+    /// Injected as text rather than through the correction pipeline: every
+    /// stage in it — casing, spacing, punctuation, the dictionary — exists to
+    /// turn speech into prose, and this is the mode for strings that are not
+    /// prose. Running them would undo the reason for spelling in the first
+    /// place.
+    fn spell_out(&mut self, text: &str) -> Result<(), GovoxError> {
+        let normalized = govox_core::correction::commands::normalize_command_text(text);
+        let Some(spelled) = govox_core::correction::spelling::spell(&normalized) else {
+            // Nothing spellable at all is a misrecognition, not dictation: this
+            // mode is chosen for strings that must be exact.
+            tracing::info!(%text, "spelling: nothing spellable, discarded");
+            self.announcer
+                .caption(&format!("spelling — not letters: {text}"));
+            return Ok(());
+        };
+        if !spelled.unrecognised.is_empty() {
+            // Reported, never guessed at. A wrong character in an identifier is
+            // worse than a missing one, because it looks right.
+            let missed = spelled.unrecognised.join(", ");
+            tracing::info!(missed, "spelling: some tokens named no letter");
+            self.announcer
+                .caption(&format!("spelling — did not understand: {missed}"));
+            self.announcer
+                .notify("govox spelling", &format!("Not spelled: {missed}"));
+        }
+        if spelled.text.is_empty() {
+            return Ok(());
+        }
+        self.inject_text(&spelled.text)
+    }
+
+    fn set_spelling(&mut self, enabled: bool) {
+        if !self.shared.set_spelling(enabled) {
+            return;
+        }
+        // Exclusive: entering one mode leaves the other.
+        if enabled {
+            self.shared.set_command_mode(false);
+        }
+        tracing::info!(enabled, "spelling mode");
+        if enabled {
+            self.announcer.mode(Some("spelling"));
+            self.announcer.caption("spelling — say letters");
+            self.announcer
+                .notify("govox spelling mode", "On. Say letters, e.g. alpha bravo.");
+        } else {
+            self.announcer.mode(None);
+            self.announcer.caption("");
+            self.announcer
+                .notify("govox spelling mode", "Off. Dictating again.");
+        }
+    }
+
     fn set_asleep(&mut self, asleep: bool) {
         if !self.shared.set_asleep(asleep) {
             return;
@@ -507,8 +576,18 @@ impl<T: Transcriber> Daemon<T> {
     }
 
     fn set_command_mode(&mut self, enabled: bool) {
+        // "dictation mode" means dictation, whichever mode you were in — so it
+        // leaves spelling too. A mode with one exit is one people get stuck in.
+        if !enabled && self.shared.set_spelling(false) {
+            self.announcer.mode(None);
+            self.announcer.caption("");
+        }
         if !self.shared.set_command_mode(enabled) {
             return;
+        }
+        // Exclusive with spelling, the other way round.
+        if enabled {
+            self.shared.set_spelling(false);
         }
         tracing::info!(enabled, "command mode");
         // The standing indicator first: it is the one that is still there in

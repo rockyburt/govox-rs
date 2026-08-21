@@ -33,6 +33,12 @@ pub struct SharedState {
     pub corrector: ArcSwap<CorrectionPipeline>,
     /// Whether command mode is active.
     command_mode: AtomicBool,
+    /// Letters are being spelled rather than words dictated.
+    ///
+    /// Exclusive with `command_mode`, enforced where they are set: two modes at
+    /// once is a state nobody can reason about, and macOS treats the three as
+    /// one selection.
+    spelling: AtomicBool,
     /// Listening is suspended; only "wake up" is honoured.
     ///
     /// Beside `command_mode` rather than folded into it: they are independent.
@@ -79,6 +85,7 @@ impl SharedState {
             corrector: ArcSwap::from_pointee(corrector),
             command_mode: AtomicBool::new(false),
             asleep: AtomicBool::new(false),
+            spelling: AtomicBool::new(false),
             preedit_active: AtomicBool::new(false),
             held_modifiers: Mutex::new(BTreeSet::new()),
             preceding: Mutex::new(None),
@@ -96,6 +103,16 @@ impl SharedState {
     /// mode they are in — but it must not re-announce.
     pub fn set_command_mode(&self, enabled: bool) -> bool {
         self.command_mode.swap(enabled, Ordering::Relaxed) != enabled
+    }
+
+    #[must_use]
+    pub fn spelling(&self) -> bool {
+        self.spelling.load(Ordering::Relaxed)
+    }
+
+    /// Returns whether this changed anything, so a repeat says nothing.
+    pub fn set_spelling(&self, enabled: bool) -> bool {
+        self.spelling.swap(enabled, Ordering::Relaxed) != enabled
     }
 
     #[must_use]

@@ -18,6 +18,18 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("space bar", "space"),
 ];
 
+/// Phrases that enter and leave letter-by-letter entry.
+///
+/// Leaving also happens through the ordinary dictation phrases — "dictate",
+/// "dictation mode" — because a user who wants out will say whichever of them
+/// comes to mind, and a mode with one exit is a mode people get stuck in.
+pub const SPELLING_COMMANDS: &[(&str, bool)] = &[
+    ("spelling mode", true),
+    ("start spelling", true),
+    ("stop spelling", false),
+    ("exit spelling", false),
+];
+
 /// Phrases that suspend and resume listening.
 ///
 /// Only the two macOS says, and deliberately no shorter ones: "sleep" and
@@ -153,6 +165,10 @@ pub fn detect_command(text: &str, mode_switching: bool, command_mode: bool) -> P
     // through a path something else can claim first.
     if let Some(asleep) = lookup(SLEEP_COMMANDS, &normalized) {
         return PipelineAction::Sleep { asleep };
+    }
+
+    if let Some(enabled) = lookup(SPELLING_COMMANDS, &normalized) {
+        return PipelineAction::Spelling { enabled };
     }
 
     if mode_switching && let Some(mode) = lookup(MODE_COMMANDS, &normalized) {

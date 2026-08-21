@@ -399,6 +399,124 @@ async fn re_entering_command_mode_does_not_re_announce() {
     );
 }
 
+/// Spelling mode types characters, not prose.
+#[tokio::test]
+async fn spelling_mode_spells_letter_by_letter() {
+    let mut config = defaults();
+    config.editing.command_mode = true;
+    let mut h = harness_with(
+        config,
+        FakeTranscriber::saying("unused"),
+        RecordingInjector::shared(),
+    );
+
+    h.daemon.process_text("spelling mode").await;
+    assert!(h.shared.spelling(), "in spelling mode");
+    assert_eq!(
+        h.announcer.modes().last(),
+        Some(&Some("spelling".to_owned()))
+    );
+
+    h.daemon
+        .process_text("romeo oscar charlie kilo yankee")
+        .await;
+    assert_eq!(
+        h.injector.texts(),
+        ["rocky"],
+        "spelled, not dictated: no casing, no full stop, no spaces"
+    );
+
+    h.daemon.process_text("capital romeo bravo").await;
+    assert_eq!(h.injector.texts().last().map(String::as_str), Some("Rb"));
+
+    h.daemon.process_text("stop spelling").await;
+    assert!(!h.shared.spelling());
+    h.daemon.process_text("back to words").await;
+    assert_eq!(
+        h.injector.texts().last().map(String::as_str),
+        Some("Back to words."),
+        "prose rules are back"
+    );
+}
+
+/// What it could not spell is reported, never guessed at.
+#[tokio::test]
+async fn spelling_reports_what_it_did_not_understand() {
+    let mut config = defaults();
+    config.editing.command_mode = true;
+    let mut h = harness_with(
+        config,
+        FakeTranscriber::saying("unused"),
+        RecordingInjector::shared(),
+    );
+    h.daemon.process_text("spelling mode").await;
+
+    h.daemon.process_text("alpha wibble bravo").await;
+    assert_eq!(h.injector.texts(), ["ab"], "the letters it did understand");
+    assert!(
+        h.announcer
+            .captions()
+            .iter()
+            .any(|c| c.contains("did not understand")),
+        "captions were {:?}",
+        h.announcer.captions()
+    );
+
+    // Nothing spellable at all is a misrecognition, not dictation.
+    let before = h.injector.actions().len();
+    h.daemon.process_text("the quick brown fox jumped").await;
+    assert_eq!(
+        h.injector.actions().len(),
+        before,
+        "a stray sentence must not be typed in spelling mode"
+    );
+}
+
+/// The three modes are one selection, as they are on macOS.
+#[tokio::test]
+async fn the_modes_are_mutually_exclusive() {
+    let mut config = defaults();
+    config.editing.command_mode = true;
+    let mut h = harness_with(
+        config,
+        FakeTranscriber::saying("unused"),
+        RecordingInjector::shared(),
+    );
+
+    h.daemon.process_text("command mode").await;
+    h.daemon.process_text("spelling mode").await;
+    assert!(h.shared.spelling(), "spelling took over");
+    assert!(!h.shared.command_mode(), "and command mode gave way");
+
+    h.daemon.process_text("command mode").await;
+    assert!(h.shared.command_mode());
+    assert!(!h.shared.spelling(), "and back the other way");
+}
+
+/// Every exit works, because a mode with one exit is one people get stuck in.
+#[tokio::test]
+async fn any_dictation_phrase_leaves_spelling_mode() {
+    for leaving in [
+        "stop spelling",
+        "exit spelling",
+        "dictation mode",
+        "dictate",
+    ] {
+        let mut config = defaults();
+        config.editing.command_mode = true;
+        let mut h = harness_with(
+            config,
+            FakeTranscriber::saying("unused"),
+            RecordingInjector::shared(),
+        );
+
+        h.daemon.process_text("spelling mode").await;
+        assert!(h.shared.spelling(), "{leaving}: entered");
+        h.daemon.process_text(leaving).await;
+        assert!(!h.shared.spelling(), "{leaving:?} must leave spelling mode");
+    }
+}
+
 /// Asleep, the only thing that exists is waking up.
 #[tokio::test]
 async fn sleeping_discards_everything_until_woken() {

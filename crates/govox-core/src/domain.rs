@@ -164,6 +164,15 @@ pub enum PipelineAction {
     Text(String),
     Command(String),
     Edit(EditAction),
+    /// Enter or leave letter-by-letter entry.
+    ///
+    /// A separate action rather than a field on `Mode` so the recorded shape of
+    /// a mode switch is unchanged and the corpus keeps its records. Exclusive
+    /// with command mode: macOS treats the three as one selection, and two
+    /// modes at once is a state nobody can reason about.
+    Spelling {
+        enabled: bool,
+    },
     /// Suspend or resume listening, without ending the session.
     ///
     /// A third state beside dictating and commanding, taken from macOS Voice

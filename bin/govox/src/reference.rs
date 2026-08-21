@@ -11,13 +11,16 @@
 
 use govox_core::config::Config;
 use govox_core::correction::casing::{CASE_MARKERS, Mode, SWITCH_WORDS};
-use govox_core::correction::commands::{COMMANDS, MODE_COMMANDS, SLEEP_COMMANDS};
+use govox_core::correction::commands::{
+    COMMANDS, MODE_COMMANDS, SLEEP_COMMANDS, SPELLING_COMMANDS,
+};
 use govox_core::correction::emoji::SPOKEN_EMOJI;
 use govox_core::correction::grammar::{
     DIRECTION_WORDS, EDGE_WORDS, MODIFIER_WORDS, PRESS_KEYS, SIMPLE_EDITS, UNIT_WORDS, VERB_OPS,
 };
 use govox_core::correction::numbers::CURRENCY;
 use govox_core::correction::punctuation::{Attach, DETERMINERS, SPOKEN_PUNCTUATION};
+use govox_core::correction::spelling::{CAPITAL_WORDS, SPELLING_ALPHABET};
 
 /// Width the status note is right-aligned to. Narrow enough for an 80-column
 /// terminal once the longest heading is in front of it.
@@ -121,6 +124,44 @@ pub fn render(config: &Config) -> String {
         &mut out,
         "  also, with a modifier",
         "a-z, 0-9, f1-f12, space",
+    );
+
+    heading(&mut out, "Spelling", "always on");
+    for (phrase, enabled) in SPELLING_COMMANDS {
+        bullet(
+            &mut out,
+            phrase,
+            if *enabled {
+                "→ spelling"
+            } else {
+                "→ dictation"
+            },
+        );
+    }
+    bullet(
+        &mut out,
+        "  then say letters",
+        "\"romeo oscar charlie\" → roc",
+    );
+    // Only the phonetic words: the bare letters work but are the unreliable
+    // path, and a listing that offered them equally would be steering people
+    // wrong. There are 26 of them, one line each is too long, so they are
+    // wrapped as a sentence.
+    let phonetic: Vec<&str> = SPELLING_ALPHABET
+        .iter()
+        .filter(|(spoken, _)| spoken.len() > 2)
+        .map(|(spoken, _)| *spoken)
+        .collect();
+    bullet(&mut out, "  letters", &phonetic.join(", "));
+    bullet(
+        &mut out,
+        "  capitals",
+        &format!("{} <letter>", CAPITAL_WORDS.join(" / ")),
+    );
+    bullet(
+        &mut out,
+        "  also",
+        "digits, space, dot, dash, underscore, slash, at, colon",
     );
 
     heading(&mut out, "Sleep", "always on");

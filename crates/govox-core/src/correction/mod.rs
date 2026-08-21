@@ -10,6 +10,7 @@ pub mod emoji;
 pub mod grammar;
 pub mod numbers;
 pub mod punctuation;
+pub mod spelling;
 
 use std::sync::LazyLock;
 
