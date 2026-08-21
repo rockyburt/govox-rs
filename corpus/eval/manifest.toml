@@ -219,3 +219,110 @@ id = "spoken-email"
 say = "Send it to rocky at sign gmail dot com"
 expect = "Send it to rocky@gmail.com"
 terms = []
+
+# --- Programming vocabulary --------------------------------------------------
+# This section is different in kind from every one above it, and the difference
+# matters when reading the scores.
+#
+# Everything above is a **logbook**: each term is a word that actually failed on
+# this machine, and each has a matching `replace` rule in the personal
+# dictionary. These clips are a **hypothesis** instead. Nothing here has been
+# observed failing, because nothing here has ever been measured — the corpus had
+# no programming vocabulary at all, so "does Whisper handle Rust and JavaScript"
+# was a question the eval could not answer either way. There are no dictionary
+# rules for these terms yet. That is deliberate: the first run measures the
+# recogniser unaided, which is the number worth having before deciding what to
+# add.
+#
+# Expect a worse score here than elsewhere on the first pass, and expect that to
+# be informative rather than alarming. A term that survives needs no rule; a
+# term that does not is a candidate for the dictionary or for spelling mode.
+#
+# ## Three clips assert behaviour govox does not have yet
+#
+# `filename-extension-rs`, `json-dot-parse` and `flag-double-hyphen` were run
+# through the correction pipeline while this section was written, and all three
+# come out wrong today:
+#
+#   "main dot rs"                     -> "main.Rs"        wanted "main.rs"
+#   "JSON dot parse"                  -> "JSON.Parse"     wanted "JSON.parse"
+#   "hyphen hyphen all hyphen targets" -> "-all-targets"  wanted "--all-targets"
+#
+# The first two are `capitalize_after_terminators` treating the full stop from a
+# spoken "dot" as a sentence boundary; the third is two consecutive hyphens
+# collapsing into one. `expect` records what *should* land, not what does, so
+# these three will fail until that is fixed. That is the corpus working as a
+# reference rather than as a snapshot.
+
+[[clip]]
+id = "rust-crates"
+say = "We use serde and tokio in this crate."
+terms = ["serde", "tokio"]
+
+[[clip]]
+id = "rust-impl-mut"
+say = "Open the impl block and mark the variable as mut."
+terms = ["impl", "mut"]
+
+[[clip]]
+id = "rust-unwrap-result"
+say = "It returns a Result and you have to unwrap it."
+terms = ["Result", "unwrap"]
+
+[[clip]]
+id = "rust-struct-enum"
+say = "The struct derives Debug and the enum has three variants."
+terms = ["struct", "enum", "Debug"]
+
+[[clip]]
+id = "rust-cargo-clippy"
+say = "Run cargo clippy and cargo fmt before you push."
+terms = ["cargo", "clippy", "fmt"]
+
+[[clip]]
+id = "js-typescript-null"
+say = "TypeScript caught the null versus undefined bug."
+terms = ["TypeScript", "null", "undefined"]
+
+[[clip]]
+id = "js-react-hooks"
+say = "The component calls useState and useEffect."
+terms = ["useState", "useEffect"]
+
+[[clip]]
+id = "js-npm-build"
+say = "Run npm install and then npm run build."
+terms = ["npm"]
+
+[[clip]]
+id = "js-async-await"
+say = "Add an async function and await the promise."
+terms = ["async", "await"]
+
+# Spoken-symbol identifier shapes. Unlike the clips above, these depend on the
+# correction pipeline as much as on the recogniser, so `expect` differs from
+# `say` and the raw-versus-corrected gap is the thing to read.
+
+[[clip]]
+id = "identifier-snake-case"
+say = "The function is called parse underscore chord."
+expect = "The function is called parse_chord."
+terms = ["parse_chord"]
+
+[[clip]]
+id = "filename-extension-rs"
+say = "Open main dot rs and find the bug."
+expect = "Open main.rs and find the bug."
+terms = ["main.rs"]
+
+[[clip]]
+id = "json-dot-parse"
+say = "Call JSON dot parse on the response body."
+expect = "Call JSON.parse on the response body."
+terms = ["JSON.parse"]
+
+[[clip]]
+id = "flag-double-hyphen"
+say = "Run cargo clippy hyphen hyphen all hyphen targets."
+expect = "Run cargo clippy --all-targets."
+terms = ["--all-targets"]

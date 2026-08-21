@@ -1,5 +1,5 @@
 ---
-last_verified: 2026-08-18
+last_verified: 2026-08-21
 owner: rockyburt
 type: Guide
 covers:
@@ -383,10 +383,20 @@ watches for the activation key.
 ## The corpus
 
 `corpus/eval/manifest.toml` is both the script to read aloud and the reference to score
-against. Nothing in it is invented: every `term` is a word that has actually been
-mis-recognised on this machine, and each has a matching `replace` rule in the personal
-dictionary — that file is a logbook of real failures, which makes it the right source for
-a regression corpus.
+against. The first 29 clips are a **logbook**: every `term` in them is a word that has
+actually been mis-recognised on this machine, and each has a matching `replace` rule in
+the personal dictionary, which makes that file the right source for a regression corpus.
+Every measurement quoted in this guide and in [models.md](models.md) is over those 29.
+
+The **Programming vocabulary** section added on 2026-08-21 is a different kind of thing
+and is scored the same way, so it is worth knowing which you are reading. Its 13 clips are
+a *hypothesis*, not a logbook: nothing in them has been observed failing, because the
+corpus had no Rust or JavaScript vocabulary at all and so could not answer whether Whisper
+handles it. They have no dictionary rules, deliberately — the first run measures the
+recogniser unaided, which is the number worth having before deciding what to add. Three of
+them (`filename-extension-rs`, `json-dot-parse`, `flag-double-hyphen`) assert behaviour
+govox does not have yet and fail today; see the section comment in the manifest. **They are
+unrecorded**, so `tools/record-eval.sh` will offer them until you read them aloud.
 
 Each clip carries two fields, because there are two questions:
 

@@ -6,6 +6,27 @@ before 1.0.0, minor versions may change behaviour.
 
 ## [Unreleased]
 
+### Added
+
+- **The accuracy corpus now covers programming vocabulary.** 13 clips over Rust and
+  JavaScript — `serde`/`tokio`, `impl`/`mut`, `useState`/`useEffect`, `npm`, `async`/`await`
+  — plus spoken-symbol identifier shapes like `parse_chord`, `main.rs` and `--all-targets`.
+  The corpus had none, so "does Whisper handle code vocabulary" was a question it could not
+  answer either way.
+
+  Unlike the existing 29 clips, which are a logbook of observed failures each with a
+  dictionary rule, these are a hypothesis with no rules attached: the first run measures the
+  recogniser unaided. They are unrecorded until you read them aloud.
+
+### Known
+
+- **A spoken "dot" capitalises the next word, and two hyphens collapse into one.**
+  `"main dot rs"` corrects to `main.Rs`, `"JSON dot parse"` to `JSON.Parse`, and
+  `"hyphen hyphen all hyphen targets"` to `-all-targets`. Found while writing the clips
+  above by running them through the pipeline. Three of the new clips assert the wanted
+  behaviour and fail today; the fix touches a stage the golden corpus has ~239k records
+  over, so it wants its own change.
+
 ### Fixed
 
 - **`tools/dev-restart.sh` now rebuilds the overlay helper.** It built only the daemon, so an
