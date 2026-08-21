@@ -389,6 +389,152 @@ async fn re_entering_command_mode_does_not_re_announce() {
     );
 }
 
+/// The whole command-mode lifecycle, driven through the streaming commit path.
+///
+/// `process_text` is what a streaming session hands over when it ends, so this
+/// exercises the same entry point real dictation uses — including the trailing
+/// scan, which is what makes a command work when it is not the only thing said.
+#[tokio::test]
+async fn command_mode_works_end_to_end() {
+    let mut config = defaults();
+    config.editing.command_mode = true;
+    let mut h = harness_with(
+        config,
+        FakeTranscriber::saying("unused"),
+        RecordingInjector::shared(),
+    );
+
+    // 1. Ordinary dictation lands in the document.
+    h.daemon.process_text("hello world").await;
+    assert_eq!(
+        h.injector.texts(),
+        ["Hello world."],
+        "plain dictation types"
+    );
+    assert!(!h.shared.command_mode(), "still dictating");
+
+    // 2. The mode phrase said *after* other words: the words are typed, the
+    //    command fires. This is the case streaming broke.
+    h.daemon.process_text("this is a note command mode").await;
+    assert!(
+        h.shared.command_mode(),
+        "the trailing command switched modes"
+    );
+    assert_eq!(
+        h.injector.texts(),
+        // No full stop on the second: `ensure_terminal_punctuation` put one on
+        // the end of the whole string, which is where the command phrase was,
+        // so it left with it. A small wart of splitting rather than a defect —
+        // the words are right and the sentence casing that follows is unaffected.
+        ["Hello world.", "This is a note"],
+        "the words in front were typed, the command phrase was not"
+    );
+
+    // 3. In command mode, prose is discarded rather than scattered.
+    let before = h.injector.actions().len();
+    h.daemon.process_text("the quick brown fox").await;
+    assert_eq!(
+        h.injector.actions().len(),
+        before,
+        "nothing may be typed in command mode unless it matched a command"
+    );
+    assert!(
+        h.announcer
+            .captions()
+            .iter()
+            .any(|c| c.contains("not a command")),
+        "and the user is told what was dropped"
+    );
+
+    // 4. A command in command mode acts.
+    h.daemon.process_text("press enter").await;
+    assert!(
+        h.injector
+            .actions()
+            .iter()
+            .any(|a| matches!(a, InsertionAction::Keys(keys) if keys == &["enter".to_owned()])),
+        "actions were {:?}",
+        h.injector.actions()
+    );
+
+    // 5. Leaving, again said after other words. In command mode the words in
+    //    front are discarded — typing them is the failure the mode prevents.
+    h.daemon.process_text("some words dictate").await;
+    assert!(
+        !h.shared.command_mode(),
+        "the short alias left command mode"
+    );
+    assert!(
+        !h.injector.texts().iter().any(|t| t.contains("some words")),
+        "the prefix must not be typed on the way out: {:?}",
+        h.injector.texts()
+    );
+
+    // 6. And dictation resumes.
+    h.daemon.process_text("back to typing").await;
+    assert_eq!(
+        h.injector.texts().last().map(String::as_str),
+        Some("Back to typing."),
+        "dictation resumed"
+    );
+}
+
+/// Every spelling of the mode phrases, through the same path.
+#[tokio::test]
+async fn every_mode_phrase_switches_in_both_directions() {
+    for (into, out_of) in [
+        ("command mode", "dictation mode"),
+        ("start command mode", "stop command mode"),
+        ("start commands", "stop commands"),
+        ("lets command", "lets type"),
+        ("let s command", "let s type"),
+        ("let command", "let type"),
+        ("command mode", "dictate"),
+        ("command mode", "text mode"),
+        ("command mode", "type mode"),
+        ("command mode", "exit command mode"),
+    ] {
+        let mut config = defaults();
+        config.editing.command_mode = true;
+        let mut h = harness_with(
+            config,
+            FakeTranscriber::saying("unused"),
+            RecordingInjector::shared(),
+        );
+
+        h.daemon.process_text(into).await;
+        assert!(h.shared.command_mode(), "{into:?} must enter command mode");
+        h.daemon.process_text(out_of).await;
+        assert!(!h.shared.command_mode(), "{out_of:?} must leave it");
+        assert!(
+            h.injector.texts().is_empty(),
+            "{into:?}/{out_of:?} typed {:?}",
+            h.injector.texts()
+        );
+    }
+}
+
+/// With the feature off, no mode phrase may do anything at all.
+#[tokio::test]
+async fn the_mode_phrases_are_inert_when_the_feature_is_off() {
+    let mut config = defaults();
+    config.editing.command_mode = false;
+    let mut h = harness_with(
+        config,
+        FakeTranscriber::saying("unused"),
+        RecordingInjector::shared(),
+    );
+
+    h.daemon.process_text("command mode").await;
+
+    assert!(!h.shared.command_mode(), "no dormant phrase may surprise");
+    assert_eq!(
+        h.injector.texts(),
+        ["Command mode."],
+        "it dictates as ordinary text instead"
+    );
+}
+
 #[tokio::test]
 async fn a_non_command_in_command_mode_is_discarded_not_typed() {
     // The failure the mode exists to prevent: half-heard command words
