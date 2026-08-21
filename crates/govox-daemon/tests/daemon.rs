@@ -115,6 +115,7 @@ struct RecordingAnnouncer {
     states: Mutex<Vec<String>>,
     captions: Mutex<Vec<String>>,
     notifications: Mutex<Vec<(String, String)>>,
+    modes: Mutex<Vec<Option<String>>>,
 }
 
 impl RecordingAnnouncer {
@@ -129,6 +130,9 @@ impl RecordingAnnouncer {
     }
     fn notifications(&self) -> Vec<(String, String)> {
         self.notifications.lock().unwrap().clone()
+    }
+    fn modes(&self) -> Vec<Option<String>> {
+        self.modes.lock().unwrap().clone()
     }
 }
 
@@ -145,6 +149,9 @@ impl Announcer for RecordingAnnouncer {
             .unwrap()
             .push((title.to_owned(), body.to_owned()));
     }
+    fn mode(&self, mode: Option<&str>) {
+        self.modes.lock().unwrap().push(mode.map(str::to_owned));
+    }
 }
 
 struct SharedAnnouncer(Arc<RecordingAnnouncer>);
@@ -158,6 +165,9 @@ impl Announcer for SharedAnnouncer {
     }
     fn notify(&self, title: &str, body: &str) {
         self.0.notify(title, body);
+    }
+    fn mode(&self, mode: Option<&str>) {
+        self.0.mode(mode);
     }
 }
 
@@ -386,6 +396,45 @@ async fn re_entering_command_mode_does_not_re_announce() {
         h.announcer.notifications().len(),
         after_first,
         "re-entering is what a user does when unsure which mode they are in"
+    );
+}
+
+/// A mode must be a standing indicator, not an announcement that fades.
+///
+/// The failure this pins: command mode was reported once, by a caption that the
+/// next transcript overwrites and a notification that disappears. Sitting in it
+/// unknowingly is indistinguishable from it being broken.
+#[tokio::test]
+async fn command_mode_raises_and_lowers_a_standing_indicator() {
+    let mut config = defaults();
+    config.editing.command_mode = true;
+    let mut h = harness_with(
+        config,
+        FakeTranscriber::saying("unused"),
+        RecordingInjector::shared(),
+    );
+
+    h.daemon.process_text("command mode").await;
+    assert_eq!(
+        h.announcer.modes(),
+        [Some("command".to_owned())],
+        "entering must raise the indicator"
+    );
+
+    // Dictating in between must not lower it — this is the part a caption
+    // cannot do, because the transcript overwrites it.
+    h.daemon.process_text("press enter").await;
+    assert_eq!(
+        h.announcer.modes(),
+        [Some("command".to_owned())],
+        "a command inside the mode must not disturb the indicator"
+    );
+
+    h.daemon.process_text("dictate").await;
+    assert_eq!(
+        h.announcer.modes(),
+        [Some("command".to_owned()), None],
+        "leaving must lower it"
     );
 }
 

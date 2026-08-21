@@ -78,6 +78,14 @@ pub trait Announcer: Send + Sync {
     fn expect_anchor(&self) {}
     /// Draw the reported caret rectangle, for calibrating an app rule.
     fn caret_marker(&self, _enabled: bool) {}
+    /// Enter or leave a sustained mode; `None` is plain dictation.
+    ///
+    /// Defaulted, like `level` and `anchor`: only the surfaces that can hold a
+    /// standing indicator have anything to do with it. Distinct from
+    /// `set_state` on purpose — a mode outlives the utterance, and announcing
+    /// it once through a notification that fades is what let someone sit in
+    /// command mode believing it had done nothing.
+    fn mode(&self, _mode: Option<&str>) {}
 }
 
 /// Logs instead of showing anything. The default until M7.
@@ -452,6 +460,11 @@ impl<T: Transcriber> Daemon<T> {
             return;
         }
         tracing::info!(enabled, "command mode");
+        // The standing indicator first: it is the one that is still there in
+        // thirty seconds, when the caption has been overwritten by a transcript
+        // and the notification has faded.
+        self.announcer
+            .mode(if enabled { Some("command") } else { None });
         if enabled {
             self.announcer.caption("command mode — speak a command");
             self.announcer

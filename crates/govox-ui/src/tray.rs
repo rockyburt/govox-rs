@@ -8,7 +8,9 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use govox_core::feedback::{PULSE_FRAMES, PULSE_INTERVAL_MS, state_presentation};
+use govox_core::feedback::{
+    PULSE_FRAMES, PULSE_INTERVAL_MS, mode_presentation, state_presentation,
+};
 use ksni::TrayMethods as _;
 use tokio::sync::mpsc;
 
@@ -52,6 +54,12 @@ struct TrayState {
     state: std::sync::Mutex<String>,
     /// Which pulse frame is showing; `usize::MAX` means "not pulsing".
     pulse_frame: AtomicUsize,
+    /// The sustained mode, if govox is in one.
+    ///
+    /// Separate from `state` because they answer different questions and one
+    /// must not overwrite the other: `state` is what is happening this second,
+    /// this is what will keep happening until told otherwise.
+    mode: std::sync::Mutex<Option<String>>,
     /// Filled in after construction: several of these facts are not known yet
     /// when the tray registers. The injector is chosen and the accessibility
     /// bus is dialled well after the icon has to appear, and delaying the icon
@@ -60,6 +68,24 @@ struct TrayState {
 }
 
 const NOT_PULSING: usize = usize::MAX;
+
+impl GovoxTray {
+    fn mode(&self) -> Option<String> {
+        self.state.mode.lock().expect("tray mode poisoned").clone()
+    }
+
+    /// The one line that says what govox will do with what you say next.
+    ///
+    /// A mode wins, because it is the answer that lasts: "Listening" while in
+    /// command mode is true and useless.
+    fn status_line(&self) -> String {
+        if let Some(mode) = self.mode() {
+            return mode_presentation(&mode).0.to_owned();
+        }
+        let state = self.state.state.lock().expect("tray state poisoned");
+        state_presentation(&state).0.to_owned()
+    }
+}
 
 impl ksni::Tray for GovoxTray {
     fn id(&self) -> String {
@@ -71,6 +97,12 @@ impl ksni::Tray for GovoxTray {
     }
 
     fn icon_name(&self) -> String {
+        // A mode outranks both the pulse and the state. While one is on, what
+        // the panel must answer is "what will happen when I speak", not "is
+        // audio arriving" — and in command mode the answer is "not typing".
+        if let Some(mode) = self.mode() {
+            return mode_presentation(&mode).1.to_owned();
+        }
         let frame = self.state.pulse_frame.load(Ordering::Relaxed);
         if frame != NOT_PULSING {
             return PULSE_FRAMES[frame % PULSE_FRAMES.len()].to_owned();
@@ -84,10 +116,10 @@ impl ksni::Tray for GovoxTray {
     }
 
     fn tool_tip(&self) -> ksni::ToolTip {
-        let state = self.state.state.lock().expect("tray state poisoned");
+        let description = self.status_line();
         ksni::ToolTip {
             title: "govox".into(),
-            description: state_presentation(&state).0.into(),
+            description,
             icon_name: String::new(),
             icon_pixmap: Vec::new(),
         }
@@ -95,9 +127,7 @@ impl ksni::Tray for GovoxTray {
 
     fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
         use ksni::menu::{MenuItem, StandardItem, SubMenu};
-        let state = self.state.state.lock().expect("tray state poisoned");
-        let label = state_presentation(&state).0.to_owned();
-        drop(state);
+        let label = self.status_line();
 
         vec![
             // Not activatable: it is a status line, not an action.
@@ -209,6 +239,7 @@ impl Tray {
         let (commands, receiver) = mpsc::unbounded_channel();
         let state = Arc::new(TrayState {
             state: std::sync::Mutex::new("idle".to_owned()),
+            mode: std::sync::Mutex::new(None),
             pulse_frame: AtomicUsize::new(NOT_PULSING),
             about: std::sync::Mutex::new(AboutFacts::default()),
         });
@@ -245,6 +276,12 @@ impl Tray {
 
     pub fn set_state(&self, state: &str) {
         *self.state.state.lock().expect("tray state poisoned") = state.to_owned();
+        self.refresh();
+    }
+
+    /// Enter or leave a sustained mode, or `None` for plain dictation.
+    pub fn set_mode(&self, mode: Option<&str>) {
+        *self.state.mode.lock().expect("tray mode poisoned") = mode.map(str::to_owned);
         self.refresh();
     }
 

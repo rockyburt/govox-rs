@@ -195,6 +195,12 @@ impl<S: PlaySink + 'static> Announcer for FeedbackChannel<S> {
         }
     }
 
+    fn mode(&self, mode: Option<&str>) {
+        if let Some(tray) = &self.tray {
+            tray.set_mode(mode);
+        }
+    }
+
     fn caption(&self, text: &str) {
         if self.config.overlay_caption
             && let Some(overlay) = &self.overlay

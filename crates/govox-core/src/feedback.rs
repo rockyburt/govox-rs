@@ -200,6 +200,26 @@ pub fn state_presentation(state: &str) -> (&'static str, &'static str) {
     }
 }
 
+/// How a sustained *mode* is shown, as distinct from a transient state.
+///
+/// Modes and states answer different questions and must not share a slot.
+/// "Listening" is what govox is doing this second; "command mode" is what it
+/// will keep doing until told otherwise. macOS Voice Control keeps its mode on
+/// screen permanently, and the reason is the failure this fixes: a mode
+/// announced once, by a notification that fades, is a mode you can be in
+/// without knowing — which reads exactly like the feature being broken.
+#[must_use]
+pub fn mode_presentation(mode: &str) -> (&'static str, &'static str) {
+    match mode {
+        // Deliberately not a microphone: the point is that speech is *not*
+        // being transcribed right now.
+        "command" => ("Command mode", "system-run-symbolic"),
+        "spelling" => ("Spelling mode", "format-text-underline-symbolic"),
+        "asleep" => ("Asleep", "media-playback-pause-symbolic"),
+        _ => ("Dictating", FALLBACK_ICON),
+    }
+}
+
 pub const FALLBACK_ICON: &str = "audio-input-microphone-symbolic";
 
 /// While listening, alternate the record dot with the idle mic outline on a
@@ -210,6 +230,38 @@ pub const PULSE_INTERVAL_MS: u64 = 600;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_mode_never_presents_as_a_microphone() {
+        // The whole signal is "speech is not being transcribed right now". An
+        // icon that still says microphone would defeat the indicator.
+        for mode in ["command", "spelling", "asleep"] {
+            let (label, icon) = mode_presentation(mode);
+            assert!(!label.is_empty(), "{mode}");
+            assert_ne!(icon, FALLBACK_ICON, "{mode} must look unlike dictation");
+        }
+    }
+
+    #[test]
+    fn an_unknown_mode_reads_as_plain_dictation() {
+        // Never a blank panel: an unrecognised mode degrades to the ordinary
+        // state rather than to nothing.
+        assert_eq!(mode_presentation("nonsense").1, FALLBACK_ICON);
+    }
+
+    #[test]
+    fn modes_and_states_do_not_share_a_presentation() {
+        // They answer different questions, so a reader must be able to tell
+        // "listening" from "in command mode" at a glance.
+        assert_ne!(
+            mode_presentation("command").1,
+            state_presentation("listening").1
+        );
+        assert_ne!(
+            mode_presentation("command").0,
+            state_presentation("listening").0
+        );
+    }
 
     #[test]
     fn an_empty_frame_has_no_amplitude() {
