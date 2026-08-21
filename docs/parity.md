@@ -1,5 +1,5 @@
 ---
-last_verified: 2026-08-19
+last_verified: 2026-08-21
 owner: rockyburt
 type: Decision Record
 covers:

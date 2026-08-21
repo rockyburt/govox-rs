@@ -110,9 +110,20 @@ Settings live in `~/.config/govox/config.toml` and are layered over the built-in
 defaults, so you only write the keys you are changing. Every default and its reasoning is
 in [`config/default.toml`](config/default.toml) — it is meant to be read.
 
-A small, useful starting point:
+### The optimal mode
+
+An input method, streaming, and both editing opt-ins on. Dictation appears as underlined
+provisional text in the field and commits in one insertion when you stop — so it cannot
+race your typing, it reaches apps that expose no writable text, a single Escape stops a
+session, and no root or udev rule is needed.
 
 ```toml
+[ime]
+enabled = true            # underlined provisional text instead of typed-then-corrected
+
+[streaming]
+enabled = true            # show words while you speak, rather than only at the end
+
 [recognition]
 model = "small.en"        # see below
 gpu_device = 0
@@ -121,12 +132,14 @@ gpu_device = 0
 mode = "double_tap"       # or "toggle", or "push_to_talk"
 toggle_key = "KEY_RIGHTCTRL"
 
-[streaming]
-enabled = true            # show words while you speak, rather than only at the end
-
-[ime]
-enabled = true            # underlined provisional text instead of typed-then-corrected
+[editing]
+command_mode = true       # discard a misheard command instead of typing it
+read_focused_field = true # let "delete that" verify its target before acting
 ```
+
+Without an input method govox falls back to synthetic keystrokes: it works, but needs
+`ydotoold` as root or a udev rule. For what each setting is, what it is used for and how
+it works in both modes, see [docs/guides/index.md](docs/guides/index.md).
 
 An unknown **section** is rejected at startup, so `[recogniton]` tells you immediately. An
 unknown **key inside a known section** is accepted and ignored, so `beem_size = 4` does
@@ -135,11 +148,10 @@ itself retired are the exception: those are named in a startup warning.
 
 ### Choosing a model
 
-Models are GGUF builds of Whisper, fetched from Hugging Face on first use and cached, from
-`tiny` up to `large-v3-turbo`. Decode cost varies by roughly 20× across that range and is
-the main thing to tune — `small.en` is a good default. For the full comparison, and how to
-time the options on your own hardware, see the guides indexed from
-[docs/index.md](docs/index.md).
+Models are GGUF builds of Whisper, fetched on first use and cached, from `tiny` up to
+`large-v3-turbo`. Decode cost varies by roughly 20× across that range and is the main
+thing to tune — `small.en` is a good default. For the comparison and how to time your own
+hardware, see [docs/guides/index.md](docs/guides/index.md).
 
 ## Design
 
@@ -173,7 +185,7 @@ Rough edges worth knowing before you rely on it:
   session and a content check; a new variant may still slip through.
 - **Streaming trails a whole-utterance decode**, at corrected word error 0.089 against
   0.082 on the eval corpus. Dictation takes the streaming path, so that is the number
-  that describes what you get. See [docs/guides/accuracy-eval.md](docs/guides/accuracy-eval.md).
+  that describes what you get. See [docs/guides/index.md](docs/guides/index.md).
 - **The accuracy corpus is personal** — 29 clips that failed on one machine, in one voice.
   It catches regressions in this pipeline; it is not a claim about whisper in general.
 - **`ydotool` is required** for the non-IBus path, which means a daemon running as root

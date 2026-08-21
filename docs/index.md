@@ -1,5 +1,5 @@
 ---
-last_verified: 2026-08-14
+last_verified: 2026-08-21
 owner: rockyburt
 type: Index
 okf_version: "0.1"
@@ -24,9 +24,10 @@ pre-implementation evidence.
 
 ## Sections
 
-- **[guides/](guides/index.md)** — picking a Whisper model size and `.en` variant, the decode-cost
-  spread and its effect on streaming preview cadence, timing your own hardware, and the
-  `gpu_device` difference between the Vulkan and CUDA builds.
+- **[guides/](guides/index.md)** — the IBus preedit mode versus the `ydotool`/clipboard
+  fallback and what each setting does, picking a Whisper model size and `.en` variant, the
+  decode-cost spread and its effect on streaming preview cadence, timing your own hardware,
+  and the `gpu_device` difference between the Vulkan and CUDA builds.
 - **[reference/](reference/index.md)** — the exact machine every measurement came from
   (ThinkPad P1 Gen 7, RTX 4070, Intel Arc, Ubuntu 26.04, GNOME 50.1 Wayland, IBus 1.5.34),
   Vulkan device ordering and `gpu_device`, and the list of desktops, backends and languages
