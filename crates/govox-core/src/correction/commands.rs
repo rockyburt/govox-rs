@@ -163,9 +163,79 @@ pub fn detect_command(text: &str, mode_switching: bool, command_mode: bool) -> P
     PipelineAction::Text(text.to_owned())
 }
 
+/// The longest run of trailing words that is a command, and the text before it.
+///
+/// **Why this exists.** Every command matches as a whole utterance, and with
+/// streaming on an "utterance" is the whole session — `finish_streaming` hands
+/// over `session_text + tail`. So "delete that" said after anything else was
+/// never a command, it was the last two words of a long string that matched
+/// nothing. Streaming became the default in 0.2.0, which silently took every
+/// whole-utterance command away from anyone dictating more than one phrase at a
+/// time.
+///
+/// `start over` was the exception that showed the shape of the fix: it is
+/// matched as a suffix precisely because it is said mid-flow, after other
+/// words. This generalises that to the rest.
+///
+/// **Tier 2 is deliberately excluded** — `detect_command` is called with
+/// `command_mode: false` here whatever the caller's mode. Those patterns take a
+/// free-form slot, so `delete (?P<phrase>.+)` would match at the longest cut and
+/// swallow the sentence in front of it as the thing to delete. Tier 1 is
+/// bounded by its tables and cannot.
+///
+/// Returns `None` when no trailing command is found, when the whole text is one
+/// (the caller has already tried that), or when there is nothing in front of
+/// it to keep.
+#[must_use]
+pub fn split_trailing_command(
+    text: &str,
+    mode_switching: bool,
+) -> Option<(String, PipelineAction)> {
+    let starts = word_starts(text);
+    // At least one word must remain in front, or this is the whole-utterance
+    // case that `detect_command` already answered.
+    let most = MAX_COMMAND_WORDS.min(starts.len().saturating_sub(1));
+
+    // Longest first: "delete previous three words" must win over the "words"
+    // that ends it, which is not a command but a shorter cut would test first.
+    for count in (1..=most).rev() {
+        let cut = starts[starts.len() - count];
+        let action = detect_command(&text[cut..], mode_switching, false);
+        if !matches!(action, PipelineAction::Text(_)) {
+            let prefix = text[..cut].trim_end();
+            if prefix.is_empty() {
+                return None;
+            }
+            return Some((prefix.to_owned(), action));
+        }
+    }
+    None
+}
+
+/// The longest tier 1 command, in words: "extend selection previous twenty five
+/// words" and "move to beginning of the document" are both six. Eight leaves
+/// room without letting the scan reach far enough back to be surprising.
+const MAX_COMMAND_WORDS: usize = 8;
+
+/// Byte offsets where each whitespace-separated word begins.
+fn word_starts(text: &str) -> Vec<usize> {
+    let mut starts = Vec::new();
+    let mut in_word = false;
+    for (index, character) in text.char_indices() {
+        if character.is_whitespace() {
+            in_word = false;
+        } else if !in_word {
+            starts.push(index);
+            in_word = true;
+        }
+    }
+    starts
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::EditOp;
 
     fn replacement_for(text: &str) -> Option<String> {
         match detect_command(text, false, true) {
@@ -208,6 +278,98 @@ mod tests {
                 "{text}"
             );
         }
+    }
+
+    fn split(text: &str) -> Option<(String, PipelineAction)> {
+        split_trailing_command(text, true)
+    }
+
+    #[test]
+    fn a_command_said_after_other_words_is_still_a_command() {
+        // The bug this exists for: with streaming on, the whole session arrives
+        // as one string, so this is the ordinary case.
+        let (prefix, action) = split("so i said hello command mode").expect("must split");
+        assert_eq!(prefix, "so i said hello");
+        assert_eq!(action, PipelineAction::Mode { command_mode: true });
+    }
+
+    #[test]
+    fn the_longest_trailing_command_wins() {
+        // A shorter cut would test "words" first, which is not a command; the
+        // scan must reach the whole phrase.
+        let (prefix, action) = split("here is the text delete previous three words").unwrap();
+        assert_eq!(prefix, "here is the text");
+        let PipelineAction::Edit(edit) = action else {
+            panic!("expected an edit");
+        };
+        assert_eq!(edit.op, EditOp::DeleteUnit);
+        assert_eq!(edit.count, 3);
+    }
+
+    #[test]
+    fn punctuation_and_capitals_do_not_stop_it() {
+        // By the time this runs the pipeline has sentence-cased the text and
+        // added a full stop.
+        let (prefix, action) = split("Hello there. Delete that.").unwrap();
+        assert_eq!(prefix, "Hello there.");
+        assert!(matches!(action, PipelineAction::Edit(_)));
+    }
+
+    #[test]
+    fn every_kind_of_tier_one_command_is_reachable() {
+        for (text, keep) in [
+            ("some words new line", "some words"),
+            ("some words space bar", "some words"),
+            ("some words press enter", "some words"),
+            ("some words press control s", "some words"),
+            ("some words kill last word", "some words"),
+            ("some words undo that", "some words"),
+            ("some words dictate", "some words"),
+            ("some words move to end of the document", "some words"),
+        ] {
+            let (prefix, _) = split(text).unwrap_or_else(|| panic!("{text} must split"));
+            assert_eq!(prefix, keep, "{text}");
+        }
+    }
+
+    #[test]
+    fn ordinary_prose_is_left_alone() {
+        for text in [
+            "this is just a sentence",
+            "i pressed the button",
+            "the last word was hers",
+            "we should select a venue",
+        ] {
+            assert_eq!(split(text), None, "{text} must stay text");
+        }
+    }
+
+    #[test]
+    fn the_whole_utterance_case_is_not_a_split() {
+        // `detect_command` has already answered these; splitting them would
+        // leave an empty prefix and type nothing.
+        for text in ["command mode", "delete that", "press enter"] {
+            assert_eq!(split(text), None, "{text}");
+        }
+    }
+
+    #[test]
+    fn a_free_form_phrase_edit_cannot_swallow_the_sentence() {
+        // Tier 2 is excluded from the scan whatever the caller's mode. Were it
+        // not, `delete (?P<phrase>.+)` would match at the longest cut and take
+        // the words in front of it as the thing to delete.
+        let text = "the quick brown fox delete the old draft";
+        let split = split_trailing_command(text, true);
+        // "delete the old draft" is not a tier 1 command, so nothing fires.
+        assert_eq!(split, None);
+    }
+
+    #[test]
+    fn the_scan_does_not_reach_further_back_than_a_command_can_be() {
+        // Nine words of prose ending in a word that appears in a command table
+        // must not be searched to the start of the string.
+        let text = "one two three four five six seven eight nine words";
+        assert_eq!(split(text), None);
     }
 
     #[test]

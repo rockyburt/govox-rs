@@ -272,6 +272,28 @@ impl<T: Transcriber> Daemon<T> {
         );
 
         self.await_modifiers_released(MODIFIER_TIMEOUT).await;
+
+        // A command said after other words. Under streaming the whole session
+        // arrives as one string, so this is the ordinary case rather than the
+        // exotic one — see `split_trailing_command`.
+        if let PipelineAction::Text(text) = &result.action
+            && let Some((prefix, action)) = govox_core::correction::commands::split_trailing_command(
+                text,
+                self.shared.config.load().editing.command_mode,
+            )
+        {
+            tracing::info!(?action, "a command was said after other words");
+            if self.shared.command_mode() {
+                // In command mode the words in front are not dictation; they
+                // are what was said while nothing was being typed, and typing
+                // them now is the failure the mode exists to prevent.
+                tracing::info!(%prefix, "command mode: discarded the words before the command");
+            } else {
+                self.apply_action(PipelineAction::Text(prefix))?;
+            }
+            return self.apply_action(action);
+        }
+
         self.apply_action(result.action)
     }
 

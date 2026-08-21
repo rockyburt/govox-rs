@@ -96,6 +96,30 @@ before 1.0.0, minor versions may change behaviour.
   the session ends. In a multi-line field dictation continues. A client that never reports a
   content type counts as multi-line — continuing a session is recoverable, ending one is not.
 
+### Fixed
+
+- **Commands work again when said after other words.** "So I said hello, *delete that*" now
+  fires the command and types the words in front of it.
+
+  This was a regression, and streaming becoming the default in 0.2.0 caused it. Every
+  command matches as a **whole utterance**, and under streaming an "utterance" is the whole
+  session — `finish_streaming` hands over `session_text + tail` as one string. So anything
+  said after a first phrase matched nothing and was dictated as text. Inline transforms —
+  spoken punctuation, emoji, case, numbers — apply within whatever text arrives and were
+  unaffected, which is why the breakage looked selective: 👍 worked while `command mode`
+  did not.
+
+  `start over` was the one command that kept working, because it alone is matched as a
+  *suffix* — it exists to be said mid-flow. That is now how all of them are matched, over a
+  trailing run of up to eight words.
+
+  **Tier 2 is deliberately excluded from the scan.** Its patterns take a free-form slot, so
+  `delete <phrase>` would match at the longest cut and swallow the sentence in front of it
+  as the thing to delete. Tier 1 is bounded by its tables and cannot.
+
+  The cost, accepted knowingly: prose that genuinely ends in command words now fires the
+  command.
+
 ### Changed
 
 - **`[correction] case_control` is now on by default.** Spoken case — "all caps hello",

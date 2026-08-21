@@ -259,6 +259,13 @@ fn evaluate(stage: &str, args: &Value) -> Option<Value> {
             &text(args, "text"),
             optional(args, "purpose").as_deref()
         )),
+        "split_trailing_command" => match commands::split_trailing_command(
+            &text(args, "text"),
+            args["mode_switching"].as_bool().unwrap(),
+        ) {
+            Some((prefix, action)) => json!({"prefix": prefix, "action": action_json(&action)}),
+            None => Value::Null,
+        },
         "detect_command" => action_json(&commands::detect_command(
             &text(args, "text"),
             args["mode_switching"].as_bool().unwrap(),
@@ -793,6 +800,40 @@ fn table_driven_records() -> Vec<(&'static str, Value)> {
             "detect_command",
             json!({ "text": text, "mode_switching": false, "command_mode": false }),
         ));
+    }
+
+    // Trailing commands. The scan is what makes a command work mid-session
+    // under streaming, and its risk is the mirror image: prose that happens to
+    // end in command words. Both sides are recorded.
+    for text in [
+        "so i said hello command mode",
+        "here is the text delete previous three words",
+        "some words kill last word",
+        "some words undo that",
+        "some words press enter",
+        "some words press control s",
+        "some words new line",
+        "some words space bar",
+        "some words dictate",
+        "some words move to end of the document",
+        "Hello there. Delete that.",
+        // Prose that must survive untouched.
+        "this is just a sentence",
+        "i pressed the button",
+        "the last word was hers",
+        "we should select a venue",
+        "one two three four five six seven eight nine words",
+        "the quick brown fox delete the old draft",
+        // Whole-utterance forms, which are not splits.
+        "command mode",
+        "delete that",
+    ] {
+        for mode_switching in [true, false] {
+            out.push((
+                "split_trailing_command",
+                json!({ "text": text, "mode_switching": mode_switching }),
+            ));
+        }
     }
 
     // Every mode phrase, at both settings of the switch that enables them. A
