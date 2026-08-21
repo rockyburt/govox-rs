@@ -52,9 +52,42 @@ const IBUS_KEY_ESCAPE: u32 = 0xff1b;
 /// `IBUS_RELEASE_MASK`, bit 30 of the modifier state: this event is a release.
 const IBUS_RELEASE_MASK: u32 = 1 << 30;
 
-/// `IBUS_KEY_Return` and `IBUS_KEY_KP_Enter`, the two ways Enter arrives.
-const IBUS_KEY_RETURN: u32 = 0xff0d;
-const IBUS_KEY_KP_ENTER: u32 = 0xff8d;
+/// Keys that move the caret or submit, paired with how to re-issue them.
+///
+/// Every one has the same hazard: nothing enters the document until govox
+/// commits, so a key that reaches the application first acts on text that is
+/// not there yet. Enter lands the newline in front of the words; Home moves to
+/// the start of a line the words have not joined; Tab leaves the field before
+/// they arrive.
+///
+/// A **vetted list**, not a rule. Keys that merely type — letters, digits — have
+/// no ordering problem worth consuming a keystroke over, and the right-hand
+/// names are chord names `keycodes::KEYCODES` carries, so re-issuing cannot hit
+/// the `ydotool key` silent-success path. Keysyms were read off the installed
+/// IBus through its own typelib rather than recalled.
+const FLUSH_KEYS: &[(u32, &str)] = &[
+    // `IBUS_KEY_Return` and `IBUS_KEY_KP_Enter`, the two ways Enter arrives.
+    (0xff0d, "enter"),
+    (0xff8d, "enter"),
+    (0xff09, "tab"),
+    (0xff51, "left"),
+    (0xff52, "up"),
+    (0xff53, "right"),
+    (0xff54, "down"),
+    (0xff50, "home"),
+    (0xff57, "end"),
+    (0xff55, "pageup"),
+    (0xff56, "pagedown"),
+];
+
+/// Shift, Control, Alt and Super, as IBus reports them in the state word.
+///
+/// A modified press is **never** consumed. Re-issuing it would have to rebuild
+/// the chord, and losing a modifier is worse than the reordering this fixes:
+/// `shift+left` re-issued as `left` silently drops a selection instead of
+/// extending one, and `ctrl+home` becomes `home`. Passing the modified key
+/// through leaves the rare reorder in place, which is the lesser fault.
+const IBUS_MODIFIER_MASKS: u32 = 0x1 | 0x4 | 0x8 | 0x40;
 
 /// `IBusInputHints.MULTILINE`, read off the installed IBus rather than guessed:
 /// the hint word is a bitfield and the bit is not where a reader would assume.
@@ -97,7 +130,7 @@ struct Inner {
     stop_tx: Option<tokio::sync::mpsc::UnboundedSender<()>>,
     /// Told when the engine consumed a key that needs the preedit committed
     /// first. Carries whether the field takes newlines.
-    flush_tx: Option<tokio::sync::mpsc::UnboundedSender<bool>>,
+    flush_tx: Option<tokio::sync::mpsc::UnboundedSender<(&'static str, bool)>>,
     /// Whether provisional text is currently on screen and uncommitted.
     ///
     /// The engine consumes Enter only when there is something to commit ahead
@@ -137,7 +170,7 @@ impl FieldState {
     }
 
     /// Where to report a key that needs the preedit committed before it lands.
-    pub fn set_flush_channel(&self, tx: tokio::sync::mpsc::UnboundedSender<bool>) {
+    pub fn set_flush_channel(&self, tx: tokio::sync::mpsc::UnboundedSender<(&'static str, bool)>) {
         self.lock().flush_tx = Some(tx);
     }
 
@@ -164,16 +197,16 @@ impl FieldState {
     /// Returns whether it was consumed. The same delivery guard as
     /// [`take_stop`](Self::take_stop): swallowing the key and then failing to
     /// commit would lose the keypress *and* leave the text uncommitted.
-    fn take_flush(&self, is_flush_key: bool) -> bool {
+    fn take_flush(&self, key: Option<&'static str>) -> bool {
         let inner = self.lock();
-        if !is_flush_key || !inner.session_active || !inner.preedit_pending {
+        let (Some(chord), true, true) = (key, inner.session_active, inner.preedit_pending) else {
             return false;
-        }
+        };
         let multiline = inner
             .hints
             .is_none_or(|hints| hints & IBUS_INPUT_HINT_MULTILINE != 0);
         match &inner.flush_tx {
-            Some(tx) => tx.send(multiline).is_ok(),
+            Some(tx) => tx.send((chord, multiline)).is_ok(),
             None => false,
         }
     }
@@ -330,11 +363,17 @@ impl Engine {
         if self.state.take_stop(keyval == IBUS_KEY_ESCAPE) {
             return true;
         }
-        // Enter is consumed only to be re-issued *after* the commit. Left to
-        // pass through, the newline reaches the application while the words are
-        // still provisional, and lands in front of them.
-        self.state
-            .take_flush(matches!(keyval, IBUS_KEY_RETURN | IBUS_KEY_KP_ENTER))
+        // A modified press is passed through rather than rebuilt; see the mask.
+        if state & IBUS_MODIFIER_MASKS != 0 {
+            return false;
+        }
+        // Consumed only to be re-issued *after* the commit. Left to pass
+        // through, these act on text that has not landed yet.
+        let key = FLUSH_KEYS
+            .iter()
+            .find(|(sym, _)| *sym == keyval)
+            .map(|(_, chord)| *chord);
+        self.state.take_flush(key)
     }
 
     /// The client telling us where the caret is, in screen coordinates.
@@ -592,16 +631,23 @@ mod tests {
         state.set_session_active(true);
 
         // Nothing provisional: the key has no ordering problem, so it passes.
-        assert!(!state.take_flush(true));
+        assert!(!state.take_flush(Some("enter")));
         assert!(rx.try_recv().is_err());
 
         state.set_preedit_pending(true);
-        assert!(state.take_flush(true), "consumed with a pending preedit");
+        assert!(
+            state.take_flush(Some("enter")),
+            "consumed with a pending preedit"
+        );
         assert!(rx.try_recv().is_ok());
+
+        // A key that is not on the list is never consumed.
+        state.set_preedit_pending(true);
+        assert!(!state.take_flush(None));
 
         // And not while idle, however much preedit is showing.
         state.set_session_active(false);
-        assert!(!state.take_flush(true));
+        assert!(!state.take_flush(Some("enter")));
     }
 
     #[test]
@@ -614,21 +660,21 @@ mod tests {
 
         // Unknown counts as multi-line: continuing a session is recoverable.
         assert_eq!(state.is_multiline(), None);
-        assert!(state.take_flush(true));
-        assert!(rx.try_recv().unwrap(), "multi-line");
+        assert!(state.take_flush(Some("enter")));
+        assert!(rx.try_recv().unwrap().1, "multi-line");
 
         state.set_content_type(0, IBUS_INPUT_HINT_MULTILINE);
         assert_eq!(state.is_multiline(), Some(true));
         state.set_preedit_pending(true);
-        assert!(state.take_flush(true));
-        assert!(rx.try_recv().unwrap(), "multi-line");
+        assert!(state.take_flush(Some("enter")));
+        assert!(rx.try_recv().unwrap().1, "multi-line");
 
         // A content type that reports hints without the multiline bit.
         state.set_content_type(0, 1);
         assert_eq!(state.is_multiline(), Some(false));
         state.set_preedit_pending(true);
-        assert!(state.take_flush(true));
-        assert!(!rx.try_recv().unwrap(), "single-line");
+        assert!(state.take_flush(Some("enter")));
+        assert!(!rx.try_recv().unwrap().1, "single-line");
     }
 
     #[test]
@@ -636,5 +682,59 @@ mod tests {
         // Read off the installed IBus rather than assumed; a wrong bit here
         // would end sessions in text areas and continue them in search boxes.
         assert_eq!(IBUS_INPUT_HINT_MULTILINE, 1 << 14);
+    }
+
+    #[test]
+    fn the_flush_carries_the_chord_to_re_issue() {
+        let state = FieldState::new();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        state.set_flush_channel(tx);
+        state.set_session_active(true);
+        for chord in ["tab", "home", "end", "left", "pagedown"] {
+            state.set_preedit_pending(true);
+            assert!(state.take_flush(Some(chord)), "{chord}");
+            assert_eq!(rx.try_recv().unwrap().0, chord);
+        }
+    }
+
+    #[test]
+    fn every_flush_key_re_issues_as_a_translatable_chord() {
+        // Re-issuing goes through the same keycode table `press <key>` uses, so
+        // a chord name that is not in it would take the ydotool silent-success
+        // path and lose the keypress entirely.
+        for (keysym, chord) in FLUSH_KEYS {
+            assert!(
+                govox_core::keycodes::parse_chord(chord).is_ok(),
+                "{keysym:#x} → {chord:?} is not translatable"
+            );
+        }
+    }
+
+    #[test]
+    fn the_keysyms_are_the_ones_ibus_sends() {
+        // Read off the installed IBus rather than recalled; a wrong keysym here
+        // consumes the wrong key or silently fails to consume the right one.
+        for (name, keysym) in [
+            ("Return", 0xff0d),
+            ("KP_Enter", 0xff8d),
+            ("Tab", 0xff09),
+            ("Home", 0xff50),
+            ("Left", 0xff51),
+            ("Up", 0xff52),
+            ("Right", 0xff53),
+            ("Down", 0xff54),
+            ("Page_Up", 0xff55),
+            ("Page_Down", 0xff56),
+            ("End", 0xff57),
+        ] {
+            assert!(
+                FLUSH_KEYS.iter().any(|(sym, _)| *sym == keysym),
+                "{name} ({keysym:#x}) missing from the flush table"
+            );
+        }
+        assert_eq!(IBUS_KEY_ESCAPE, 0xff1b);
+        assert_eq!(IBUS_RELEASE_MASK, 0x4000_0000);
+        // Shift, Control, Alt, Super.
+        assert_eq!(IBUS_MODIFIER_MASKS, 0x1 | 0x4 | 0x8 | 0x40);
     }
 }

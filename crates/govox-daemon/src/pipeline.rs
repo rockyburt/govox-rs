@@ -25,7 +25,7 @@ use govox_asr::whisper::{WhisperHandle, WhisperRecognizer};
 use govox_audio::{Backoff, CaptureSupervisor};
 use govox_core::activation::{ActivationController, KeyEvent, Transition};
 use govox_core::config::Config;
-use govox_core::domain::{AudioFrame, Utterance};
+use govox_core::domain::{AudioFrame, EditAction, EditOp, Utterance};
 use govox_core::domain::{PreeditSink, TextModel};
 use govox_core::feedback::{LevelSmoother, SilenceMonitor};
 use govox_core::textmodel::DictationBuffer;
@@ -295,13 +295,13 @@ pub async fn run(
     // An Escape the engine consumed arrives as the same event the overlay's
     // stop button sends, so there is one way to stop and one place it happens.
     if let Some(state) = &ime_state {
-        let (flush_tx, mut flush_rx) = mpsc::unbounded_channel::<bool>();
+        let (flush_tx, mut flush_rx) = mpsc::unbounded_channel::<(&'static str, bool)>();
         state.set_flush_channel(flush_tx);
         let flushes = events_tx.clone();
         tokio::spawn(async move {
-            while let Some(multiline) = flush_rx.recv().await {
+            while let Some((chord, multiline)) = flush_rx.recv().await {
                 if flushes
-                    .send(Event::FlushRequested(multiline))
+                    .send(Event::FlushRequested(chord, multiline))
                     .await
                     .is_err()
                 {
@@ -505,6 +505,11 @@ const KEYBOARD_POLL: std::time::Duration = std::time::Duration::from_secs(1);
 enum Job {
     Utterance(Utterance),
     Text(String),
+    /// One editing action, run in queue order.
+    ///
+    /// Used to re-issue a key the IBus engine consumed, so the press lands
+    /// after the commit it was waiting for rather than before it.
+    Edit(EditAction),
     /// Tear the session down, once everything before it has been committed.
     ///
     /// Queued rather than run on the event loop because the work it ends is
@@ -533,7 +538,7 @@ enum Event {
     StopRequested(&'static str),
     /// Enter, consumed by the IBus engine so it can be re-issued after the
     /// commit. Carries whether the field takes newlines.
-    FlushRequested(bool),
+    FlushRequested(&'static str, bool),
     /// Stop *and discard*, from the stop key the IBus engine consumed.
     ///
     /// Separate from `StopRequested` because the overlay's stop button means
@@ -805,8 +810,8 @@ impl<A: Announcer> EventLoop<'_, A> {
             match event {
                 Event::Key(key) => self.on_key(&key).await,
                 Event::Frame(frame) => self.on_frame(&frame).await,
-                Event::FlushRequested(multiline) => {
-                    self.flush_then_newline(multiline).await;
+                Event::FlushRequested(chord, multiline) => {
+                    self.flush_then_key(chord, multiline).await;
                 }
                 Event::AbortRequested(reason) => {
                     tracing::debug!(
@@ -1068,7 +1073,19 @@ impl<A: Announcer> EventLoop<'_, A> {
     /// newline onto the `newline` command — the same path "new line" takes, so
     /// the injector presses Enter rather than typing a character, and it queues
     /// *behind* the commit instead of racing it.
-    async fn flush_then_newline(&mut self, multiline: bool) {
+    /// Commit what is provisional, then re-issue the key behind it.
+    ///
+    /// The engine consumed the key precisely so this order can be guaranteed:
+    /// left to pass through, these act on text that has not landed yet — Enter
+    /// puts its newline in front of the words, Home goes to the start of a line
+    /// they have not joined, Tab leaves the field before they arrive.
+    ///
+    /// Enter goes back as `Job::Text("\n")`, which the correction pipeline maps
+    /// onto the `newline` command — the path "new line" already takes, so the
+    /// clipboard injector can honour it too. The rest go back as a `PressKey`
+    /// edit over the same vetted keycode table `press <key>` uses. Both queue
+    /// *behind* the commit rather than racing it.
+    async fn flush_then_key(&mut self, chord: &'static str, multiline: bool) {
         if self.streaming_active {
             self.finish_streaming().await;
         } else if let Some(utterance) = self.segmenter.flush() {
@@ -1076,21 +1093,33 @@ impl<A: Announcer> EventLoop<'_, A> {
         }
         self.session_text.clear();
 
-        if self
-            .utterances
-            .try_send(Job::Text("\n".to_owned()))
-            .is_err()
-        {
+        let job = if chord == "enter" {
+            Job::Text("\n".to_owned())
+        } else {
+            Job::Edit(EditAction {
+                op: EditOp::PressKey,
+                unit: None,
+                direction: None,
+                count: 1,
+                phrase: Some(chord.to_owned()),
+                replacement: None,
+            })
+        };
+        if self.utterances.try_send(job).is_err() {
             // The key was consumed on the promise of re-issuing it. Say so:
-            // silently losing an Enter is the failure this whole path exists to
-            // avoid, merely in the other direction.
-            tracing::warn!("recognition is backlogged; the Enter was not re-issued");
+            // silently losing it is the failure this path exists to avoid,
+            // merely in the other direction.
+            tracing::warn!(
+                chord,
+                "recognition is backlogged; the key was not re-issued"
+            );
         }
 
-        // A single-line field has just been submitted, so the session is
-        // dictating into something that no longer exists. Unknown counts as
-        // multi-line: continuing a session is recoverable, ending one is not.
-        if !multiline {
+        // Only Enter submits. A single-line field is gone once it does, so the
+        // session is dictating into something that no longer exists. Unknown
+        // counts as multi-line: continuing a session is recoverable, ending one
+        // is not.
+        if chord == "enter" && !multiline {
             tracing::info!("single-line field submitted; ending the session");
             if let Some(transition) = self.controller.auto_stop() {
                 self.announcer.set_state(transition.state());
@@ -1197,6 +1226,16 @@ async fn consume<T: Transcriber>(
                 Some(Job::Text(text)) => {
                     daemon.listening = false;
                     daemon.process_text(&text).await;
+                }
+                Some(Job::Edit(action)) => {
+                    // A re-issued key, not dictation: a failure here is the
+                    // keypress being lost, which is worth a line but not worth
+                    // ending the session over.
+                    if let Err(error) =
+                        daemon.apply_action(govox_core::domain::PipelineAction::Edit(action))
+                    {
+                        tracing::warn!(%error, "the re-issued key could not be injected");
+                    }
                 }
                 // Last in the queue, so everything it ends has landed.
                 Some(Job::EndSession) => {

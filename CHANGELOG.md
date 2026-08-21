@@ -55,6 +55,22 @@ before 1.0.0, minor versions may change behaviour.
   never logs, counts by key, or retains anything: the added comparison is against one
   constant, records nothing, and every other key returns on the line it always did.
 
+- **Tab, the arrows, Home/End and Page Up/Down land after your words too**, on the same
+  path as Enter. Every one had the identical hazard: nothing enters the document until
+  govox commits, so a key reaching the application first acts on text that is not there
+  yet — Home goes to the start of a line the words have not joined, Tab leaves the field
+  before they arrive.
+
+  They are re-issued as a `press <key>` edit over the same vetted keycode table, so a name
+  that could not be translated fails the build rather than pressing nothing. Enter keeps its
+  own path, the `newline` command, which the clipboard injector can also honour.
+
+  **A modified press is never consumed.** `shift+left`, `ctrl+home` and the rest pass
+  through untouched, because re-issuing them would mean rebuilding the chord and losing a
+  modifier is worse than the reordering this fixes — `shift+left` re-issued as `left` drops
+  a selection instead of extending it. The rare reorder on a modified key is the lesser
+  fault.
+
 - **Enter lands after your words, not in front of them.** With preedit on, nothing enters
   the document until govox commits — so pressing Enter mid-sentence put the newline *before*
   the text, because the keystroke reached the application while the words were still
