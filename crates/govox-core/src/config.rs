@@ -390,6 +390,34 @@ pub struct OverlayAppRule {
     pub follow_caret: Option<bool>,
 }
 
+/// One user-defined command, from a `commands` array-of-tables entry.
+///
+/// The field names mirror macOS Voice Control's Commands pane — "When I say",
+/// "While using", "Perform" — because that is the model this is a port of, and
+/// someone who knows the one should not have to learn a second vocabulary for
+/// the same three questions.
+///
+/// `insert` and `press` are the two "Perform" actions govox can honour, and
+/// **exactly one** must be given. Neither defaults to the other: a command that
+/// does nothing and a command that types its own name are both worse than one
+/// reported as misconfigured at load.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct CustomCommand {
+    /// The spoken phrase, matched exactly as a built-in command is.
+    #[serde(rename = "when_i_say")]
+    pub phrase: String,
+    /// Text to type.
+    #[serde(default)]
+    pub insert: Option<String>,
+    /// A key chord to press, in `keycodes::parse_chord` spelling.
+    #[serde(default)]
+    pub press: Option<String>,
+    /// Restrict to windows whose label matches, with the same wildcard rules as
+    /// the feedback app rules. Absent means everywhere.
+    #[serde(default, rename = "while_using")]
+    pub app: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct FeedbackConfig {
     #[serde(default = "default_true")]
@@ -576,6 +604,13 @@ pub struct Config {
     pub telemetry: TelemetryConfig,
     #[serde(default)]
     pub logging: LoggingConfig,
+    /// User-defined commands, in the order they are matched.
+    ///
+    /// Top-level rather than a subsection: they are not a setting *about* a
+    /// subsystem, they are content, and the file reads better with them at the
+    /// end than buried under `[editing]`.
+    #[serde(default)]
+    pub commands: Vec<CustomCommand>,
 }
 
 /// Keys that were once part of the schema and no longer do anything.
@@ -655,7 +690,21 @@ impl Config {
                 })?;
 
         config.validate()?;
+        config.warn_about_commands();
         Ok(config)
+    }
+
+    /// Announce every misconfigured custom command, one line each.
+    ///
+    /// A warning rather than a failed load, for the reason a retired key is
+    /// one: refusing to dictate at all because one of eleven custom commands
+    /// has a typo in its chord is a worse outcome than dictating with the other
+    /// ten. What must not happen is *silence* — a command that is accepted and
+    /// then never fires is the one failure a user cannot diagnose from outside.
+    fn warn_about_commands(&self) {
+        for problem in crate::correction::custom::validate(&self.commands) {
+            tracing::warn!("custom command ignored: {problem}");
+        }
     }
 
     /// Range and membership checks that the type system does not express.

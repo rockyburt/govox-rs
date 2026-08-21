@@ -270,6 +270,10 @@ impl<T: Transcriber> Daemon<T> {
                 // AT-SPI is the other source and arrives in M11.
                 preceding_text: self.shared.preceding(),
                 field_purpose: self.field_purpose(),
+                // Captured at session start, beside the overlay's app rule:
+                // naming the window is an AT-SPI round trip, and a scoped
+                // custom command must not add one per utterance.
+                app: self.shared.app(),
             };
             corrector.correct(raw_text, &context)
         };
@@ -285,10 +289,7 @@ impl<T: Transcriber> Daemon<T> {
         // arrives as one string, so this is the ordinary case rather than the
         // exotic one — see `split_trailing_command`.
         if let PipelineAction::Text(text) = &result.action
-            && let Some((prefix, action)) = govox_core::correction::commands::split_trailing_command(
-                text,
-                self.shared.config.load().editing.command_mode,
-            )
+            && let Some((prefix, action)) = self.split_trailing(text)
         {
             tracing::info!(?action, "a command was said after other words");
             if self.shared.command_mode() {
@@ -303,6 +304,26 @@ impl<T: Transcriber> Daemon<T> {
         }
 
         self.apply_action(result.action)
+    }
+
+    /// A command said after other words: the built-ins first, then the user's.
+    ///
+    /// Built-ins are tried first for the same reason they win in the pipeline —
+    /// no config file can take "delete that" away from the person who wrote it.
+    /// The two scans are separate rather than one merged pass because the
+    /// built-in one is a recorded stage in the golden corpus, and folding a
+    /// runtime-loaded table into it would make every one of its records depend
+    /// on a config file.
+    fn split_trailing(&self, text: &str) -> Option<(String, PipelineAction)> {
+        let config = self.shared.config.load();
+        govox_core::correction::commands::split_trailing_command(text, config.editing.command_mode)
+            .or_else(|| {
+                govox_core::correction::custom::split_trailing_custom(
+                    text,
+                    &config.commands,
+                    self.shared.app().as_deref(),
+                )
+            })
     }
 
     /// What kind of field has focus, read **live** rather than cached.

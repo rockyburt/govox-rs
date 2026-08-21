@@ -251,10 +251,13 @@ pub fn split_trailing_command(
 /// The longest tier 1 command, in words: "extend selection previous twenty five
 /// words" and "move to beginning of the document" are both six. Eight leaves
 /// room without letting the scan reach far enough back to be surprising.
-const MAX_COMMAND_WORDS: usize = 8;
+pub(super) const MAX_COMMAND_WORDS: usize = 8;
 
 /// Byte offsets where each whitespace-separated word begins.
-fn word_starts(text: &str) -> Vec<usize> {
+///
+/// `pub(super)` so the custom-command scan can walk the tail exactly as this
+/// one does, rather than growing a second idea of where a word begins.
+pub(super) fn word_starts(text: &str) -> Vec<usize> {
     let mut starts = Vec::new();
     let mut in_word = false;
     for (index, character) in text.char_indices() {

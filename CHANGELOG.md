@@ -27,6 +27,54 @@ before 1.0.0, minor versions may change behaviour.
 
 ### Added
 
+- **Your own spoken commands, in `config.toml`.** The last piece of macOS Voice Control's
+  command model. Each entry gives a phrase and one action:
+
+  ```toml
+  [[commands]]
+  when_i_say = "sign off"
+  insert = "Best regards,\nRocky"
+
+  [[commands]]
+  when_i_say = "run the tests"
+  press = "control+shift+t"
+  while_using = "*code*"
+  ```
+
+  The field names are macOS's — "When I say", "While using", "Perform" — so the pane you
+  already know maps onto the file. `while_using` uses the same wildcard rules as
+  `[[feedback.app_rules]]`, and a window govox cannot name matches only unscoped commands.
+  Edits take effect on save; no restart.
+
+  Four things it deliberately will not do. It will not let you **shadow a built-in** — "delete
+  that" belongs to the person who wrote it, and a phrase that collides is reported at startup
+  and in `govox commands` rather than accepted and then silently never fired. It will not
+  accept **both** `insert` and `press`, or **neither**; either is reported and the command
+  does nothing, because which of the two was meant cannot be guessed and putting a keystroke
+  in your document on a coin flip is worse than doing nothing. It will not accept a **chord it
+  cannot press** — `ydotool` reports success for keys it does not have, so an unparseable
+  chord caught at load is the difference between a typo and a command that silently does
+  nothing for ever. And it will not make you learn a **third vocabulary**: `control+s`,
+  `ctrl+s` and `command+s` all work, because the first and third are what you would say and
+  the second is what the keycode table calls it.
+
+  `govox commands` lists what you configured, what govox thinks each one does, and anything it
+  rejected — so "did it take my command" is answerable without reading the log.
+
+- **The caret pill shows which mode you are in.** The mode indicator was on the tray only,
+  which puts the answer to "why did nothing happen when I spoke" on a panel you may have
+  auto-hidden and are in any case not looking at — you are looking at the caret. The pill that
+  follows it now takes the mode's colour and the card shows its name: command blue, spelling
+  amber, asleep grey, dictation the red record dot as before. Asleep the bars are held flat,
+  since audio is still arriving and a live waveform would animate energetically while claiming
+  to be asleep.
+
+  The overlay wire protocol gains one line, `mode [name]`, making it a superset of the Python
+  helper's rather than byte-identical. Both helpers ignore lines they do not recognise, so the
+  cross-implementation debugging seam is intact: the Python overlay drives exactly as before
+  and simply never paints an indicator.
+
+
 - **A stop key: `[activation] stop_key`, Escape by default.** Ends a session without
   starting one — the escape hatch for dictation running when you did not want it, and what
   macOS uses. It behaves differently in two places, and the difference cannot be hidden:

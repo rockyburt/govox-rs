@@ -286,7 +286,39 @@ pub fn render(config: &Config) -> String {
     );
     bullet(&mut out, "numeral seven", "7   overrides that rule");
 
+    // Last, and only when there are some. This is the one section not generated
+    // from a table in the binary — it is the user's own file read back, which
+    // is exactly why it is worth printing: it answers "did govox take my
+    // command, and what does it think it does" without reading the log.
+    if !config.commands.is_empty() {
+        heading(
+            &mut out,
+            "Your commands",
+            &format!("{} configured", config.commands.len()),
+        );
+        for command in &config.commands {
+            let effect = match (command.insert.as_deref(), command.press.as_deref()) {
+                (Some(text), None) => format!("types \"{}\"", one_line(text)),
+                (None, Some(chord)) => format!("presses {chord}"),
+                _ => "misconfigured — see below".to_owned(),
+            };
+            let scope = command
+                .app
+                .as_deref()
+                .map_or_else(String::new, |app| format!("   (only in {app})"));
+            bullet(&mut out, &command.phrase, &format!("{effect}{scope}"));
+        }
+        for problem in govox_core::correction::custom::validate(&config.commands) {
+            bullet(&mut out, "  ignored", &problem);
+        }
+    }
+
     out
+}
+
+/// Collapse inserted text onto one line, since the listing is line-oriented.
+fn one_line(text: &str) -> String {
+    text.replace('\n', "\\n")
 }
 
 #[cfg(test)]
@@ -349,5 +381,53 @@ mod tests {
         let out = render(&defaults());
         assert!(out.contains("(line break)"));
         assert!(out.contains("(blank line)"));
+    }
+
+    #[test]
+    fn a_custom_command_is_listed_with_what_it_does() {
+        let mut config = defaults();
+        config.commands = vec![
+            govox_core::config::CustomCommand {
+                phrase: "sign off".to_owned(),
+                insert: Some("Best regards,\nRocky".to_owned()),
+                press: None,
+                app: None,
+            },
+            govox_core::config::CustomCommand {
+                phrase: "save it".to_owned(),
+                insert: None,
+                press: Some("ctrl+s".to_owned()),
+                app: Some("*code*".to_owned()),
+            },
+        ];
+        let out = render(&config);
+        assert!(out.contains("Your commands"), "{out}");
+        assert!(out.contains("sign off"), "{out}");
+        // The newline is shown rather than breaking the line it is listed on.
+        assert!(out.contains("Best regards,\\nRocky"), "{out}");
+        assert!(out.contains("presses ctrl+s"), "{out}");
+        assert!(out.contains("only in *code*"), "{out}");
+    }
+
+    #[test]
+    fn a_rejected_custom_command_says_so_in_the_listing() {
+        // The listing is where someone looks when a command does not work, so
+        // a command govox has decided to ignore must say so here rather than
+        // only in a startup log nobody is tailing.
+        let mut config = defaults();
+        config.commands = vec![govox_core::config::CustomCommand {
+            phrase: "delete that".to_owned(),
+            insert: Some("nope".to_owned()),
+            press: None,
+            app: None,
+        }];
+        let out = render(&config);
+        assert!(out.contains("ignored"), "{out}");
+        assert!(out.contains("built-in"), "{out}");
+    }
+
+    #[test]
+    fn no_custom_commands_prints_no_section() {
+        assert!(!render(&defaults()).contains("Your commands"));
     }
 }

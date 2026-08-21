@@ -782,6 +782,7 @@ impl<A: Announcer> EventLoop<'_, A> {
                 command_mode: self.shared.command_mode(),
                 preceding_text: self.shared.preceding(),
                 field_purpose: self.preedit.as_ref().and_then(|sink| sink.field_purpose()),
+                app: self.shared.app(),
             };
             let result = corrector.correct(hypothesis, &context);
             // Raw when it is not text: a half-heard "delete tha…" is a command
@@ -898,6 +899,9 @@ impl<A: Announcer> EventLoop<'_, A> {
                 // Resolved once: the focused window does not change mid-session,
                 // and this is an AT-SPI round trip.
                 let window = self.text_model.active_window();
+                // Published for custom commands scoped with `while_using`, off
+                // the same round trip rather than a second one.
+                self.shared.set_app(window.clone());
                 self.app_rule =
                     govox_core::caret::match_app_rule(window.as_deref(), &self.feedback.app_rules)
                         .cloned();

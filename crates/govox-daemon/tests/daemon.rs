@@ -8,7 +8,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use govox_core::config::{Config, Environment};
+use govox_core::config::{Config, CustomCommand, Environment};
 use govox_core::domain::{
     AudioBuffer, EditAction, EditOp, FieldSnapshot, GovoxError, Injector, InsertionAction,
     PersonalDictionary, PipelineAction, Utterance,
@@ -1500,4 +1500,162 @@ async fn an_empty_streaming_session_commits_nothing() {
     let mut harness = harness("unused");
     harness.daemon.process_text("   ").await;
     assert!(harness.injector.texts().is_empty());
+}
+
+// --- custom commands --------------------------------------------------------
+
+fn custom(phrase: &str, insert: Option<&str>, press: Option<&str>) -> CustomCommand {
+    CustomCommand {
+        phrase: phrase.to_owned(),
+        insert: insert.map(str::to_owned),
+        press: press.map(str::to_owned),
+        app: None,
+    }
+}
+
+/// A user-defined phrase types its text, end to end through the daemon.
+#[tokio::test]
+async fn a_custom_command_types_the_text_it_was_given() {
+    let mut config = defaults();
+    config.commands = vec![custom("sign off", Some("Best regards"), None)];
+    let mut h = harness_with(
+        config,
+        FakeTranscriber::saying("unused"),
+        RecordingInjector::shared(),
+    );
+
+    h.daemon.process_text("sign off").await;
+    assert_eq!(h.injector.texts(), ["Best regards"]);
+}
+
+/// A user-defined phrase presses its chord, end to end through the daemon.
+#[tokio::test]
+async fn a_custom_command_presses_the_chord_it_was_given() {
+    let mut config = defaults();
+    config.commands = vec![custom("save it", None, Some("control+s"))];
+    let mut h = harness_with(
+        config,
+        FakeTranscriber::saying("unused"),
+        RecordingInjector::shared(),
+    );
+
+    h.daemon.process_text("save it").await;
+    // Spelled "control" in the config and "ctrl" on the wire: the injector only
+    // ever sees names the keycode table knows.
+    assert_eq!(
+        h.injector.actions(),
+        [InsertionAction::Keys(vec!["ctrl+s".to_owned()])]
+    );
+}
+
+/// The regression the built-ins hit in 0.2.0, checked before it can happen here.
+///
+/// Streaming makes an utterance the whole session, so a command said after any
+/// other words is never the whole string. Without the trailing scan this test
+/// types "here is the paragraph save it" into the document.
+#[tokio::test]
+async fn a_custom_command_works_when_it_is_not_the_only_thing_said() {
+    let mut config = defaults();
+    config.commands = vec![custom("save it", None, Some("ctrl+s"))];
+    let mut h = harness_with(
+        config,
+        FakeTranscriber::saying("unused"),
+        RecordingInjector::shared(),
+    );
+
+    h.daemon.process_text("here is the paragraph save it").await;
+
+    let actions = h.injector.actions();
+    assert_eq!(actions.len(), 2, "{actions:?}");
+    assert!(
+        matches!(&actions[0], InsertionAction::Text(text)
+            if text.to_lowercase().contains("here is the paragraph")),
+        "the words in front must still be typed: {actions:?}"
+    );
+    assert_eq!(actions[1], InsertionAction::Keys(vec!["ctrl+s".to_owned()]));
+}
+
+/// A built-in outranks a custom command that would shadow it.
+#[tokio::test]
+async fn a_built_in_wins_over_a_custom_command_with_the_same_phrase() {
+    // Validation reports this at load, but the runtime must not depend on the
+    // user having read the warning: no config file can take "new line" away
+    // from the person who wrote it.
+    let mut config = defaults();
+    config.commands = vec![custom("new line", Some("NOT THIS"), None)];
+    let mut h = harness_with(
+        config,
+        FakeTranscriber::saying("unused"),
+        RecordingInjector::shared(),
+    );
+
+    h.daemon.process_text("new line").await;
+    assert_eq!(
+        h.injector.actions(),
+        [InsertionAction::Command("newline".to_owned())]
+    );
+}
+
+/// An application-scoped command does not fire in the wrong window.
+#[tokio::test]
+async fn a_scoped_custom_command_waits_for_its_application() {
+    let mut config = defaults();
+    config.commands = vec![CustomCommand {
+        app: Some("chrome".to_owned()),
+        ..custom("save it", None, Some("ctrl+s"))
+    }];
+    let mut h = harness_with(
+        config,
+        FakeTranscriber::saying("unused"),
+        RecordingInjector::shared(),
+    );
+
+    let pressed = |h: &Harness| {
+        h.injector
+            .actions()
+            .iter()
+            .any(|a| matches!(a, InsertionAction::Keys(_)))
+    };
+
+    // No window has been named yet — the state a session starts in when AT-SPI
+    // cannot say what has focus. The command must not fire on a guess; the
+    // words are dictated instead, which is what they were.
+    h.daemon.process_text("save it").await;
+    assert!(!pressed(&h), "fired in an unnamed window");
+
+    h.shared.set_app(Some("GNOME Terminal".to_owned()));
+    h.daemon.process_text("save it").await;
+    assert!(!pressed(&h), "fired in the wrong window");
+
+    h.shared.set_app(Some("Google Chrome / Inbox".to_owned()));
+    h.daemon.process_text("save it").await;
+    assert!(
+        h.injector
+            .actions()
+            .contains(&InsertionAction::Keys(vec!["ctrl+s".to_owned()])),
+        "did not fire in its own application: {:?}",
+        h.injector.actions()
+    );
+}
+
+/// A misconfigured command does nothing rather than guessing which half was meant.
+#[tokio::test]
+async fn a_custom_command_with_two_actions_does_nothing() {
+    let mut config = defaults();
+    config.commands = vec![CustomCommand {
+        press: Some("ctrl+s".to_owned()),
+        ..custom("do it", Some("text"), None)
+    }];
+    let mut h = harness_with(
+        config,
+        FakeTranscriber::saying("unused"),
+        RecordingInjector::shared(),
+    );
+
+    h.daemon.process_text("do it").await;
+    // Falls through to ordinary dictation: the phrase was not a command, so it
+    // is what the user said. Silently picking `insert` or `press` would act on
+    // a coin flip.
+    assert_eq!(h.injector.texts().len(), 1);
+    assert!(h.injector.texts()[0].to_lowercase().contains("do it"));
 }

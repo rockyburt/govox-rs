@@ -5,6 +5,7 @@
 
 pub mod casing;
 pub mod commands;
+pub mod custom;
 pub mod dictionary;
 pub mod emoji;
 pub mod grammar;
@@ -103,6 +104,10 @@ pub struct Context {
     /// What kind of field has focus, so prose rules can stand down where they
     /// would do damage. Unknown means unchanged.
     pub field_purpose: Option<String>,
+    /// The focused window's label, for custom commands scoped to one
+    /// application. `None` means it could not be read, which scoped commands
+    /// treat as "not this application" rather than as a wildcard.
+    pub app: Option<String>,
 }
 
 pub struct CorrectionPipeline {
@@ -113,6 +118,8 @@ pub struct CorrectionPipeline {
     pub mode_switching: bool,
     /// The dictionary's patterns, compiled once at construction.
     compiled: dictionary::CompiledDictionary,
+    /// User-defined commands, consulted after every built-in has declined.
+    commands: Vec<crate::config::CustomCommand>,
 }
 
 impl CorrectionPipeline {
@@ -128,7 +135,20 @@ impl CorrectionPipeline {
             dictionary,
             mode_switching,
             compiled,
+            commands: Vec::new(),
         }
+    }
+
+    /// Attach the user's custom commands.
+    ///
+    /// Separate from `new` so every existing caller — and every golden replay,
+    /// whose records were made before these existed — keeps its behaviour
+    /// exactly. An empty list is not merely the default, it is the state the
+    /// whole corpus was recorded in.
+    #[must_use]
+    pub fn with_commands(mut self, commands: Vec<crate::config::CustomCommand>) -> Self {
+        self.commands = commands;
+        self
     }
 
     #[must_use]
@@ -152,8 +172,19 @@ impl CorrectionPipeline {
         corrected = undo_prose_casing(&corrected, purpose);
         corrected = self.compiled.apply(&corrected);
 
-        let action =
+        let mut action =
             commands::detect_command(&corrected, self.mode_switching, context.command_mode);
+        // Custom commands are consulted only where a built-in declined, so no
+        // config file can take "delete that" away from the person who wrote it.
+        // Matched on the *corrected* text for the same reason built-ins are:
+        // the recogniser's punctuation and casing are already resolved by here,
+        // so a phrase matches whether or not Whisper ended it with a full stop.
+        if matches!(action, PipelineAction::Text(_))
+            && let Some(custom) =
+                custom::match_custom(&corrected, &self.commands, context.app.as_deref())
+        {
+            action = custom;
+        }
         if let PipelineAction::Command(name) = &action {
             corrected = command_text(name).to_owned();
         }

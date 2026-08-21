@@ -16,6 +16,7 @@
     "frame_ms": 30,
     "sample_rate": 16000
   },
+  "commands": [],
   "correction": {
     "collapse_repeats": true,
     "dictionary_path": "",

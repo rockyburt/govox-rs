@@ -69,6 +69,13 @@ pub struct SharedState {
     /// field may already be showing govox's own preedit, and a "preceding
     /// text" that includes what govox just said is worse than none.
     preceding: Mutex<Option<String>>,
+    /// The focused window's label, read once at session start.
+    ///
+    /// Captured alongside the overlay's app rule, which is the same AT-SPI
+    /// round trip — a custom command scoped to one application must not add a
+    /// second one per utterance. Shared for the same reason `preceding` is: it
+    /// is written by the event loop and read by the consumer task.
+    app: Mutex<Option<String>>,
 }
 
 impl SharedState {
@@ -78,7 +85,8 @@ impl SharedState {
             config.correction.clone(),
             dictionary.clone(),
             config.editing.command_mode,
-        );
+        )
+        .with_commands(config.commands.clone());
         Self {
             config: ArcSwap::from_pointee(config),
             dictionary: ArcSwap::from_pointee(dictionary),
@@ -89,7 +97,19 @@ impl SharedState {
             preedit_active: AtomicBool::new(false),
             held_modifiers: Mutex::new(BTreeSet::new()),
             preceding: Mutex::new(None),
+            app: Mutex::new(None),
         }
+    }
+
+    /// Record the focused window's label for this session.
+    pub fn set_app(&self, label: Option<String>) {
+        *self.app.lock().expect("app label poisoned") = label;
+    }
+
+    /// The focused window's label, as captured at session start.
+    #[must_use]
+    pub fn app(&self) -> Option<String> {
+        self.app.lock().expect("app label poisoned").clone()
     }
 
     #[must_use]
@@ -193,7 +213,8 @@ impl SharedState {
             config.correction.clone(),
             dictionary.clone(),
             config.editing.command_mode,
-        );
+        )
+        .with_commands(config.commands.clone());
         self.corrector.store(Arc::new(corrector));
         self.dictionary.store(Arc::new(dictionary));
         self.config.store(Arc::new(config));

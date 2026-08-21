@@ -325,3 +325,44 @@ style = "auto"
 [logging.loggers]
 # faster_whisper = "ERROR"
 # "govox.recognition" = "DEBUG"
+
+# ---------------------------------------------------------------------------
+# Custom commands
+#
+# Your own spoken phrases, modelled on macOS Voice Control's Commands pane:
+# "When I say" / "While using" / "Perform". Each entry is one command.
+#
+#   when_i_say   the phrase, matched exactly as a built-in command is —
+#                case, punctuation and apostrophes are folded, so
+#                "Let's go!" and "lets go" are the same phrase
+#   insert       text to type
+#   press        a key chord to press
+#   while_using  optional; restrict to windows whose label matches, with the
+#                same wildcard rules as feedback.app_rules above
+#
+# Give exactly one of `insert` and `press`. A command with neither would do
+# nothing and one with both is ambiguous; either is reported at startup and
+# ignored rather than guessed at.
+#
+# A chord may be written the way you would say it or the way the keycode table
+# names it: "control+s", "ctrl+s" and "command+s" all work. Run `govox
+# commands` for the full key list.
+#
+# Built-in commands always win. A phrase that shadows one is reported at
+# startup and never fires, so pick another phrase rather than expecting to
+# override "delete that".
+#
+# Edits here take effect on save — no restart.
+#
+# [[commands]]
+# when_i_say = "sign off"
+# insert = "Best regards,\nRocky"
+#
+# [[commands]]
+# when_i_say = "save the file"
+# press = "control+s"
+#
+# [[commands]]
+# when_i_say = "run the tests"
+# press = "control+shift+t"
+# while_using = "*code*"

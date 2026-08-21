@@ -87,16 +87,33 @@ pub fn match_app_rule<'a>(
     if label.is_empty() {
         return None;
     }
+    rules
+        .iter()
+        .find(|rule| app_label_matches(&rule.match_, label))
+}
+
+/// Does one `match` pattern apply to one window label, case-insensitively?
+///
+/// Extracted from [`match_app_rule`] so custom commands can be scoped to an
+/// application with exactly the semantics the overlay rules already use.
+/// Sharing the function rather than the description is the point: two
+/// implementations of "which app is this" that agree in the common cases and
+/// diverge on wildcards would be a bug nobody could reproduce on purpose.
+#[must_use]
+pub fn app_label_matches(pattern: &str, label: &str) -> bool {
+    if label.is_empty() {
+        return false;
+    }
     let lowered = label.to_lowercase();
-    let chars: Vec<char> = lowered.chars().collect();
-    rules.iter().find(|rule| {
-        let pattern = rule.match_.to_lowercase();
-        if pattern.contains('*') || pattern.contains('?') {
-            glob_match(&pattern.chars().collect::<Vec<char>>(), &chars)
-        } else {
-            lowered.contains(&pattern)
-        }
-    })
+    let pattern = pattern.to_lowercase();
+    if pattern.contains('*') || pattern.contains('?') {
+        glob_match(
+            &pattern.chars().collect::<Vec<char>>(),
+            &lowered.chars().collect::<Vec<char>>(),
+        )
+    } else {
+        lowered.contains(&pattern)
+    }
 }
 
 /// Can this rectangle be believed about *where* the caret is?

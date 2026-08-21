@@ -694,8 +694,8 @@ mod tests {
         // actually looks at while dictating. A mode that left it identical
         // would mean the indicator is invisible where it is needed most.
         let pixels = |mode: Option<&str>| {
-            let mut pixmap = Pixmap::new(g::PILL_WIDTH as u32, g::PILL_HEIGHT as u32)
-                .expect("pill pixmap");
+            let mut pixmap =
+                Pixmap::new(g::PILL_WIDTH as u32, g::PILL_HEIGHT as u32).expect("pill pixmap");
             let state = State {
                 opacity: 1.0,
                 level: 0.5,

@@ -21,7 +21,12 @@ use crate::config::Config;
 /// re-applied by reconfiguring the subscriber, so both take effect at once.
 /// The personal dictionary is reported separately: it lives in its own file
 /// and is the reason this feature exists.
-pub const RELOADABLE_SECTIONS: &[&str] = &["correction", "logging"];
+/// `commands` joins them because [`crate::config::Config::commands`] is read
+/// through the correction pipeline, which is rebuilt wholesale on publish —
+/// and because editing a custom command is an edit-and-try loop, exactly like
+/// calibrating a caret offset. Making each try cost a model reload would make
+/// the feature unusable.
+pub const RELOADABLE_SECTIONS: &[&str] = &["correction", "logging", "commands"];
 
 /// Keys inside otherwise restart-only sections that a running daemon *can*
 /// adopt.
@@ -51,6 +56,7 @@ pub const SECTIONS: &[&str] = &[
     "feedback",
     "telemetry",
     "logging",
+    "commands",
 ];
 
 /// What a reload attempt did, in terms a notification can state.

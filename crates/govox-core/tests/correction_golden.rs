@@ -308,6 +308,12 @@ fn evaluate(stage: &str, args: &Value) -> Option<Value> {
                     command_mode: args["command_mode"].as_bool().unwrap(),
                     preceding_text: optional(args, "preceding"),
                     field_purpose: optional(args, "purpose"),
+                    // No custom commands in the corpus. They are loaded from a
+                    // config file, so recording them would make every one of
+                    // these records depend on one — and the pipeline is built
+                    // here without any, which is the state the whole corpus was
+                    // recorded in.
+                    app: None,
                 };
                 let result = pipeline.correct(&text(args, "text"), &context);
                 json!({
