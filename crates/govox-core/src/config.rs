@@ -347,7 +347,7 @@ impl Default for EditingConfig {
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct ImeConfig {
-    #[serde(default)]
+    #[serde(default = "default_ime_enabled")]
     pub enabled: bool,
     #[serde(default = "default_engine_name")]
     pub engine_name: String,
@@ -355,6 +355,9 @@ pub struct ImeConfig {
     pub baseline_engine: String,
 }
 
+fn default_ime_enabled() -> bool {
+    true
+}
 fn default_engine_name() -> String {
     "govox".to_owned()
 }
@@ -365,7 +368,7 @@ fn default_baseline_engine() -> String {
 impl Default for ImeConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: default_ime_enabled(),
             engine_name: default_engine_name(),
             baseline_engine: default_baseline_engine(),
         }

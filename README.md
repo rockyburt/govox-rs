@@ -41,12 +41,15 @@ network once the model is cached.
 - **Linux with a Wayland session.** GNOME is what it is developed against. The HUD needs
   XWayland; without it the overlay is skipped and everything else works.
 - **A microphone**, via PipeWire or ALSA.
-- **[`ydotool`](https://github.com/ReimuNotMoe/ydotool)** for keystroke injection, with its
-  daemon running and your user able to reach it. Wayland has no other way in.
+- **IBus**, for the default preedit path — `sudo apt install python3-gi gir1.2-ibus-1.0`.
+  Without it govox still runs and falls back to keystroke injection; see
+  [The optimal mode](#the-optimal-mode).
+- **[`ydotool`](https://github.com/ReimuNotMoe/ydotool)** for the injection fallback, with
+  its daemon running and your user able to reach it. Wayland has no other way in.
 - **A GPU is strongly recommended.** CPU decoding works and is far slower — see
   [Choosing a model](#choosing-a-model).
-- Optional: **IBus** for underlined provisional text, **AT-SPI** for reading the focused
-  field so `delete that` can verify what it is about to remove.
+- Optional: **AT-SPI** for reading the focused field so `delete that` can verify what it
+  is about to remove.
 
 Build-time: the Rust toolchain named in `rust-toolchain.toml` (rustup installs it for
 you), plus `build-essential`, `cmake`, `pkg-config`, `libasound2-dev`, `libssl-dev`,
@@ -112,21 +115,21 @@ in [`config/default.toml`](config/default.toml) — it is meant to be read.
 
 ### The optimal mode
 
-An input method, streaming, and both editing opt-ins on. Dictation appears as underlined
-provisional text in the field and commits in one insertion when you stop — so it cannot
-race your typing, it reaches apps that expose no writable text, a single Escape stops a
-session, and no root or udev rule is needed.
+Dictation appears as underlined provisional text in the field and commits in one insertion
+when you stop — so it cannot race your typing, it reaches apps that expose no writable text
+(Chrome among them), a single Escape stops a session, and no root or udev rule is needed.
+
+**This is the default.** `[ime] enabled` and `[streaming] enabled` are both on out of the
+box, so the optimal mode is what you get by installing IBus and writing no config at all.
+If IBus is missing or its bus will not answer, govox logs one line and falls back to
+keystroke injection — nothing to uninstall and nothing to fix, but you then need
+`ydotoold` as root or a udev rule.
+
+What is left to choose is the hardware and the two editing opt-ins:
 
 ```toml
-[ime]
-enabled = true            # underlined provisional text instead of typed-then-corrected
-
-[streaming]
-enabled = true            # show words while you speak, rather than only at the end
-
 [recognition]
-model = "small.en"        # see below
-gpu_device = 0
+gpu_device = 0            # which GPU; 0 can be the integrated one — see below
 
 [activation]
 mode = "double_tap"       # or "toggle", or "push_to_talk"
@@ -137,8 +140,9 @@ command_mode = true       # discard a misheard command instead of typing it
 read_focused_field = true # let "delete that" verify its target before acting
 ```
 
-Without an input method govox falls back to synthetic keystrokes: it works, but needs
-`ydotoold` as root or a udev rule. For what each setting is, what it is used for and how
+Both `[editing]` keys stay off by default, and deliberately: `command_mode` can discard an
+utterance you meant to dictate, and `read_focused_field` can only ever turn a command that
+would have run into one that refuses. For what each setting is, what it is used for and how
 it works in both modes, see [docs/guides/index.md](docs/guides/index.md).
 
 An unknown **section** is rejected at startup, so `[recogniton]` tells you immediately. An
@@ -150,7 +154,7 @@ itself retired are the exception: those are named in a startup warning.
 
 Models are GGUF builds of Whisper, fetched on first use and cached, from `tiny` up to
 `large-v3-turbo`. Decode cost varies by roughly 20× across that range and is the main
-thing to tune — `small.en` is a good default. For the comparison and how to time your own
+thing to tune — `small` is the default and a good one. For the comparison and how to time your own
 hardware, see [docs/guides/index.md](docs/guides/index.md).
 
 ## Design
@@ -188,8 +192,8 @@ Rough edges worth knowing before you rely on it:
   that describes what you get. See [docs/guides/index.md](docs/guides/index.md).
 - **The accuracy corpus is personal** — 29 clips that failed on one machine, in one voice.
   It catches regressions in this pipeline; it is not a claim about whisper in general.
-- **`ydotool` is required** for the non-IBus path, which means a daemon running as root
-  or a udev rule.
+- **`ydotool` is required** for the injection fallback, which means a daemon running as
+  root or a udev rule. The default preedit path does not need it.
 
 ## Contributing
 

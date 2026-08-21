@@ -32,17 +32,19 @@ is used for, and how it works.
 
 ## The two configurations
 
-Optimal:
+Optimal — and, since `[ime] enabled` and `[streaming] enabled` both default to on, what
+an empty config already gives you on a machine with IBus installed. The keys are shown in
+full so the mode can be read in one place; only the last two are opt-ins.
 
 ```toml
 [ime]
-enabled = true
+enabled = true            # default
 
 [streaming]
-enabled = true
+enabled = true            # default
 
 [recognition]
-model = "small.en"
+model = "small"           # default; see models.md — plain `small` beats `small.en` here
 gpu_device = 0
 
 [activation]
@@ -54,8 +56,9 @@ command_mode = true
 read_focused_field = true
 ```
 
-Fallback — what you get with `[ime] enabled = false`, or with it on and an engine that
-never registered:
+Fallback — what you get by setting `[ime] enabled = false`, or by leaving the default on
+a machine where IBus is absent or its engine never registered. That degrade is automatic
+and logs one line; it is not an error state:
 
 ```toml
 [injection]

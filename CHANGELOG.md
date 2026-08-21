@@ -6,6 +6,28 @@ before 1.0.0, minor versions may change behaviour.
 
 ## [Unreleased]
 
+### Changed
+
+- **Preedit dictation is on by default.** `[ime] enabled` now defaults to `true`, so
+  dictation appears as underlined provisional text in the focused field and commits in one
+  insertion when you stop — the mode `docs/guides/optimal-setup.md` calls optimal, which
+  until now you only got by finding the setting and switching it on.
+
+  It reaches Chrome, which AT-SPI reports as readable but not writable; nothing enters the
+  document until the commit, so a revision costs nothing and an aborted session leaves no
+  trace; a single Escape ends a session where the evdev path needs a double tap; and it
+  needs no root `ydotoold` and no udev rule.
+
+  **Nothing breaks without IBus.** A missing daemon, or one whose bus will not answer, logs
+  `continuing without preedit dictation` and falls back to keystroke injection — the same
+  degrade as the tray, the chime and field reading. To pin the old behaviour, set
+  `[ime] enabled = false`. Install with
+  `sudo apt install python3-gi gir1.2-ibus-1.0`.
+
+  The two `[editing]` opt-ins stay off: `command_mode` can discard an utterance you meant
+  to dictate, and `read_focused_field` can only turn a command that would have run into one
+  that refuses. Both fail towards losing work; this one fails towards doing nothing.
+
 ### Added
 
 - **The accuracy corpus now covers programming vocabulary.** 13 clips over Rust and

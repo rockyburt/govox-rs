@@ -109,8 +109,12 @@ fn no_readable_input_devices_is_fatal_and_says_how_to_fix_it() {
 #[test]
 fn switched_off_features_are_skipped_rather_than_flagged() {
     let mut config = defaults();
-    assert!(!config.ime.enabled, "off by default");
-    assert!(!config.editing.read_focused_field, "off by default");
+    // Switched off explicitly. `ime.enabled` defaults to true, and
+    // `read_focused_field` to false, but what is under test is the reporting of
+    // a feature the user turned OFF — so neither should be read from a default
+    // that may move again.
+    config.ime.enabled = false;
+    config.editing.read_focused_field = false;
     config.streaming.enabled = false;
 
     // Probes that would fail *if* the features were on.

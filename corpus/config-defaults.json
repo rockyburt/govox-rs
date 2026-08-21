@@ -59,7 +59,7 @@
   },
   "ime": {
     "baseline_engine": "xkb:us::eng",
-    "enabled": false,
+    "enabled": true,
     "engine_name": "govox"
   },
   "indicator": {
