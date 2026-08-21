@@ -27,6 +27,22 @@ before 1.0.0, minor versions may change behaviour.
 
 ### Added
 
+- **Mode phrases now take effect mid-sentence.** Saying "spelling mode", "command mode" or
+  "go to sleep" used to do nothing until you stopped speaking — with streaming on, an
+  "utterance" is the whole session, so the phrase was never the end of anything until the
+  session ended. Everything said in between was read under the mode you had just asked to
+  leave, and "go to sleep" is a request to stop *now*.
+
+  govox now acts on a mode phrase as soon as the words are committed: the sentence in front
+  of it is typed, the mode changes, and what you say next is read under the new one. This is
+  how macOS Voice Control behaves.
+
+  Only the three sustained states switch early. Ordinary commands still act at the end of the
+  session, where they always have — a mode decides how everything after it is read, which is
+  what makes the timing part of the behaviour rather than a detail. And if the recogniser
+  hands over the phrase with later words already attached, govox falls back to the old
+  end-of-session path, so this can only improve on the previous behaviour.
+
 - **Your own spoken commands, in `config.toml`.** The last piece of macOS Voice Control's
   command model. Each entry gives a phrase and one action:
 

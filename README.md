@@ -25,11 +25,16 @@ network once the model is cached.
   ("twenty five dollars" → "$25"), spoken emoji, spoken case ("all caps hello"), filler
   removal, sentence casing, and a personal dictionary for names the model keeps mangling.
   Run `govox commands` for the full list and what is switched on.
-- **Takes editing commands.** "delete that", "capitalize that", "undo" — and a command
-  mode where nothing is typed unless it matches a command, so a misheard instruction
-  cannot land in your document as text.
-- **Stays out of the way.** A tray icon, a small HUD that follows the caret, and optional
-  chimes. Every one of those degrades independently; none can stop dictation.
+- **Takes editing commands.** "delete that", "capitalize that", "undo", "press control s".
+- **Four modes, as macOS Voice Control has them.** Dictation, a command mode where nothing
+  is typed unless it matches a command, a spelling mode for the strings recognition cannot
+  get right, and sleep. Say "command mode", "spelling mode" or "go to sleep" and it takes
+  effect mid-sentence, not when you stop speaking.
+- **Your own commands.** Bind a phrase to text or a keystroke in `config.toml`, optionally
+  only in one application. Edits take effect on save.
+- **Stays out of the way.** A tray icon, a small HUD that follows the caret — both showing
+  which mode you are in — and optional chimes. Every one of those degrades independently;
+  none can stop dictation.
 
 ## Requirements
 

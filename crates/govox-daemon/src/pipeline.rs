@@ -698,7 +698,58 @@ impl<A: Announcer> EventLoop<'_, A> {
             tracing::debug!(hypothesis, "withholding an unconfirmed opening hypothesis");
             return;
         }
+        if self.switch_mode_mid_session() {
+            return;
+        }
         self.show_hypothesis(&hypothesis);
+    }
+
+    /// Act on a mode phrase the moment it is committed, not at session end.
+    ///
+    /// **Why this exists.** macOS Voice Control switches mid-stream: say
+    /// "spelling mode" and the next syllable is already spelled. govox matched
+    /// commands only against a finished utterance, and with streaming an
+    /// utterance is the whole session — so a mode phrase did nothing until the
+    /// user stopped speaking, and everything said in between was interpreted
+    /// under the mode they had just asked to leave. Sleep was the worst of the
+    /// three: "go to sleep" is a request to stop *now*.
+    ///
+    /// Only the three sustained states qualify. An ordinary command already
+    /// works through the end-of-session scan, and firing one early would change
+    /// when established behaviour happens for no gain — but a mode decides how
+    /// everything *after* it is read, so for these three the timing is the
+    /// behaviour.
+    ///
+    /// The session continues. `session_text` is cleared and the streaming
+    /// processor is deliberately **not** reset: its buffer holds the audio
+    /// spoken after the phrase, and LocalAgreement will not re-commit what it
+    /// has already given us, so those words arrive in the next update and are
+    /// read under the new mode.
+    ///
+    /// This can only improve on the old behaviour, never regress it. Committed
+    /// text arrives in word-granular chunks, so if a chunk lands the phrase
+    /// with later words already attached, the scan simply declines and the
+    /// end-of-session path handles it exactly as before.
+    fn switch_mode_mid_session(&mut self) -> bool {
+        let mode_switching = self.shared.config.load().editing.command_mode;
+        if !govox_core::correction::commands::ends_with_mode_phrase(
+            &self.session_text,
+            mode_switching,
+            self.shared.command_mode(),
+        ) {
+            return false;
+        }
+
+        // The whole committed run goes over as one job, phrase included: the
+        // consumer's own trailing scan splits it, injects the words in front
+        // and applies the mode — the same path the end-of-session commit takes,
+        // rather than a second one that could disagree with it.
+        let text = std::mem::take(&mut self.session_text);
+        tracing::info!(text, "a mode phrase landed mid-session");
+        if self.utterances.try_send(Job::Text(text)).is_err() {
+            tracing::warn!("recognition is backlogged; the mode switch was dropped");
+        }
+        true
     }
 
     /// Drain the last words, then hand the whole session over to be corrected.

@@ -253,6 +253,36 @@ pub fn split_trailing_command(
 /// room without letting the scan reach far enough back to be surprising.
 pub(super) const MAX_COMMAND_WORDS: usize = 8;
 
+/// Has a **mode phrase** just landed at the end of this committed text?
+///
+/// The three sustained states only — command mode, spelling and sleep. This is
+/// what lets a mode switch take effect mid-session rather than at the end of
+/// it, which is how macOS Voice Control behaves: say "spelling mode" and the
+/// next syllable is already spelled.
+///
+/// Ordinary commands are deliberately excluded. They already work through the
+/// end-of-session scan, and firing one early would move when established
+/// behaviour happens for no gain — whereas a mode decides how everything
+/// *after* it is read, so for these three the timing is the behaviour.
+///
+/// Checked both as a suffix and as the whole text, because "command mode" said
+/// at the very start of a session is the whole of what has been committed.
+#[must_use]
+pub fn ends_with_mode_phrase(text: &str, mode_switching: bool, command_mode: bool) -> bool {
+    let is_mode = |action: &PipelineAction| {
+        matches!(
+            action,
+            PipelineAction::Mode { .. }
+                | PipelineAction::Sleep { .. }
+                | PipelineAction::Spelling { .. }
+        )
+    };
+    if is_mode(&detect_command(text, mode_switching, command_mode)) {
+        return true;
+    }
+    split_trailing_command(text, mode_switching).is_some_and(|(_, action)| is_mode(&action))
+}
+
 /// Byte offsets where each whitespace-separated word begins.
 ///
 /// `pub(super)` so the custom-command scan can walk the tail exactly as this
@@ -492,6 +522,78 @@ mod tests {
         assert!(matches!(
             detect_command("replace rocky with Rocky", false, false),
             PipelineAction::Text(_)
+        ));
+    }
+
+    // --- mid-session mode switching -----------------------------------------
+
+    #[test]
+    fn a_mode_phrase_at_the_end_of_committed_text_is_noticed() {
+        // The whole point: macOS switches mid-stream, and with streaming an
+        // utterance is the entire session — so waiting for the end means
+        // everything said in between is read under the mode you asked to leave.
+        for text in [
+            "here is a sentence command mode",
+            "here is a sentence spelling mode",
+            "here is a sentence go to sleep",
+        ] {
+            assert!(ends_with_mode_phrase(text, true, false), "{text}");
+        }
+    }
+
+    #[test]
+    fn a_mode_phrase_that_is_the_whole_committed_text_is_noticed() {
+        // What "command mode" said at the very start of a session looks like.
+        for text in ["command mode", "spelling mode", "go to sleep", "wake up"] {
+            assert!(ends_with_mode_phrase(text, true, false), "{text}");
+        }
+    }
+
+    #[test]
+    fn an_ordinary_command_does_not_switch_mid_session() {
+        // These already work through the end-of-session scan. Firing one early
+        // would move when established behaviour happens for no gain, whereas a
+        // mode decides how everything after it is read.
+        for text in [
+            "some words delete that",
+            "some words new line",
+            "press enter",
+        ] {
+            assert!(!ends_with_mode_phrase(text, true, false), "{text}");
+        }
+    }
+
+    #[test]
+    fn ordinary_prose_does_not_switch_mid_session() {
+        for text in [
+            "i was thinking about the command",
+            "the spelling of that word",
+            "we should sleep on it",
+            "",
+        ] {
+            assert!(!ends_with_mode_phrase(text, true, false), "{text}");
+        }
+    }
+
+    #[test]
+    fn waking_does_not_depend_on_the_command_mode_setting() {
+        // Sleep is ungated on purpose: waking must not require a setting the
+        // user cannot change while asleep. That has to hold here too, or the
+        // mid-session path would be the one place it does not.
+        assert!(ends_with_mode_phrase("wake up", false, false));
+        assert!(ends_with_mode_phrase("some words wake up", false, false));
+    }
+
+    #[test]
+    fn a_mode_phrase_with_later_words_attached_falls_back_rather_than_misfiring() {
+        // Committed text arrives in word-granular chunks, so a chunk can land
+        // the phrase with speech already after it. Declining here is right:
+        // the end-of-session path then handles it exactly as it did before, so
+        // this feature can only improve on the old behaviour, never regress it.
+        assert!(!ends_with_mode_phrase(
+            "spelling mode alpha bravo",
+            true,
+            false
         ));
     }
 }

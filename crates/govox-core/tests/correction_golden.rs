@@ -272,6 +272,11 @@ fn evaluate(stage: &str, args: &Value) -> Option<Value> {
             Some((prefix, action)) => json!({"prefix": prefix, "action": action_json(&action)}),
             None => Value::Null,
         },
+        "ends_with_mode_phrase" => json!(commands::ends_with_mode_phrase(
+            &text(args, "text"),
+            args["mode_switching"].as_bool().unwrap(),
+            args["command_mode"].as_bool().unwrap(),
+        )),
         "detect_command" => action_json(&commands::detect_command(
             &text(args, "text"),
             args["mode_switching"].as_bool().unwrap(),
@@ -903,6 +908,54 @@ fn table_driven_records() -> Vec<(&'static str, Value)> {
                 "detect_command",
                 json!({
                     "text": phrase,
+                    "mode_switching": mode_switching,
+                    "command_mode": false,
+                }),
+            ));
+        }
+    }
+
+    // Every mode, sleep and spelling phrase against the mid-session switch, at
+    // both settings and both mid-utterance and alone. This is what decides
+    // *when* a mode takes effect, so a table gaining a phrase must be recorded
+    // here as well — a new phrase that switches at the end of the session but
+    // not mid-flow would be a difference nobody would think to look for.
+    for (phrase, _) in commands::MODE_COMMANDS
+        .iter()
+        .map(|(p, b)| (*p, *b))
+        .chain(commands::SLEEP_COMMANDS.iter().map(|(p, b)| (*p, *b)))
+        .chain(commands::SPELLING_COMMANDS.iter().map(|(p, b)| (*p, *b)))
+    {
+        for text in [phrase.to_owned(), format!("some words {phrase}")] {
+            for mode_switching in [true, false] {
+                out.push((
+                    "ends_with_mode_phrase",
+                    json!({
+                        "text": text,
+                        "mode_switching": mode_switching,
+                        "command_mode": false,
+                    }),
+                ));
+            }
+        }
+    }
+    // And the cases that must *not* switch: ordinary commands, which the
+    // end-of-session scan already handles, and prose that merely contains the
+    // words.
+    for text in [
+        "some words delete that",
+        "some words new line",
+        "press enter",
+        "i was thinking about the command",
+        "we should sleep on it",
+        "spelling mode alpha bravo",
+        "",
+    ] {
+        for mode_switching in [true, false] {
+            out.push((
+                "ends_with_mode_phrase",
+                json!({
+                    "text": text,
                     "mode_switching": mode_switching,
                     "command_mode": false,
                 }),
