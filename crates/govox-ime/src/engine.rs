@@ -52,6 +52,14 @@ const IBUS_KEY_ESCAPE: u32 = 0xff1b;
 /// `IBUS_RELEASE_MASK`, bit 30 of the modifier state: this event is a release.
 const IBUS_RELEASE_MASK: u32 = 1 << 30;
 
+/// `IBUS_KEY_Return` and `IBUS_KEY_KP_Enter`, the two ways Enter arrives.
+const IBUS_KEY_RETURN: u32 = 0xff0d;
+const IBUS_KEY_KP_ENTER: u32 = 0xff8d;
+
+/// `IBusInputHints.MULTILINE`, read off the installed IBus rather than guessed:
+/// the hint word is a bitfield and the bit is not where a reader would assume.
+const IBUS_INPUT_HINT_MULTILINE: u32 = 16384;
+
 /// Everything the focused client has told us about its field.
 ///
 /// Each entry describes **one** field and none is re-reported by a client that
@@ -87,6 +95,22 @@ struct Inner {
     session_active: bool,
     /// Told when the engine consumed a stop key.
     stop_tx: Option<tokio::sync::mpsc::UnboundedSender<()>>,
+    /// Told when the engine consumed a key that needs the preedit committed
+    /// first. Carries whether the field takes newlines.
+    flush_tx: Option<tokio::sync::mpsc::UnboundedSender<bool>>,
+    /// Whether provisional text is currently on screen and uncommitted.
+    ///
+    /// The engine consumes Enter only when there is something to commit ahead
+    /// of it; with an empty preedit the key has no ordering problem and must
+    /// reach the application untouched.
+    preedit_pending: bool,
+    /// The hint word from the last `SetContentType`, and whether one arrived.
+    ///
+    /// Kept separate from `purpose` because a client may report a content type
+    /// govox has no opinion about while still saying whether the field takes
+    /// newlines. `None` means the client never told us, which is common and is
+    /// **not** the same as "single line".
+    hints: Option<u32>,
 }
 
 impl FieldState {
@@ -110,6 +134,48 @@ impl FieldState {
     /// The daemon telling us a session started or ended.
     pub fn set_session_active(&self, active: bool) {
         self.lock().session_active = active;
+    }
+
+    /// Where to report a key that needs the preedit committed before it lands.
+    pub fn set_flush_channel(&self, tx: tokio::sync::mpsc::UnboundedSender<bool>) {
+        self.lock().flush_tx = Some(tx);
+    }
+
+    /// Whether uncommitted provisional text is on screen.
+    pub fn set_preedit_pending(&self, pending: bool) {
+        self.lock().preedit_pending = pending;
+    }
+
+    /// Does the focused field take newlines?
+    ///
+    /// `None` when the client never sent a content type, which is the common
+    /// case and means "unknown" rather than "single line" — the difference
+    /// matters, because ending a session is not recoverable and continuing one
+    /// is.
+    #[must_use]
+    pub fn is_multiline(&self) -> Option<bool> {
+        self.lock()
+            .hints
+            .map(|hints| hints & IBUS_INPUT_HINT_MULTILINE != 0)
+    }
+
+    /// Consume this key as a flush, or decline it.
+    ///
+    /// Returns whether it was consumed. The same delivery guard as
+    /// [`take_stop`](Self::take_stop): swallowing the key and then failing to
+    /// commit would lose the keypress *and* leave the text uncommitted.
+    fn take_flush(&self, is_flush_key: bool) -> bool {
+        let inner = self.lock();
+        if !is_flush_key || !inner.session_active || !inner.preedit_pending {
+            return false;
+        }
+        let multiline = inner
+            .hints
+            .is_none_or(|hints| hints & IBUS_INPUT_HINT_MULTILINE != 0);
+        match &inner.flush_tx {
+            Some(tx) => tx.send(multiline).is_ok(),
+            None => false,
+        }
     }
 
     /// Consume this key as a stop, or decline it.
@@ -205,6 +271,7 @@ impl FieldState {
         let first = {
             let mut inner = self.lock();
             inner.purpose = Some(name.clone());
+            inner.hints = Some(hints);
             inner.content_types_seen.insert((purpose, hints))
         };
         if first {
@@ -260,7 +327,14 @@ impl Engine {
         if state & IBUS_RELEASE_MASK != 0 {
             return false;
         }
-        self.state.take_stop(keyval == IBUS_KEY_ESCAPE)
+        if self.state.take_stop(keyval == IBUS_KEY_ESCAPE) {
+            return true;
+        }
+        // Enter is consumed only to be re-issued *after* the commit. Left to
+        // pass through, the newline reaches the application while the words are
+        // still provisional, and lands in front of them.
+        self.state
+            .take_flush(matches!(keyval, IBUS_KEY_RETURN | IBUS_KEY_KP_ENTER))
     }
 
     /// The client telling us where the caret is, in screen coordinates.
@@ -508,5 +582,59 @@ mod tests {
         state.set_session_active(true);
         drop(rx);
         assert!(!state.take_stop(true));
+    }
+
+    #[test]
+    fn enter_is_consumed_only_with_something_to_commit_first() {
+        let state = FieldState::new();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        state.set_flush_channel(tx);
+        state.set_session_active(true);
+
+        // Nothing provisional: the key has no ordering problem, so it passes.
+        assert!(!state.take_flush(true));
+        assert!(rx.try_recv().is_err());
+
+        state.set_preedit_pending(true);
+        assert!(state.take_flush(true), "consumed with a pending preedit");
+        assert!(rx.try_recv().is_ok());
+
+        // And not while idle, however much preedit is showing.
+        state.set_session_active(false);
+        assert!(!state.take_flush(true));
+    }
+
+    #[test]
+    fn the_flush_reports_whether_the_field_takes_newlines() {
+        let state = FieldState::new();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        state.set_flush_channel(tx);
+        state.set_session_active(true);
+        state.set_preedit_pending(true);
+
+        // Unknown counts as multi-line: continuing a session is recoverable.
+        assert_eq!(state.is_multiline(), None);
+        assert!(state.take_flush(true));
+        assert!(rx.try_recv().unwrap(), "multi-line");
+
+        state.set_content_type(0, IBUS_INPUT_HINT_MULTILINE);
+        assert_eq!(state.is_multiline(), Some(true));
+        state.set_preedit_pending(true);
+        assert!(state.take_flush(true));
+        assert!(rx.try_recv().unwrap(), "multi-line");
+
+        // A content type that reports hints without the multiline bit.
+        state.set_content_type(0, 1);
+        assert_eq!(state.is_multiline(), Some(false));
+        state.set_preedit_pending(true);
+        assert!(state.take_flush(true));
+        assert!(!rx.try_recv().unwrap(), "single-line");
+    }
+
+    #[test]
+    fn the_multiline_bit_is_the_one_ibus_actually_uses() {
+        // Read off the installed IBus rather than assumed; a wrong bit here
+        // would end sessions in text areas and continue them in search boxes.
+        assert_eq!(IBUS_INPUT_HINT_MULTILINE, 1 << 14);
     }
 }

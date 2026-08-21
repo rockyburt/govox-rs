@@ -55,6 +55,31 @@ before 1.0.0, minor versions may change behaviour.
   never logs, counts by key, or retains anything: the added comparison is against one
   constant, records nothing, and every other key returns on the line it always did.
 
+- **Enter lands after your words, not in front of them.** With preedit on, nothing enters
+  the document until govox commits — so pressing Enter mid-sentence put the newline *before*
+  the text, because the keystroke reached the application while the words were still
+  provisional. The engine now consumes Enter, commits what is pending, and re-issues the
+  newline behind it.
+
+  The newline goes back through the correction pipeline as a bare `"\n"`, which already maps
+  onto the `newline` command — the same path "new line" takes. So the injector presses Enter
+  rather than typing a character, and it queues behind the commit instead of racing it.
+
+  Enter is consumed **only** when there is a pending preedit to commit ahead of it, and only
+  while a session is running; otherwise it passes through untouched. As with the stop key, it
+  is consumed only if the flush can actually be delivered — losing an Enter is the failure
+  this exists to prevent, merely in the other direction.
+
+- **The engine reads the field's input hints**, not just its purpose. `SetContentType`
+  carries a hint bitfield alongside the purpose, and govox was recording it only to log one
+  line per distinct combination. It now decodes `MULTILINE` (bit 14, read off the installed
+  IBus rather than assumed).
+
+  That distinguishes a text area from a search box, which matters for Enter: in a
+  **single-line** field Enter submits, so the field being dictated into no longer exists and
+  the session ends. In a multi-line field dictation continues. A client that never reports a
+  content type counts as multi-line — continuing a session is recoverable, ending one is not.
+
 ### Changed
 
 - **`[correction] case_control` is now on by default.** Spoken case — "all caps hello",

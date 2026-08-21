@@ -295,6 +295,21 @@ pub async fn run(
     // An Escape the engine consumed arrives as the same event the overlay's
     // stop button sends, so there is one way to stop and one place it happens.
     if let Some(state) = &ime_state {
+        let (flush_tx, mut flush_rx) = mpsc::unbounded_channel::<bool>();
+        state.set_flush_channel(flush_tx);
+        let flushes = events_tx.clone();
+        tokio::spawn(async move {
+            while let Some(multiline) = flush_rx.recv().await {
+                if flushes
+                    .send(Event::FlushRequested(multiline))
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        });
+
         let (stop_tx, mut stop_rx) = mpsc::unbounded_channel::<()>();
         state.set_stop_channel(stop_tx);
         let stops = events_tx.clone();
@@ -516,6 +531,9 @@ enum Event {
     /// button and an Escape the IBus engine consumed — and "nothing happened"
     /// is only diagnosable if the log says which one asked.
     StopRequested(&'static str),
+    /// Enter, consumed by the IBus engine so it can be re-issued after the
+    /// commit. Carries whether the field takes newlines.
+    FlushRequested(bool),
     /// Stop *and discard*, from the stop key the IBus engine consumed.
     ///
     /// Separate from `StopRequested` because the overlay's stop button means
@@ -787,6 +805,9 @@ impl<A: Announcer> EventLoop<'_, A> {
             match event {
                 Event::Key(key) => self.on_key(&key).await,
                 Event::Frame(frame) => self.on_frame(&frame).await,
+                Event::FlushRequested(multiline) => {
+                    self.flush_then_newline(multiline).await;
+                }
                 Event::AbortRequested(reason) => {
                     tracing::debug!(
                         listening = self.controller.listening(),
@@ -1033,6 +1054,48 @@ impl<A: Announcer> EventLoop<'_, A> {
     fn set_ime_session(&self, active: bool) {
         if let Some(state) = &self.ime_state {
             state.set_session_active(active);
+        }
+    }
+
+    /// Commit what is provisional, then re-issue the Enter behind it.
+    ///
+    /// The engine consumed the key precisely so this order can be guaranteed:
+    /// left to pass through, the newline reaches the application while the
+    /// words are still preedit and lands in front of them.
+    ///
+    /// The newline goes back through `Job::Text("\n")` rather than being
+    /// injected here, because the correction pipeline already maps a bare
+    /// newline onto the `newline` command — the same path "new line" takes, so
+    /// the injector presses Enter rather than typing a character, and it queues
+    /// *behind* the commit instead of racing it.
+    async fn flush_then_newline(&mut self, multiline: bool) {
+        if self.streaming_active {
+            self.finish_streaming().await;
+        } else if let Some(utterance) = self.segmenter.flush() {
+            self.dispatch(utterance).await;
+        }
+        self.session_text.clear();
+
+        if self
+            .utterances
+            .try_send(Job::Text("\n".to_owned()))
+            .is_err()
+        {
+            // The key was consumed on the promise of re-issuing it. Say so:
+            // silently losing an Enter is the failure this whole path exists to
+            // avoid, merely in the other direction.
+            tracing::warn!("recognition is backlogged; the Enter was not re-issued");
+        }
+
+        // A single-line field has just been submitted, so the session is
+        // dictating into something that no longer exists. Unknown counts as
+        // multi-line: continuing a session is recoverable, ending one is not.
+        if !multiline {
+            tracing::info!("single-line field submitted; ending the session");
+            if let Some(transition) = self.controller.auto_stop() {
+                self.announcer.set_state(transition.state());
+            }
+            self.stop_session().await;
         }
     }
 

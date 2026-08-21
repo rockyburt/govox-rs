@@ -252,6 +252,9 @@ async fn switch(connection: &Connection, engine_name: &str) -> Result<(), ImeErr
 
 /// Replace the whole preedit. Whole-string replace is why nothing diffs.
 async fn show(connection: &Connection, state: &FieldState, text: &str) -> Result<(), ImeError> {
+    // Recorded before the emit, so a key arriving during it is still seen as
+    // needing the commit ahead of it.
+    state.set_preedit_pending(!text.is_empty());
     emit(
         connection,
         state,
@@ -263,6 +266,7 @@ async fn show(connection: &Connection, state: &FieldState, text: &str) -> Result
 
 /// Discard the preedit without committing it.
 async fn clear(connection: &Connection, state: &FieldState) -> Result<(), ImeError> {
+    state.set_preedit_pending(false);
     emit(
         connection,
         state,
