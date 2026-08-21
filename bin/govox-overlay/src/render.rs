@@ -26,6 +26,8 @@ pub struct State {
     /// The fallback liveness signal, used only until a level feed is seen.
     pub pulse_on: bool,
     pub has_level_feed: bool,
+    /// The daemon's mode, or `None` for ordinary dictation.
+    pub mode: Option<String>,
     pub width: i32,
     pub height: i32,
 }
@@ -39,9 +41,52 @@ impl Default for State {
             compact: false,
             pulse_on: true,
             has_level_feed: false,
+            mode: None,
             width: g::CARD_WIDTH_IDLE,
             height: g::CARD_HEIGHT,
         }
+    }
+}
+
+/// How one mode paints: a word for the card, a colour for the glyph.
+///
+/// The word is at most as long as [`g::LABEL`], the idle text it replaces. The
+/// idle card has a fixed width, so a longer one would be clipped — and a mode
+/// indicator that reads "Spelling mod" is worse than a terse one.
+pub struct ModeStyle {
+    pub label: &'static str,
+    pub tint: (f32, f32, f32),
+}
+
+/// The colour and word for a mode name, or `None` for ordinary dictation.
+///
+/// Colour is the whole signal on the pill, which has no room for text — so the
+/// three are picked to differ in *lightness* as well as hue, and stay
+/// distinguishable to a red-green colour-blind reader.
+///
+/// An unrecognised name still paints an indicator rather than falling back to
+/// the microphone. The daemon only sends a name when it is *not* dictating, so
+/// "a mode this build does not know" and "dictating normally" are opposite
+/// facts; showing the plain mic would assert the wrong one.
+#[must_use]
+pub fn mode_style(mode: &str) -> ModeStyle {
+    match mode {
+        "command" => ModeStyle {
+            label: "Command",
+            tint: (0.35, 0.62, 0.98),
+        },
+        "spelling" => ModeStyle {
+            label: "Spelling",
+            tint: (0.99, 0.75, 0.25),
+        },
+        "asleep" => ModeStyle {
+            label: "Asleep",
+            tint: (0.55, 0.56, 0.62),
+        },
+        _ => ModeStyle {
+            label: "Mode",
+            tint: (0.72, 0.52, 0.95),
+        },
     }
 }
 
@@ -166,10 +211,17 @@ fn draw_card(canvas: &mut PixmapMut<'_>, state: &State, text: &Text) {
     } else {
         0.32
     };
+    // In a mode, the dot takes the mode's colour: the red record dot means
+    // "your speech is becoming text", which in command, spelling and sleep is
+    // not what is happening.
+    let style = state.mode.as_deref().map(mode_style);
+    let (dot_r, dot_g, dot_b) = style
+        .as_ref()
+        .map_or((0.92, 0.16, 0.16), |style| style.tint);
     if let Some(dot) = PathBuilder::from_circle(dot_cx, dot_cy, g::DOT_RADIUS) {
         canvas.fill_path(
             &dot,
-            &rgba(0.92, 0.16, 0.16, dot_alpha * alpha),
+            &rgba(dot_r, dot_g, dot_b, dot_alpha * alpha),
             FillRule::Winding,
             Transform::identity(),
             None,
@@ -202,11 +254,16 @@ fn draw_card(canvas: &mut PixmapMut<'_>, state: &State, text: &Text) {
         );
     }
 
-    // The caption when there is one, else the idle label.
-    let body = if state.caption.is_empty() {
-        g::LABEL
-    } else {
+    // The caption when there is one, else the mode's name, else the idle
+    // label. A mode outranks the idle label but not the caption: in command
+    // mode the caption is what you just said, and seeing it is how you find
+    // out why the command did not match.
+    let body = if !state.caption.is_empty() {
         &state.caption
+    } else if let Some(style) = &style {
+        style.label
+    } else {
+        g::LABEL
     };
     text.draw(
         canvas,
@@ -244,17 +301,33 @@ fn draw_pill(canvas: &mut PixmapMut<'_>, state: &State) {
     let group_width = g::MIC_CRADLE_RADIUS * 2.0 + g::PILL_GAP + bars_width;
     let group_x = (state.width as f32 - group_width) / 2.0;
 
+    // The pill has no room for a word, so colour carries the mode on its own.
+    let style = state.mode.as_deref().map(mode_style);
+    let tint = style
+        .as_ref()
+        .map_or((0.97, 0.97, 0.98), |style| style.tint);
+    // Asleep, the bars are held flat. Audio is still arriving — sleep suspends
+    // acting on speech, not listening for "wake up" — so a live waveform here
+    // would animate energetically while claiming to be asleep.
+    let level = if state.mode.as_deref() == Some("asleep") {
+        0.0
+    } else {
+        state.level
+    };
+
     draw_microphone(
         canvas,
         group_x + g::MIC_CRADLE_RADIUS - g::MIC_WIDTH / 2.0,
         mid_y,
+        tint,
         alpha,
     );
     draw_waveform(
         canvas,
         group_x + g::MIC_CRADLE_RADIUS * 2.0 + g::PILL_GAP,
         mid_y,
-        state.level,
+        level,
+        tint,
         alpha,
     );
 }
@@ -264,11 +337,17 @@ fn draw_pill(canvas: &mut PixmapMut<'_>, state: &State) {
 /// Monochrome and light, like the system glyphs macOS uses. The whole glyph is
 /// centred on `mid_y` as one unit, so the body sits above centre and the stem
 /// below it rather than the group drifting downward.
-fn draw_microphone(canvas: &mut PixmapMut<'_>, x: f32, mid_y: f32, alpha: f32) {
+fn draw_microphone(
+    canvas: &mut PixmapMut<'_>,
+    x: f32,
+    mid_y: f32,
+    tint: (f32, f32, f32),
+    alpha: f32,
+) {
     let total_h = g::MIC_BODY_HEIGHT + (g::MIC_CRADLE_RADIUS - g::MIC_WIDTH / 2.0) + g::MIC_STEM;
     let top = mid_y - total_h / 2.0;
     let centre_x = x + g::MIC_WIDTH / 2.0;
-    let paint = rgba(0.97, 0.97, 0.98, 0.95 * alpha);
+    let paint = rgba(tint.0, tint.1, tint.2, 0.95 * alpha);
 
     // Body: distinctly taller than wide, or the capsule reads as a circle.
     if let Some(body) = rounded_rect(x, top, g::MIC_WIDTH, g::MIC_BODY_HEIGHT, g::MIC_WIDTH / 2.0) {
@@ -310,11 +389,18 @@ fn draw_microphone(canvas: &mut PixmapMut<'_>, x: f32, mid_y: f32, alpha: f32) {
 ///
 /// A single meter reads as a progress bar; four bars moving by different
 /// amounts read as a voice.
-fn draw_waveform(canvas: &mut PixmapMut<'_>, x: f32, mid_y: f32, level: f32, alpha: f32) {
+fn draw_waveform(
+    canvas: &mut PixmapMut<'_>,
+    x: f32,
+    mid_y: f32,
+    level: f32,
+    tint: (f32, f32, f32),
+    alpha: f32,
+) {
     // Monochrome, matching the glyph. The green here was inherited from the old
     // level meter and is the least Apple-looking thing about a card that is
     // otherwise trying to be a system control.
-    let paint = rgba(0.97, 0.97, 0.98, 0.90 * alpha);
+    let paint = rgba(tint.0, tint.1, tint.2, 0.90 * alpha);
     for index in 0..g::BAR_COUNT {
         let scaled = g::bar_scale(level, g::BAR_RESPONSE[index]);
         let bar_h = g::BAR_MIN_HEIGHT + (g::BAR_MAX_HEIGHT - g::BAR_MIN_HEIGHT) * scaled;
@@ -560,5 +646,72 @@ mod tests {
         assert_eq!(centre.alpha(), 0, "the middle must stay see-through");
         let painted = pixmap.pixels().iter().filter(|p| p.alpha() > 0).count();
         assert!(painted > 50, "the marker drew almost nothing");
+    }
+
+    #[test]
+    fn every_mode_paints_a_distinct_colour() {
+        // Colour is the entire indicator on the pill, which has no room for a
+        // word. Two modes sharing one would make the pill a decoration.
+        let modes = ["command", "spelling", "asleep", "somethingnew"];
+        for (index, one) in modes.iter().enumerate() {
+            for other in &modes[index + 1..] {
+                assert_ne!(
+                    mode_style(one).tint,
+                    mode_style(other).tint,
+                    "{one} and {other} look the same"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn no_mode_is_painted_the_record_dots_red() {
+        // The red dot means "your speech is becoming text". In command,
+        // spelling and sleep it is not, so reusing that red would say the one
+        // thing the indicator exists to deny.
+        const RECORD_RED: (f32, f32, f32) = (0.92, 0.16, 0.16);
+        for mode in ["command", "spelling", "asleep", "somethingnew"] {
+            assert_ne!(mode_style(mode).tint, RECORD_RED, "{mode}");
+        }
+    }
+
+    #[test]
+    fn a_mode_label_fits_the_idle_card() {
+        // The idle card has a fixed width and the label replaces `g::LABEL` in
+        // the same slot, so anything longer is silently clipped.
+        for mode in ["command", "spelling", "asleep", "somethingnew"] {
+            let label = mode_style(mode).label;
+            assert!(
+                label.chars().count() <= g::LABEL.chars().count(),
+                "{mode} draws {label:?}, which is wider than the slot"
+            );
+        }
+    }
+
+    #[test]
+    fn a_mode_changes_what_the_pill_paints() {
+        // The pill is the surface that follows the caret, and the one the user
+        // actually looks at while dictating. A mode that left it identical
+        // would mean the indicator is invisible where it is needed most.
+        let pixels = |mode: Option<&str>| {
+            let mut pixmap = Pixmap::new(g::PILL_WIDTH as u32, g::PILL_HEIGHT as u32)
+                .expect("pill pixmap");
+            let state = State {
+                opacity: 1.0,
+                level: 0.5,
+                compact: true,
+                mode: mode.map(str::to_owned),
+                width: g::PILL_WIDTH,
+                height: g::PILL_HEIGHT,
+                ..State::default()
+            };
+            draw(&mut pixmap, &state, &Text::load().expect("font"));
+            pixmap.data().to_vec()
+        };
+
+        let dictating = pixels(None);
+        for mode in ["command", "spelling", "asleep"] {
+            assert_ne!(pixels(Some(mode)), dictating, "{mode} looks like dictation");
+        }
     }
 }

@@ -10,10 +10,12 @@
 //! visual, drawn entirely by hand with `tiny-skia`, using an empty XShape input
 //! region for click-through. See [`x11`] for why each of those matters.
 //!
-//! Protocol, newline-delimited and byte-identical to the Python helper's:
+//! Protocol, newline-delimited and a superset of the Python helper's:
 //! `show` `pulse` `hide` `level <0-1>` `caption <text>` `anchor <x> <y> <w> <h>`
-//! `expect-anchor` `caret-marker 0|1` `compact 0|1` `quit` on stdin; `stop` on
-//! stdout when the card is clicked.
+//! `expect-anchor` `caret-marker 0|1` `compact 0|1` `mode [name]` `quit` on
+//! stdin; `stop` on stdout when the card is clicked. Every line but `mode` is
+//! byte-identical to the reference, and unknown lines are ignored, so either
+//! helper stays driveable by either daemon.
 
 mod geometry;
 mod protocol;
@@ -199,6 +201,9 @@ impl Hud {
                 self.state.caption = text;
                 self.resize()?;
             }
+            // No resize: the mode's word is bounded by the idle label's
+            // length, so the card it is drawn on is already wide enough.
+            Command::Mode(mode) => self.state.mode = mode,
             Command::Quit => return Ok(false),
         }
         Ok(true)

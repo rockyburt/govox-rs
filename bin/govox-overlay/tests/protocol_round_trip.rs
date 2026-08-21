@@ -28,6 +28,7 @@ const KNOWN_VERBS: &[&str] = &[
     "expect-anchor",
     "caret-marker",
     "compact",
+    "mode",
     "quit",
 ];
 
@@ -47,6 +48,8 @@ fn every_command() -> Vec<String> {
         OverlayCommand::Quit.encode(),
         OverlayCommand::Caption("hello world".to_owned()).encode(),
         OverlayCommand::Caption(String::new()).encode(),
+        OverlayCommand::Mode(Some("command".to_owned())).encode(),
+        OverlayCommand::Mode(None).encode(),
     ]
 }
 
@@ -110,4 +113,29 @@ fn flags_are_emitted_as_one_and_zero() {
         OverlayCommand::CaretMarker(false).encode(),
         "caret-marker 0"
     );
+}
+
+#[test]
+fn a_mode_is_one_bare_word_and_none_clears_it() {
+    assert_eq!(
+        OverlayCommand::Mode(Some("spelling".to_owned())).encode(),
+        "mode spelling"
+    );
+    assert_eq!(OverlayCommand::Mode(None).encode(), "mode");
+}
+
+#[test]
+fn a_mode_name_the_wire_cannot_carry_is_sent_as_the_clear() {
+    // Not a hypothetical: a name with a space would be decoded as the clear
+    // anyway, and one with a newline would desynchronize the stream and let
+    // the tail be read as a command. Refusing on the sending side means the
+    // failure is a missing indicator rather than a HUD taking dictation
+    // instructions from a mode name.
+    for name in ["two words", "com-mand", "", "quit\nmode"] {
+        assert_eq!(
+            OverlayCommand::Mode(Some(name.to_owned())).encode(),
+            "mode",
+            "{name:?}"
+        );
+    }
 }

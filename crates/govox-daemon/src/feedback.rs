@@ -199,6 +199,14 @@ impl<S: PlaySink + 'static> Announcer for FeedbackChannel<S> {
         if let Some(tray) = &self.tray {
             tray.set_mode(mode);
         }
+        // The overlay gets it too, and unconditionally — unlike the caption and
+        // the level, which have config switches. Those two are *content*, and
+        // someone may reasonably not want their words on screen. The mode is
+        // the answer to "why did nothing happen when I spoke", so an overlay
+        // that is on at all must show it.
+        if let Some(overlay) = &self.overlay {
+            overlay.send(&OverlayCommand::Mode(mode.map(str::to_owned)));
+        }
     }
 
     fn caption(&self, text: &str) {
@@ -313,6 +321,47 @@ mod tests {
         assert_eq!(
             overlay.sent(),
             vec![OverlayCommand::Show, OverlayCommand::Hide]
+        );
+    }
+
+    #[test]
+    fn a_mode_reaches_the_overlay_as_well_as_the_tray() {
+        // The tray is on a panel the user may have collapsed, auto-hidden, or
+        // never look at; the overlay is under the caret they are typing into.
+        // A mode indicator only on the tray answers "why did nothing happen"
+        // in the place least likely to be read.
+        let overlay = Arc::new(RecordingOverlay::default());
+        let channel = channel(FeedbackConfig::default(), &overlay);
+
+        channel.mode(Some("command"));
+        channel.mode(None);
+
+        assert_eq!(
+            overlay.sent(),
+            vec![
+                OverlayCommand::Mode(Some("command".to_owned())),
+                OverlayCommand::Mode(None),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_mode_is_shown_even_when_captions_are_switched_off() {
+        // Captions are content and have a switch; the mode is the answer to
+        // "why did nothing happen when I spoke" and must not share it.
+        let overlay = Arc::new(RecordingOverlay::default());
+        let config = FeedbackConfig {
+            overlay_caption: false,
+            ..FeedbackConfig::default()
+        };
+        let channel = channel(config, &overlay);
+
+        channel.caption("swallowed");
+        channel.mode(Some("asleep"));
+
+        assert_eq!(
+            overlay.sent(),
+            vec![OverlayCommand::Mode(Some("asleep".to_owned()))]
         );
     }
 

@@ -36,6 +36,8 @@ pub enum Command {
     Compact(bool),
     /// Draw a diagnostic box on the reported caret.
     CaretMarker(bool),
+    /// Which mode the daemon is in, or `None` for ordinary dictation.
+    Mode(Option<String>),
     Quit,
 }
 
@@ -75,11 +77,24 @@ impl Command {
             // decide.
             ("caption", None) => Some(Self::Caption(String::new())),
             ("caption", Some(text)) => Some(Self::Caption(text.to_owned())),
+            // Bare `mode` returns to ordinary dictation. An argument that is
+            // not a single bare word is read as that same clear rather than
+            // as a mode: a name this build does not know still paints
+            // *something*, but a name that could not have been sent means the
+            // stream is not saying what it appears to.
+            ("mode", None) => Some(Self::Mode(None)),
+            ("mode", Some(name)) => Some(Self::Mode(parse_mode(name))),
             ("compact", Some(flag)) => Some(Self::Compact(flag.trim() == "1")),
             ("caret-marker", Some(flag)) => Some(Self::CaretMarker(flag.trim() == "1")),
             _ => None,
         }
     }
+}
+
+/// One bare word of ASCII letters -> that mode; anything else -> `None`.
+fn parse_mode(name: &str) -> Option<String> {
+    let name = name.trim();
+    (!name.is_empty() && name.chars().all(|c| c.is_ascii_alphabetic())).then(|| name.to_owned())
 }
 
 /// `x y w h` -> a rectangle; anything else -> `None`.
@@ -213,6 +228,33 @@ mod tests {
             Command::parse("caret-marker 0"),
             Some(Command::CaretMarker(false))
         );
+    }
+
+    #[test]
+    fn a_mode_is_one_bare_word_and_a_bare_line_clears_it() {
+        assert_eq!(
+            Command::parse("mode command"),
+            Some(Command::Mode(Some("command".to_owned())))
+        );
+        assert_eq!(Command::parse("mode"), Some(Command::Mode(None)));
+    }
+
+    #[test]
+    fn a_mode_this_build_does_not_know_is_still_a_mode() {
+        // Forward compatibility in the direction that matters: the daemon only
+        // sends a name when it is *not* dictating, so decoding an unknown name
+        // as "no mode" would assert the opposite of what was sent.
+        assert_eq!(
+            Command::parse("mode telepathy"),
+            Some(Command::Mode(Some("telepathy".to_owned())))
+        );
+    }
+
+    #[test]
+    fn a_malformed_mode_clears_rather_than_guesses() {
+        for line in ["mode two words", "mode com-mand", "mode 7", "mode   "] {
+            assert_eq!(Command::parse(line), Some(Command::Mode(None)), "{line}");
+        }
     }
 
     #[test]

@@ -6,16 +6,19 @@
 //! least-tested, most crash-prone code in the project, and out-of-process means
 //! an overlay crash cannot take dictation down.
 //!
-//! The wire protocol is kept **byte-identical** to the reference, which makes
-//! it the most useful debugging seam in the port: the Rust daemon can drive the
-//! *Python* overlay and vice versa. Point [`OverlayClient`] at the Python
-//! helper with `GOVOX_OVERLAY_CMD`:
+//! The wire protocol is a **superset** of the reference's, which makes it the
+//! most useful debugging seam in the port: the Rust daemon can drive the
+//! *Python* overlay and vice versa. Every line the reference defines is
+//! byte-identical; `mode` is the one addition, and it is safe because both
+//! helpers ignore lines they do not recognise, so the Python overlay drives
+//! exactly as it always did and simply never paints an indicator. Point
+//! [`OverlayClient`] at the Python helper with `GOVOX_OVERLAY_CMD`:
 //!
 //! ```text
 //! GOVOX_OVERLAY_CMD="python3 -m govox.feedback.overlay_app"
 //! ```
 //!
-//! Commands out: `show` `pulse` `hide` `level` `caption` `anchor`
+//! Commands out: `show` `pulse` `hide` `level` `caption` `anchor` `mode`
 //! `expect-anchor` `caret-marker` `compact` `quit`. In: `stop`.
 
 use std::io::{BufRead, BufReader, Write};
@@ -94,6 +97,13 @@ pub enum OverlayCommand {
     ExpectAnchor,
     CaretMarker(bool),
     Compact(bool),
+    /// Which mode the daemon is in, or `None` for ordinary dictation.
+    ///
+    /// The one command here the reference protocol does not have. It is safe
+    /// to add precisely because the helper ignores what it does not know: an
+    /// older helper — including the Python one — draws the plain microphone
+    /// and stays driveable, which is the whole point of keeping that seam.
+    Mode(Option<String>),
     Quit,
 }
 
@@ -119,9 +129,26 @@ impl OverlayCommand {
             Self::ExpectAnchor => "expect-anchor".to_owned(),
             Self::CaretMarker(on) => format!("caret-marker {}", u8::from(*on)),
             Self::Compact(on) => format!("compact {}", u8::from(*on)),
+            // A mode is one bare word. Anything else — spaces, a newline, an
+            // empty string — is sent as the clear, because a malformed mode
+            // line would either desynchronize the stream or paint an
+            // indicator nobody can interpret.
+            Self::Mode(Some(name)) if is_mode_token(name) => format!("mode {name}"),
+            Self::Mode(_) => "mode".to_owned(),
             Self::Quit => "quit".to_owned(),
         }
     }
+}
+
+/// A mode name the wire can carry: one non-empty run of ASCII letters.
+///
+/// Deliberately narrower than "has no whitespace". The names are a closed set
+/// the daemon chooses, so anything outside it is a bug on the sending side,
+/// and the tight rule turns that bug into a visible missing indicator rather
+/// than a plausible-looking wrong one.
+#[must_use]
+fn is_mode_token(name: &str) -> bool {
+    !name.is_empty() && name.chars().all(|c| c.is_ascii_alphabetic())
 }
 
 /// Collapse whitespace and cap the length, ellipsizing on the left.
