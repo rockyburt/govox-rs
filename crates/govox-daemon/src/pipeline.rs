@@ -755,6 +755,11 @@ impl<A: Announcer> EventLoop<'_, A> {
         if hypothesis.trim().is_empty() {
             return;
         }
+        // Asleep, nothing said is going to be committed, so drawing it under
+        // the caret would promise something that is not going to happen.
+        if self.shared.asleep() {
+            return;
+        }
         // Not even as provisional text. A password rendered under the caret is
         // exactly what the refusal exists to prevent, and preedit is on screen.
         if self

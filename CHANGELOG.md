@@ -96,6 +96,26 @@ before 1.0.0, minor versions may change behaviour.
   the session ends. In a multi-line field dictation continues. A client that never reports a
   content type counts as multi-line — continuing a session is recoverable, ending one is not.
 
+- **Sleep and wake**: say **"go to sleep"** to suspend listening and **"wake up"** to
+  resume, taken from macOS Voice Control. Distinct from stopping — the session, its preedit
+  and its context survive, so waking carries on rather than starting again.
+
+  While asleep, **nothing else is honoured**: text, commands, edits and mode switches are
+  all discarded unread, and provisional text stops being drawn under the caret. That is what
+  asleep has to mean to be trusted as a way of shutting govox up. Waking restores whatever
+  mode you left — falling asleep in command mode wakes in command mode, not silently in
+  dictation.
+
+  It is not gated on `[editing] command_mode`, because while asleep waking is the only thing
+  that works and must not depend on a setting. The tray shows a standing "Asleep".
+
+  Only the two phrases macOS uses, and deliberately no shorter ones: "sleep" and "wake"
+  alone are ordinary words, and a phrase that silently suspends dictation is the worst
+  false positive there is. "go to sleep" is still a sentence someone could dictate, and
+  since commands match as a trailing suffix it can fire mid-utterance — the accepted cost
+  of the phrase macOS chose, bounded by waking being one phrase away and the indicator
+  saying what happened.
+
 ### Fixed
 
 - **Commands work again when said after other words.** "So I said hello, *delete that*" now

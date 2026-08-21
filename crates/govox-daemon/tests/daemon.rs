@@ -399,6 +399,130 @@ async fn re_entering_command_mode_does_not_re_announce() {
     );
 }
 
+/// Asleep, the only thing that exists is waking up.
+#[tokio::test]
+async fn sleeping_discards_everything_until_woken() {
+    let mut config = defaults();
+    config.editing.command_mode = true;
+    let mut h = harness_with(
+        config,
+        FakeTranscriber::saying("unused"),
+        RecordingInjector::shared(),
+    );
+
+    h.daemon.process_text("hello world").await;
+    assert_eq!(h.injector.texts(), ["Hello world."]);
+
+    h.daemon.process_text("go to sleep").await;
+    assert!(h.shared.asleep(), "asleep");
+    assert_eq!(
+        h.announcer.modes().last(),
+        Some(&Some("asleep".to_owned())),
+        "and it says so, standing"
+    );
+
+    // Everything is discarded: text, commands, edits, even entering a mode.
+    let before = h.injector.actions().len();
+    for said in [
+        "this must not be typed",
+        "press enter",
+        "delete that",
+        "command mode",
+        "new line",
+    ] {
+        h.daemon.process_text(said).await;
+    }
+    assert_eq!(
+        h.injector.actions().len(),
+        before,
+        "nothing may reach the document while asleep: {:?}",
+        h.injector.actions()
+    );
+    assert!(!h.shared.command_mode(), "not even a mode switch");
+    assert!(h.shared.asleep(), "and it is still asleep");
+
+    // Waking resumes, and dictation lands again.
+    h.daemon.process_text("wake up").await;
+    assert!(!h.shared.asleep(), "awake");
+    h.daemon.process_text("back again").await;
+    assert_eq!(
+        h.injector.texts().last().map(String::as_str),
+        Some("Back again.")
+    );
+}
+
+/// Sleep is independent of command mode, and waking restores it.
+#[tokio::test]
+async fn falling_asleep_in_command_mode_wakes_in_command_mode() {
+    let mut config = defaults();
+    config.editing.command_mode = true;
+    let mut h = harness_with(
+        config,
+        FakeTranscriber::saying("unused"),
+        RecordingInjector::shared(),
+    );
+
+    h.daemon.process_text("command mode").await;
+    h.daemon.process_text("go to sleep").await;
+    h.daemon.process_text("wake up").await;
+
+    assert!(h.shared.command_mode(), "the mode survived the nap");
+    assert_eq!(
+        h.announcer.modes().last(),
+        Some(&Some("command".to_owned())),
+        "and the indicator went back to it rather than to nothing"
+    );
+}
+
+/// The sleep phrases work whatever `command_mode` is configured to.
+#[tokio::test]
+async fn sleeping_does_not_depend_on_command_mode_being_enabled() {
+    let mut config = defaults();
+    config.editing.command_mode = false;
+    let mut h = harness_with(
+        config,
+        FakeTranscriber::saying("unused"),
+        RecordingInjector::shared(),
+    );
+
+    h.daemon.process_text("go to sleep").await;
+    assert!(h.shared.asleep(), "sleeping is not gated on command mode");
+    h.daemon.process_text("wake up").await;
+    assert!(!h.shared.asleep());
+}
+
+/// Said after other words, as the trailing scan allows.
+#[tokio::test]
+async fn sleep_and_wake_work_mid_utterance() {
+    let mut config = defaults();
+    config.editing.command_mode = true;
+    let mut h = harness_with(
+        config,
+        FakeTranscriber::saying("unused"),
+        RecordingInjector::shared(),
+    );
+
+    h.daemon
+        .process_text("that is enough for now go to sleep")
+        .await;
+    assert!(h.shared.asleep());
+    assert_eq!(
+        h.injector.texts(),
+        ["That is enough for now"],
+        "the words in front are still dictation"
+    );
+
+    // But asleep, a trailing wake is the *only* thing honoured — and the words
+    // in front of it are discarded with everything else.
+    h.daemon.process_text("alright then wake up").await;
+    assert!(!h.shared.asleep(), "woken by a trailing phrase");
+    assert_eq!(
+        h.injector.texts(),
+        ["That is enough for now"],
+        "nothing said while asleep was typed"
+    );
+}
+
 /// A mode must be a standing indicator, not an announcement that fades.
 ///
 /// The failure this pins: command mode was reported once, by a caption that the

@@ -164,6 +164,16 @@ pub enum PipelineAction {
     Text(String),
     Command(String),
     Edit(EditAction),
+    /// Suspend or resume listening, without ending the session.
+    ///
+    /// A third state beside dictating and commanding, taken from macOS Voice
+    /// Control. Distinct from stopping: the session, its preedit and its
+    /// context survive, so waking resumes where you left off rather than
+    /// starting again. While asleep **nothing else is honoured** — that is the
+    /// point of it, and the reason it cannot simply be a mode flag on `Mode`.
+    Sleep {
+        asleep: bool,
+    },
     /// Switch between dictating text and issuing commands.
     ///
     /// Types nothing: it changes how the *next* utterance is interpreted, which

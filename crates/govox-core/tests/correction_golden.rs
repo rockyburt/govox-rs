@@ -66,6 +66,7 @@ fn action_json(action: &PipelineAction) -> Value {
         PipelineAction::Mode { command_mode } => {
             json!({"kind": "mode", "command_mode": command_mode})
         }
+        PipelineAction::Sleep { asleep } => json!({"kind": "sleep", "asleep": asleep}),
         PipelineAction::Edit(edit) => edit_json(edit),
     }
 }
@@ -834,6 +835,26 @@ fn table_driven_records() -> Vec<(&'static str, Value)> {
                 json!({ "text": text, "mode_switching": mode_switching }),
             ));
         }
+    }
+
+    // The sleep phrases. Ungated by `mode_switching` — they are honoured
+    // whatever the mode, because while asleep waking is the only thing that
+    // works — so both settings must agree.
+    for (phrase, _) in commands::SLEEP_COMMANDS {
+        for mode_switching in [true, false] {
+            out.push((
+                "detect_command",
+                json!({
+                    "text": phrase,
+                    "mode_switching": mode_switching,
+                    "command_mode": false,
+                }),
+            ));
+        }
+        out.push((
+            "split_trailing_command",
+            json!({ "text": format!("some words {phrase}"), "mode_switching": true }),
+        ));
     }
 
     // Every mode phrase, at both settings of the switch that enables them. A

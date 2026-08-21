@@ -11,7 +11,7 @@
 
 use govox_core::config::Config;
 use govox_core::correction::casing::{CASE_MARKERS, Mode, SWITCH_WORDS};
-use govox_core::correction::commands::{COMMANDS, MODE_COMMANDS};
+use govox_core::correction::commands::{COMMANDS, MODE_COMMANDS, SLEEP_COMMANDS};
 use govox_core::correction::emoji::SPOKEN_EMOJI;
 use govox_core::correction::grammar::{
     DIRECTION_WORDS, EDGE_WORDS, MODIFIER_WORDS, PRESS_KEYS, SIMPLE_EDITS, UNIT_WORDS, VERB_OPS,
@@ -122,6 +122,19 @@ pub fn render(config: &Config) -> String {
         "  also, with a modifier",
         "a-z, 0-9, f1-f12, space",
     );
+
+    heading(&mut out, "Sleep", "always on");
+    for (phrase, asleep) in SLEEP_COMMANDS {
+        bullet(
+            &mut out,
+            phrase,
+            if *asleep {
+                "suspend — nothing is heard but \"wake up\""
+            } else {
+                "resume, in whatever mode you left"
+            },
+        );
+    }
 
     let mode = config.editing.command_mode;
     heading(

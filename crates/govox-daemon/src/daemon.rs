@@ -361,6 +361,23 @@ impl<T: Transcriber> Daemon<T> {
     /// An edit that cannot be satisfied tells the user and stops. It must never
     /// fall through to typing the command phrase as literal text.
     pub fn apply_action(&mut self, action: PipelineAction) -> Result<(), GovoxError> {
+        // Before everything, including the password check: while asleep the
+        // only thing that exists is waking up. Anything else — text, a command,
+        // an edit — is discarded unread, which is what "asleep" has to mean if
+        // it is to be trusted as a way of shutting govox up.
+        if self.shared.asleep() {
+            return match action {
+                PipelineAction::Sleep { asleep: false } => {
+                    self.set_asleep(false);
+                    Ok(())
+                }
+                other => {
+                    tracing::debug!(action = ?std::mem::discriminant(&other), "asleep; discarded");
+                    Ok(())
+                }
+            };
+        }
+
         // Checked before anything else, including a mode switch: whatever was
         // said into a password field, the answer is to do nothing with it.
         if self.refuses_to_dictate() {
@@ -371,6 +388,11 @@ impl<T: Transcriber> Daemon<T> {
         }
 
         match action {
+            PipelineAction::Sleep { asleep } => {
+                self.set_asleep(asleep);
+                Ok(())
+            }
+
             PipelineAction::Mode { command_mode } => {
                 self.set_command_mode(command_mode);
                 Ok(())
@@ -455,6 +477,35 @@ impl<T: Transcriber> Daemon<T> {
     /// The answer is that entering is loud — a persistent caption plus a
     /// notification — and the caption stays up for as long as the mode does,
     /// so the state is never inferred from memory.
+    /// Suspend or resume listening.
+    ///
+    /// The indicator matters more here than anywhere else: asleep, govox looks
+    /// exactly like govox that has stopped working. Waking is deliberately
+    /// reported even when nothing was said in between, because "did it hear
+    /// me?" is the only question a sleeping daemon raises.
+    fn set_asleep(&mut self, asleep: bool) {
+        if !self.shared.set_asleep(asleep) {
+            return;
+        }
+        tracing::info!(asleep, "sleep");
+        if asleep {
+            self.announcer.mode(Some("asleep"));
+            self.announcer.caption("asleep — say \"wake up\"");
+            self.announcer
+                .notify("govox", "Asleep. Say \"wake up\" to resume.");
+        } else {
+            // Back to whichever mode was in force before, not to nothing: a
+            // session that fell asleep in command mode wakes in command mode.
+            self.announcer.mode(if self.shared.command_mode() {
+                Some("command")
+            } else {
+                None
+            });
+            self.announcer.caption("");
+            self.announcer.notify("govox", "Awake. Listening again.");
+        }
+    }
+
     fn set_command_mode(&mut self, enabled: bool) {
         if !self.shared.set_command_mode(enabled) {
             return;

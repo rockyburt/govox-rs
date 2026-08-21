@@ -18,6 +18,19 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("space bar", "space"),
 ];
 
+/// Phrases that suspend and resume listening.
+///
+/// Only the two macOS says, and deliberately no shorter ones: "sleep" and
+/// "wake" alone are ordinary words, and a phrase that suspends dictation is the
+/// worst possible false positive — everything after it is silently discarded
+/// until you work out why.
+///
+/// "go to sleep" is still a sentence someone could dictate, and since commands
+/// are matched as a trailing suffix it can fire mid-utterance. That is the
+/// accepted cost of the phrase macOS chose; waking is one phrase away and the
+/// standing indicator says what happened.
+pub const SLEEP_COMMANDS: &[(&str, bool)] = &[("go to sleep", true), ("wake up", false)];
+
 /// Phrases that switch mode rather than producing text.
 ///
 /// Several spellings per direction because this is the one command a user
@@ -134,6 +147,13 @@ pub fn detect_command(text: &str, mode_switching: bool, command_mode: bool) -> P
     }
 
     let normalized = normalize_command_text(text);
+
+    // Before the mode phrases and before any text: while asleep this is the
+    // only thing that will be honoured, so it must not be reachable only
+    // through a path something else can claim first.
+    if let Some(asleep) = lookup(SLEEP_COMMANDS, &normalized) {
+        return PipelineAction::Sleep { asleep };
+    }
 
     if mode_switching && let Some(mode) = lookup(MODE_COMMANDS, &normalized) {
         return PipelineAction::Mode { command_mode: mode };

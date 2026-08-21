@@ -33,6 +33,12 @@ pub struct SharedState {
     pub corrector: ArcSwap<CorrectionPipeline>,
     /// Whether command mode is active.
     command_mode: AtomicBool,
+    /// Listening is suspended; only "wake up" is honoured.
+    ///
+    /// Beside `command_mode` rather than folded into it: they are independent.
+    /// Falling asleep in command mode and waking must land back in command
+    /// mode, not silently in dictation.
+    asleep: AtomicBool,
     /// Whether the input method is holding this session's provisional text.
     ///
     /// Written by the event loop as a session starts and ends, read by the
@@ -72,6 +78,7 @@ impl SharedState {
             dictionary: ArcSwap::from_pointee(dictionary),
             corrector: ArcSwap::from_pointee(corrector),
             command_mode: AtomicBool::new(false),
+            asleep: AtomicBool::new(false),
             preedit_active: AtomicBool::new(false),
             held_modifiers: Mutex::new(BTreeSet::new()),
             preceding: Mutex::new(None),
@@ -89,6 +96,16 @@ impl SharedState {
     /// mode they are in — but it must not re-announce.
     pub fn set_command_mode(&self, enabled: bool) -> bool {
         self.command_mode.swap(enabled, Ordering::Relaxed) != enabled
+    }
+
+    #[must_use]
+    pub fn asleep(&self) -> bool {
+        self.asleep.load(Ordering::Relaxed)
+    }
+
+    /// Returns whether this changed anything, so a repeat says nothing.
+    pub fn set_asleep(&self, asleep: bool) -> bool {
+        self.asleep.swap(asleep, Ordering::Relaxed) != asleep
     }
 
     /// Record a modifier going down or coming up.
