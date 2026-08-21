@@ -8,6 +8,12 @@ before 1.0.0, minor versions may change behaviour.
 
 ### Fixed
 
+- **`tools/dev-restart.sh` now rebuilds the overlay helper.** It built only the daemon, so an
+  overlay-only change never reached the running HUD — it kept whatever helper binary happened
+  to be on disk, which looks exactly like a change that did not work. The overlay is not a
+  test target the script was right to skip; it is a second process the daemon spawns at
+  runtime.
+
 - **`govox --version` told the truth about the wrong build.** It reported `0.1.0+46.6af8baa`
   while the tree stood at `0.2.0+67.c000865` — wrong about the release and the commit, and a
   day stale. The build script was right; cargo had not re-run it. Building the same workspace

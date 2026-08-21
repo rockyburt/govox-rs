@@ -34,9 +34,14 @@ if [[ -z "$TARGET_DIR" ]]; then
 fi
 
 echo "==> building $(git rev-parse --abbrev-ref HEAD) in $REPO"
-# Only the binary. Building the whole workspace would compile the test targets
-# too, which roughly doubles the cycle for code that is not about to run.
-cargo build -p govox --bin govox
+# Both runtime binaries, and no test targets. Building the whole workspace would
+# compile the tests too, which roughly doubles the cycle for code that is not
+# about to run — but the overlay is not a test target, it is a *second process*
+# the daemon spawns at runtime, resolved as a sibling of its own executable. It
+# was omitted here, so an overlay-only change never reached the running HUD and
+# looked exactly like a change that did not work, which is the failure this
+# script exists to prevent.
+cargo build -p govox --bin govox -p govox-overlay --bin govox-overlay
 
 # The version string is baked in by govox-daemon's build script, and cargo only
 # re-runs that when it thinks one of the git refs it watches has changed. That
