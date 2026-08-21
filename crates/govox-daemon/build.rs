@@ -62,14 +62,14 @@ fn main() {
     // string stayed at the previous commit until something else forced a
     // rebuild. Caught by a fresh build reporting a commit behind its own tree.
     for path in ["HEAD", "packed-refs"] {
-        if let Some(resolved) = git(&["rev-parse", "--git-path", path]) {
+        if let Some(resolved) = git_path(path) {
             println!("cargo:rerun-if-changed={resolved}");
         }
     }
     // The branch ref itself, which is what a commit actually writes. Absent on
     // a detached HEAD, where HEAD above already carries the commit id.
     if let Some(reference) = git(&["symbolic-ref", "--quiet", "HEAD"])
-        && let Some(resolved) = git(&["rev-parse", "--git-path", &reference])
+        && let Some(resolved) = git_path(&reference)
     {
         println!("cargo:rerun-if-changed={resolved}");
     }
@@ -102,6 +102,23 @@ fn build_metadata() -> Option<String> {
         Some(count) => Some(format!("{count}.{commit}")),
         None => Some(commit),
     }
+}
+
+/// One of git's own files, as an **absolute** path.
+///
+/// Absolute matters. `cargo:rerun-if-changed` resolves a relative path against
+/// the package root, while `git rev-parse --git-path` prints one relative to
+/// the process's working directory — the same directory here, so the two agree
+/// today and would stop agreeing the moment either end changed. The version
+/// string is the one output whose whole job is to be trustworthy, and it was
+/// already observed lagging the tree by a day, so it should not rest on two
+/// tools independently choosing the same base.
+///
+/// `--path-format` needs git 2.31 (2021). Older git falls back to the relative
+/// form rather than losing the trigger entirely.
+fn git_path(path: &str) -> Option<String> {
+    git(&["rev-parse", "--path-format=absolute", "--git-path", path])
+        .or_else(|| git(&["rev-parse", "--git-path", path]))
 }
 
 /// Run git and return trimmed stdout, or `None` if it failed for any reason.

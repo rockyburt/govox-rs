@@ -8,6 +8,19 @@ before 1.0.0, minor versions may change behaviour.
 
 ### Fixed
 
+- **`govox --version` told the truth about the wrong build.** It reported `0.1.0+46.6af8baa`
+  while the tree stood at `0.2.0+67.c000865` — wrong about the release and the commit, and a
+  day stale. The build script was right; cargo had not re-run it. Building the same workspace
+  from two checkouts into one shared target directory left several build-script units, and the
+  one still feeding the binary had last run the day before.
+
+  The git refs the build script watches are now recorded as absolute paths, and
+  `tools/dev-restart.sh` checks the binary it just built against the current commit before
+  restarting — rebuilding if they disagree, and refusing to restart onto a binary that cannot
+  say what it is. A version string that is only sometimes correct is worse than none, and worst
+  of all during a restart, which is when it is asked and believed.
+
+
 - **`replace X with Y` now types Y as you said it.** Both slots were lower-cased on their
   way through the command grammar, so "replace rentsync with RentSync" typed `rentsync` —
   leaving the command unable to do the thing it is most often reached for, which is fixing
