@@ -59,7 +59,13 @@ pub const SPOKEN_PUNCTUATION: &[(&str, &str, Attach)] = &[
     ("comma", ",", Attach::Left),
     ("colon", ":", Attach::Left),
     ("hyphen", "-", Attach::Tight),
-    ("dash", "—", Attach::Tight),
+    // A synonym for "hyphen", not an em dash. Nobody dictating a command-line
+    // flag or a hyphenated word says "hyphen hyphen" and means `——`, and the
+    // two words are used interchangeably in speech — so the mark people almost
+    // always want when they say "dash" is the ASCII one. This deliberately
+    // gives up dictating `—`, which had no other spelling; a word that produces
+    // the wrong mark nine times out of ten is worse than one that is missing.
+    ("dash", "-", Attach::Tight),
     // Deliberately no bare "quote": it is an everyday verb and noun and the
     // determiner guard cannot see far enough back to tell them apart, so the
     // opener must be "open quote". "unquote" is safe bare — not a word alone.
@@ -269,19 +275,43 @@ where
 ///
 /// Without this, "hello period world period" renders "Hello. world." — the
 /// spoken full stop creates a boundary nothing else capitalizes.
+///
+/// **A terminator only starts a sentence when something separates it from the
+/// next word.** By the time this runs, the full stop that `("dot", ".")`
+/// produced is the same character as the one that ends a sentence, and no
+/// amount of looking at it will say which it was — so the separator is what
+/// distinguishes them, exactly as it does in writing. Without that condition
+/// "main dot rs" became `main.Rs`, "JSON dot parse" became `JSON.Parse`, and
+/// "rocky at sign gmail dot com" became `gmail.Com`: every dictated filename,
+/// method call and domain acquired a capital in the middle.
+///
+/// The separator may be the terminator itself, which is what keeps `\n`
+/// working — a newline both ends the sentence and separates it from the next.
 #[must_use]
 pub fn capitalize_after_terminators(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
-    let mut capitalize_next = false;
+    // A terminator has been seen and no word has followed it yet.
+    let mut pending = false;
+    // ...and something separated it from whatever comes next.
+    let mut separated = false;
     for char in text.chars() {
-        if capitalize_next && char.is_alphabetic() {
-            // to_uppercase can yield several chars (ß → SS), matching Python.
-            out.extend(char.to_uppercase());
-            capitalize_next = false;
+        if pending && char.is_alphabetic() {
+            if separated {
+                // to_uppercase can yield several chars (ß → SS), matching Python.
+                out.extend(char.to_uppercase());
+            } else {
+                out.push(char);
+            }
+            pending = false;
+            separated = false;
             continue;
         }
         if TERMINATORS.contains(&char) {
-            capitalize_next = true;
+            pending = true;
+            // `\n` is both the terminator and the separator. A `.` is not.
+            separated = char.is_whitespace();
+        } else if pending && char.is_whitespace() {
+            separated = true;
         }
         out.push(char);
     }
@@ -353,5 +383,66 @@ mod tests {
     #[test]
     fn no_space_after_a_determiner_is_prose() {
         assert_eq!(punct("the no space rule"), "the no space rule");
+    }
+
+    // --- capitalisation after a terminator ---------------------------------
+
+    use super::capitalize_after_terminators as caps;
+
+    #[test]
+    fn a_sentence_boundary_still_capitalises() {
+        // The reason the function exists: a spoken full stop creates a boundary
+        // nothing else would capitalise.
+        assert_eq!(caps("hello. world."), "hello. World.");
+        assert_eq!(caps("is it? yes!"), "is it? Yes!");
+        assert_eq!(caps("done… next"), "done… Next");
+    }
+
+    #[test]
+    fn a_newline_is_its_own_separator() {
+        // `\n` both ends the sentence and separates it from what follows, so it
+        // must capitalise with no space in between.
+        assert_eq!(caps("first line\nsecond line"), "first line\nSecond line");
+    }
+
+    #[test]
+    fn a_dotted_identifier_keeps_its_lower_case() {
+        // The defect this fixes. By the time this runs, the full stop from a
+        // spoken "dot" is the same character as one ending a sentence — the
+        // separator is what tells them apart, exactly as in writing.
+        assert_eq!(caps("open main.rs"), "open main.rs");
+        assert_eq!(caps("call JSON.parse"), "call JSON.parse");
+        assert_eq!(caps("rocky@gmail.com"), "rocky@gmail.com");
+        assert_eq!(caps("see rentals.ca today"), "see rentals.ca today");
+    }
+
+    #[test]
+    fn an_initialism_is_left_alone() {
+        assert_eq!(caps("the U.S.A. today"), "the U.S.A. Today");
+    }
+
+    #[test]
+    fn several_spaces_still_separate() {
+        assert_eq!(caps("done.  next"), "done.  Next");
+    }
+
+    #[test]
+    fn a_quote_after_the_space_does_not_lose_the_capital() {
+        // Non-alphabetic characters between the separator and the word must not
+        // disarm it, or an opening quote would swallow the capital.
+        assert_eq!(caps("he said. \"yes\""), "he said. \"Yes\"");
+    }
+
+    #[test]
+    fn a_dash_is_a_hyphen() {
+        // Synonyms, because they are used interchangeably in speech and the
+        // ASCII mark is the one people mean when dictating a flag or a
+        // hyphenated word.
+        assert_eq!(punct("all dash targets"), "all-targets");
+        assert_eq!(punct("all hyphen targets"), "all-targets");
+        assert_eq!(
+            punct("cargo clippy dash dash all dash targets"),
+            "cargo clippy--all-targets"
+        );
     }
 }

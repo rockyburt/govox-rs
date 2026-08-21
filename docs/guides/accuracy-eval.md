@@ -393,10 +393,10 @@ and is scored the same way, so it is worth knowing which you are reading. Its 13
 a *hypothesis*, not a logbook: nothing in them has been observed failing, because the
 corpus had no Rust or JavaScript vocabulary at all and so could not answer whether Whisper
 handles it. They have no dictionary rules, deliberately — the first run measures the
-recogniser unaided, which is the number worth having before deciding what to add. Three of
-them (`filename-extension-rs`, `json-dot-parse`, `flag-double-hyphen`) assert behaviour
-govox does not have yet and fail today; see the section comment in the manifest. **They are
-unrecorded**, so `tools/record-eval.sh` will offer them until you read them aloud.
+recogniser unaided, which is the number worth having before deciding what to add. One of
+them, `flag-double-hyphen`, asserts behaviour govox does not have yet and fails today; see
+the section comment in the manifest. **They are unrecorded**, so `tools/record-eval.sh`
+will offer them until you read them aloud.
 
 Each clip carries two fields, because there are two questions:
 

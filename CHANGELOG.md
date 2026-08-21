@@ -20,14 +20,27 @@ before 1.0.0, minor versions may change behaviour.
 
 ### Known
 
-- **A spoken "dot" capitalises the next word, and two hyphens collapse into one.**
-  `"main dot rs"` corrects to `main.Rs`, `"JSON dot parse"` to `JSON.Parse`, and
-  `"hyphen hyphen all hyphen targets"` to `-all-targets`. Found while writing the clips
-  above by running them through the pipeline. Three of the new clips assert the wanted
-  behaviour and fail today; the fix touches a stage the golden corpus has ~239k records
-  over, so it wants its own change.
+- **`--all-targets` cannot be dictated.** `"hyphen hyphen all hyphen targets"` gives
+  `-all-targets`. Not the punctuation stage, which renders both marks correctly — it is
+  `collapse_repeated_words` turning the repeated word "hyphen hyphen" into one before
+  punctuation runs. Exempting punctuation words from repeat-collapsing is a real design
+  question ("very very" and "the the" are what that stage is for), so it wants its own
+  change. The `flag-double-hyphen` eval clip stays red as the standing reference.
 
 ### Fixed
+
+- **A spoken "dot" no longer capitalises the next word.** "main dot rs" gave `main.Rs`,
+  "JSON dot parse" gave `JSON.Parse`, and "rocky at sign gmail dot com" gave `gmail.Com` —
+  every dictated filename, method call and domain acquired a capital in the middle. By the
+  time casing runs, the full stop from a spoken "dot" is the same character as one ending a
+  sentence, so the separator is what tells them apart, exactly as in writing: a terminator
+  now starts a sentence only when whitespace follows it. A newline still works, being both
+  terminator and separator.
+
+- **"dash" now means `-`, not `—`.** It produced an em dash, which is almost never what
+  someone dictating a flag or a hyphenated word wants; the two words are used
+  interchangeably in speech. This gives up dictating `—`, which had no other spelling.
+
 
 - **`tools/dev-restart.sh` now rebuilds the overlay helper.** It built only the daemon, so an
   overlay-only change never reached the running HUD — it kept whatever helper binary happened

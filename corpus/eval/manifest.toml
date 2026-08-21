@@ -238,21 +238,24 @@ terms = []
 # be informative rather than alarming. A term that survives needs no rule; a
 # term that does not is a candidate for the dictionary or for spelling mode.
 #
-# ## Three clips assert behaviour govox does not have yet
+# ## One clip asserts behaviour govox does not have yet
 #
-# `filename-extension-rs`, `json-dot-parse` and `flag-double-hyphen` were run
-# through the correction pipeline while this section was written, and all three
-# come out wrong today:
+# All three spoken-symbol clips came out wrong when this section was written.
+# Two are now fixed: `capitalize_after_terminators` no longer treats the full
+# stop from a spoken "dot" as a sentence boundary, so "main dot rs" gives
+# `main.rs` and "JSON dot parse" gives `JSON.parse`.
 #
-#   "main dot rs"                     -> "main.Rs"        wanted "main.rs"
-#   "JSON dot parse"                  -> "JSON.Parse"     wanted "JSON.parse"
+# `flag-double-hyphen` still fails, and the reason is not the one first recorded
+# here. The punctuation stage renders both marks perfectly; what collapses is the
+# repeated *word*, because `collapse_repeated_words` runs first and turns
+# "hyphen hyphen" into "hyphen". With `collapse_repeats = false` the pipeline
+# produces `--all-targets` correctly.
+#
 #   "hyphen hyphen all hyphen targets" -> "-all-targets"  wanted "--all-targets"
 #
-# The first two are `capitalize_after_terminators` treating the full stop from a
-# spoken "dot" as a sentence boundary; the third is two consecutive hyphens
-# collapsing into one. `expect` records what *should* land, not what does, so
-# these three will fail until that is fixed. That is the corpus working as a
-# reference rather than as a snapshot.
+# `expect` records what *should* land, not what does, so this clip stays red
+# until that is fixed. That is the corpus working as a reference rather than as
+# a snapshot of the bug.
 
 [[clip]]
 id = "rust-crates"
