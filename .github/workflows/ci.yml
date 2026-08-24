@@ -17,10 +17,6 @@ on:
   # So the scheduled path can be proven now rather than waited for.
   workflow_dispatch:
 
-# Every cargo invocation in this file must see an identical environment.
-# RUSTFLAGS, the feature set and the profile are all part of a crate's
-# fingerprint, so a single difference between two steps silently compiles the
-# whole workspace a second time — and the cache then stores both.
 # The default is write-all, which is far more than any job here needs: nothing
 # in this workflow writes to the repository, publishes, or comments on a PR.
 permissions:
@@ -32,6 +28,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Every cargo invocation in this file must see an identical environment.
+# RUSTFLAGS, the feature set and the profile are all part of a crate's
+# fingerprint, so a single difference between two steps silently compiles the
+# whole workspace a second time — and the cache then stores both.
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings -C link-arg=-fuse-ld=mold
