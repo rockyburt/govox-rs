@@ -6,6 +6,19 @@ before 1.0.0, minor versions may change behaviour.
 
 ## [Unreleased]
 
+### Security
+
+- **`h2` updated to 0.4.19, closing RUSTSEC-2026-0258** ("unbounded empty DATA frames",
+  published 2026-08-17). It reaches govox through `govox-asr` -> `hf-hub` -> `hyper`, which is
+  the model-download path. A lockfile-only change.
+
+- **CI now audits dependencies, nightly and on every push.** A new `dependency-audit` job runs
+  `cargo audit --deny warnings`, so an unmaintained crate fails the build as loudly as a CVE
+  does. The advisory above had been sitting in `Cargo.lock` for a week with nothing to report
+  it; that is the gap this closes. One documented exception, `RUSTSEC-2026-0192` (`ttf-parser`
+  unmaintained, via `govox-overlay` -> `fontdue`), which has no patched version and would need
+  the rasterizer replaced.
+
 ### Changed
 
 - **Preedit dictation is on by default.** `[ime] enabled` now defaults to `true`, so

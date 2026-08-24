@@ -8,11 +8,30 @@ on:
   push:
     branches: [main, develop]
   pull_request:
+  # A vulnerability published today would otherwise surface only on the next
+  # push, which on a personal repo can be weeks. RUSTSEC-2026-0258 sat in the
+  # lockfile for a week before anything looked. Only `dependency-audit` runs on
+  # this trigger; see the `if:` guards below.
+  schedule:
+    - cron: '15 3 * * *'
+  # So the scheduled path can be proven now rather than waited for.
+  workflow_dispatch:
 
 # Every cargo invocation in this file must see an identical environment.
 # RUSTFLAGS, the feature set and the profile are all part of a crate's
 # fingerprint, so a single difference between two steps silently compiles the
 # whole workspace a second time — and the cache then stores both.
+# The default is write-all, which is far more than any job here needs: nothing
+# in this workflow writes to the repository, publishes, or comments on a PR.
+permissions:
+  contents: read
+
+# A run is 4-6 minutes, almost all of it compiling whisper.cpp from source. A
+# superseded push otherwise runs to completion for a commit nobody is waiting on.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings -C link-arg=-fuse-ld=mold
@@ -32,8 +51,15 @@ jobs:
   # target/, one build.
   check:
     runs-on: ubuntu-latest
+    # The nightly trigger exists for the dependency audit alone. Rebuilding
+    # whisper.cpp every night to re-run tests against unchanged code buys
+    # nothing and costs several minutes of runner time.
+    if: github.event_name != 'schedule'
+    # Generous against the usual 4-6 minutes: this is a stuck-runner backstop,
+    # not a performance target. Without it a hung job burns the 6-hour default.
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       # cpal binds ALSA, and whisper.cpp is compiled from source with the Vulkan
       # backend that `govox-asr` ships as its default feature — which needs the
@@ -56,11 +82,11 @@ jobs:
       # saving. Hand-rolling this with actions/cache reliably ends up slower,
       # because an unpruned target/ grows without bound until restoring it costs
       # more than the rebuild it was meant to avoid.
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7  # v2.9.2
 
       # A prebuilt binary in seconds rather than several minutes of
       # `cargo install` compiling it from source on every run.
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@b6ff580856c41316412a0b9b60540fbc6f8c82cc  # v2.86.7
         with:
           tool: cargo-nextest
 
@@ -84,8 +110,10 @@ jobs:
   # buy nothing.
   layering:
     runs-on: ubuntu-latest
+    if: github.event_name != 'schedule'
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Install the pinned toolchain
         run: rustup toolchain install
 
@@ -106,3 +134,47 @@ jobs:
             fi
           done
           echo "govox-core layering OK"
+
+  # Deliberately has no cache, for the same reason as `layering` above: cargo
+  # audit reads Cargo.lock and compiles nothing, so restoring and re-saving a
+  # build cache would cost time and buy nothing.
+  #
+  # Separate from `check` so a vulnerability is reported even when the build is
+  # broken, and so the nightly trigger can run this alone.
+  dependency-audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Install the pinned toolchain
+        run: rustup toolchain install
+
+      - uses: taiki-e/install-action@b6ff580856c41316412a0b9b60540fbc6f8c82cc  # v2.86.7
+        with:
+          tool: cargo-audit
+
+      # `--deny warnings` promotes informational advisories — an unmaintained
+      # crate, a yanked version — from a line that scrolls past into a failure.
+      # Without it the job only ever catches advisories with a CVE, and the
+      # slow rot of a dependency going unmaintained is invisible until it
+      # becomes a vulnerability nobody is going to fix.
+      #
+      # That makes the exception list load-bearing, so each entry names the
+      # advisory, why it is accepted, and when to revisit:
+      #
+      #   RUSTSEC-2026-0192  ttf-parser is unmaintained, and reaches us through
+      #     govox-overlay -> fontdue. There is no patched version and there
+      #     will not be: the advisory carries `patched = []` and the author has
+      #     said the crate will receive no further fixes. Upgrading cannot fix
+      #     this one; only replacing the rasterizer can, which is a rewrite of
+      #     the overlay's glyph handling and belongs in its own change.
+      #     Accepted 2026-08-24. Revisit if fontdue moves to skrifa (the
+      #     alternative the advisory names), or when the overlay's text
+      #     rendering is next touched for any other reason.
+      #
+      # Never delete this job or drop the flag to get green: an accepted risk
+      # is an --ignore with a reason, not a missing check.
+      - name: Cargo audit
+        run: cargo audit --deny warnings --ignore RUSTSEC-2026-0192
