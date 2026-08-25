@@ -55,6 +55,24 @@ before 1.0.0, minor versions may change behaviour.
 
 ### Fixed
 
+- **Full stops no longer appear in the middle of sentences that do not end.** Whisper
+  decodes each streaming window as though it were a complete utterance, so the word at the
+  window's edge arrives with a sentence ending nobody spoke.
+
+  Usually the next decode revises it — "milk." becomes "Milk" mid-sentence — and the commit
+  path's exact comparison rejects it. It failed when the edge did not move enough to change
+  the text: two decodes both stopped at the same word, "milk." matched "milk.", and the word
+  was committed with the stop attached. Committed words are never revised, so the sentence
+  carried on around it. The giveaway was the missing capital afterwards.
+
+  That word is now held back for one decode, by which time the window has moved and its
+  punctuation is the model's considered opinion rather than an accident of where the audio
+  stopped. Nothing is stripped and nothing is dropped: a genuine sentence ending commits one
+  round later with its full stop intact, and a session ending on that word still emits it.
+
+  Only words carrying `.`, `!`, `?` or `…` are affected — holding back every window-final
+  word would delay every commit to fix a fault that is not there. A comma does not qualify.
+
 - **`--all-targets` can be dictated.** A repeat of a spoken-punctuation word is no longer
   collapsed, so "cargo clippy hyphen hyphen all hyphen targets" produces `--all-targets`
   rather than `-all-targets`.

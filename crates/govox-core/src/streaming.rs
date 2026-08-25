@@ -77,6 +77,21 @@ const MAX_TAIL_MATCH: usize = 8;
 /// Only the edges are stripped, so `rentals.ca` keeps its dot. Words that are
 /// nothing but punctuation compare literally, so a comma is not equal to a
 /// full stop.
+/// Sentence-ending marks, as `capitalize_after_terminators` counts them.
+///
+/// A comma is deliberately absent: a window that ends mid-clause does not
+/// attract one, and the defect being guarded against is the *sentence* Whisper
+/// invents at the edge of its window.
+const SENTENCE_ENDINGS: [char; 4] = ['.', '!', '?', '…'];
+
+/// Does this word end a sentence, ignoring any closing quote or bracket after
+/// the mark? `milk."` ends one just as `milk.` does.
+fn ends_sentence(text: &str) -> bool {
+    text.trim_end()
+        .trim_end_matches(['"', '\'', ')', ']', '}', '»', '”', '’'])
+        .ends_with(SENTENCE_ENDINGS)
+}
+
 fn same_word(a: &str, b: &str) -> bool {
     let normalize = |s: &str| {
         s.trim()
@@ -189,13 +204,57 @@ impl HypothesisBuffer {
         None
     }
 
-    /// Commit the longest common prefix of the two most recent hypotheses.
+    /// Commit the longest common prefix of the two most recent hypotheses,
+    /// minus its final word.
     ///
     /// Returns the newly committed words, which are safe to display as final.
+    ///
+    /// # Why the last word is held back
+    ///
+    /// Whisper decodes each window as though it were a complete utterance, so
+    /// the word at the window's edge arrives with a full stop the speaker never
+    /// said. Normally that word is revised on the next decode — `"milk."`
+    /// becomes `"Milk"` mid-sentence — and the exact comparison above rejects
+    /// it, which is the accidental protection this code has always had.
+    ///
+    /// It fails when the window edge does not move enough to change the text:
+    /// two consecutive decodes both end at the same word, `"milk."` equals
+    /// `"milk."`, the prefix agrees, and the word is committed **with the full
+    /// stop attached**. Committed words are never revised, so the sentence
+    /// carries on and the period stays in the middle of it. That is the
+    /// mid-sentence-period defect, and it shows itself by the *absence* of a
+    /// capital after the stop: nothing spoke a sentence boundary.
+    ///
+    /// Only the window-final word can be affected — a word with another word
+    /// behind it in the same hypothesis was punctuated with that context in
+    /// view, so its mark is the model's considered opinion rather than an
+    /// artifact of where the audio happened to stop. Holding just that one word
+    /// back until the next decode moves it off the edge is therefore the whole
+    /// fix, and it **defers rather than discards**: no punctuation is stripped,
+    /// no word is dropped, and a genuine sentence ending commits one round
+    /// later with its full stop intact.
+    ///
+    /// `same_word` is deliberately NOT used for this comparison. It ignores
+    /// edge punctuation, which is right for aligning the overlap and wrong
+    /// here: treating `"milk."` and `"milk"` as agreeing is exactly how the
+    /// artifact would get committed.
+    ///
+    /// At session end nothing is lost — `finish` emits `incomplete()`, and the
+    /// held word is in it.
     pub fn flush(&mut self) -> Vec<TimedWord> {
         let mut commit = Vec::new();
         while let (Some(new), Some(old)) = (self.incoming.first(), self.buffer.first()) {
             if new.text != old.text {
+                break;
+            }
+            // The window-final word, carrying a sentence ending nobody may have
+            // spoken. Held back rather than committed; see the note above.
+            //
+            // Gated on the punctuation, not merely on the position: a
+            // window-final word with no terminator cannot be exhibiting this
+            // artifact, and holding it back too would delay every commit in
+            // every session to fix a fault that is not there.
+            if self.incoming.len() == 1 && ends_sentence(&new.text) {
                 break;
             }
             let word = self.incoming.remove(0);
@@ -378,6 +437,130 @@ mod tests {
 
     fn texts(words: &[TimedWord]) -> Vec<String> {
         words.iter().map(|w| w.text.clone()).collect()
+    }
+
+    /// The mid-sentence-period defect.
+    ///
+    /// Two decodes both stop at the same word, so the window-final full stop is
+    /// identical in each and the exact comparison cannot reject it. Before the
+    /// hold-back this committed `"milk."` and the sentence carried on around it.
+    #[test]
+    fn a_window_final_sentence_ending_is_not_committed() {
+        let mut buffer = HypothesisBuffer::new();
+        let hypothesis = words(&[(0.0, 0.5, " buy"), (0.5, 1.0, " milk.")]);
+        buffer.insert(hypothesis.clone());
+        buffer.flush();
+        buffer.insert(hypothesis);
+
+        assert_eq!(
+            texts(&buffer.flush()),
+            [" buy"],
+            "the agreed prefix commits, minus its punctuated final word"
+        );
+        assert_eq!(
+            texts(buffer.incomplete()),
+            [" milk."],
+            "held, not dropped: it is still provisional and still on screen"
+        );
+    }
+
+    /// Deferred, not discarded. The next window moves the word off the edge and
+    /// it commits with whatever punctuation it then carries.
+    #[test]
+    fn a_held_word_commits_once_it_is_no_longer_window_final() {
+        let mut buffer = HypothesisBuffer::new();
+        let hypothesis = words(&[(0.0, 0.5, " buy"), (0.5, 1.0, " milk.")]);
+        buffer.insert(hypothesis.clone());
+        buffer.flush();
+        buffer.insert(hypothesis);
+        buffer.flush();
+
+        // More audio: the sentence did not end, so the model drops the stop.
+        buffer.insert(words(&[
+            (0.0, 0.5, " buy"),
+            (0.5, 1.0, " milk"),
+            (1.0, 1.5, " and"),
+        ]));
+        buffer.flush();
+        buffer.insert(words(&[
+            (0.0, 0.5, " buy"),
+            (0.5, 1.0, " milk"),
+            (1.0, 1.5, " and"),
+            (1.5, 2.0, " eggs"),
+        ]));
+
+        assert_eq!(
+            texts(&buffer.flush()),
+            [" milk", " and"],
+            "the word commits without the full stop the window invented"
+        );
+    }
+
+    /// A genuine sentence ending is delayed by one round, never lost.
+    #[test]
+    fn a_real_sentence_ending_still_commits_with_its_full_stop() {
+        let mut buffer = HypothesisBuffer::new();
+        let hypothesis = words(&[(0.0, 0.5, " buy"), (0.5, 1.0, " milk.")]);
+        buffer.insert(hypothesis.clone());
+        buffer.flush();
+        buffer.insert(hypothesis);
+        buffer.flush();
+
+        // The speaker really did stop there, and carries on with a new
+        // sentence. "milk." is no longer window-final, so it commits as spoken
+        // on the very next decode — one round later than it used to, and with
+        // its full stop intact.
+        buffer.insert(words(&[
+            (0.0, 0.5, " buy"),
+            (0.5, 1.0, " milk."),
+            (1.0, 1.5, " Then"),
+            (1.5, 2.0, " go."),
+        ]));
+
+        assert_eq!(
+            texts(&buffer.flush()),
+            [" milk."],
+            "the full stop survives, because the model kept it with context in view"
+        );
+    }
+
+    /// A word with no terminator is unaffected, which is what keeps this fix
+    /// from delaying every commit in every session.
+    #[test]
+    fn an_unpunctuated_window_final_word_commits_as_before() {
+        let mut buffer = HypothesisBuffer::new();
+        let hypothesis = words(&[(0.0, 0.5, " buy"), (0.5, 1.0, " milk")]);
+        buffer.insert(hypothesis.clone());
+        buffer.flush();
+        buffer.insert(hypothesis);
+
+        assert_eq!(texts(&buffer.flush()), [" buy", " milk"]);
+    }
+
+    /// Every terminator, and through a closing quote.
+    #[test]
+    fn each_sentence_ending_is_recognised() {
+        for marked in [
+            " milk.", " milk!", " milk?", " milk…", " milk.\"", " milk.)",
+        ] {
+            let mut buffer = HypothesisBuffer::new();
+            let hypothesis = words(&[(0.0, 0.5, " buy"), (0.5, 1.0, marked)]);
+            buffer.insert(hypothesis.clone());
+            buffer.flush();
+            buffer.insert(hypothesis);
+            assert_eq!(
+                texts(&buffer.flush()),
+                [" buy"],
+                "{marked} should be held back"
+            );
+        }
+        // A comma is not a sentence ending and must not be held.
+        let mut buffer = HypothesisBuffer::new();
+        let hypothesis = words(&[(0.0, 0.5, " buy"), (0.5, 1.0, " milk,")]);
+        buffer.insert(hypothesis.clone());
+        buffer.flush();
+        buffer.insert(hypothesis);
+        assert_eq!(texts(&buffer.flush()), [" buy", " milk,"]);
     }
 
     #[test]
