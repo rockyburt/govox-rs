@@ -394,8 +394,9 @@ a *hypothesis*, not a logbook: nothing in them has been observed failing, becaus
 corpus had no Rust or JavaScript vocabulary at all and so could not answer whether Whisper
 handles it. They have no dictionary rules, deliberately — the first run measures the
 recogniser unaided, which is the number worth having before deciding what to add. One of
-them, `flag-double-hyphen`, asserts behaviour govox does not have yet and fails today; see
-the section comment in the manifest. **They are unrecorded**, so `tools/record-eval.sh`
+them, `flag-double-hyphen`, asserted behaviour govox did not have and stayed red as a
+standing reference until the repeat-collapsing exemption landed; see the section comment
+in the manifest. **They are unrecorded**, so `tools/record-eval.sh`
 will offer them until you read them aloud.
 
 Each clip carries two fields, because there are two questions:

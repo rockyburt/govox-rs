@@ -245,17 +245,23 @@ terms = []
 # stop from a spoken "dot" as a sentence boundary, so "main dot rs" gives
 # `main.rs` and "JSON dot parse" gives `JSON.parse`.
 #
-# `flag-double-hyphen` still fails, and the reason is not the one first recorded
-# here. The punctuation stage renders both marks perfectly; what collapses is the
-# repeated *word*, because `collapse_repeated_words` runs first and turns
-# "hyphen hyphen" into "hyphen". With `collapse_repeats = false` the pipeline
-# produces `--all-targets` correctly.
+# `flag-double-hyphen` is now fixed too, and it was worth the wait: the reason
+# first recorded here was wrong. The punctuation stage renders both marks
+# perfectly; what collapsed was the repeated *word*, because
+# `collapse_repeated_words` ran first and turned "hyphen hyphen" into "hyphen".
+# The single-word spoken-punctuation vocabulary is now exempt from
+# repeat-collapsing, so "Run cargo clippy hyphen hyphen all hyphen targets"
+# produces `--all-targets`.
 #
-#   "hyphen hyphen all hyphen targets" -> "-all-targets"  wanted "--all-targets"
+# This clip is why `expect` records what *should* land rather than what does. It
+# stayed red for four days as a standing reference, and the fix was measured
+# against it rather than against a memory of the bug.
 #
-# `expect` records what *should* land, not what does, so this clip stays red
-# until that is fixed. That is the corpus working as a reference rather than as
-# a snapshot of the bug.
+# One limit, and this clip does not hit it: an utterance that OPENS with
+# "hyphen hyphen" still renders only one mark, because the punctuation pattern
+# takes the first word as an ordinary prefix (the same group that suppresses
+# "add a comma here"). A flag never starts a sentence in practice — you say
+# "cargo test --all-targets" — so this is recorded, not fixed.
 
 [[clip]]
 id = "rust-crates"

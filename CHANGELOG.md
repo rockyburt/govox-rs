@@ -53,16 +53,25 @@ before 1.0.0, minor versions may change behaviour.
   dictionary rule, these are a hypothesis with no rules attached: the first run measures the
   recogniser unaided. They are unrecorded until you read them aloud.
 
-### Known
-
-- **`--all-targets` cannot be dictated.** `"hyphen hyphen all hyphen targets"` gives
-  `-all-targets`. Not the punctuation stage, which renders both marks correctly — it is
-  `collapse_repeated_words` turning the repeated word "hyphen hyphen" into one before
-  punctuation runs. Exempting punctuation words from repeat-collapsing is a real design
-  question ("very very" and "the the" are what that stage is for), so it wants its own
-  change. The `flag-double-hyphen` eval clip stays red as the standing reference.
-
 ### Fixed
+
+- **`--all-targets` can be dictated.** A repeat of a spoken-punctuation word is no longer
+  collapsed, so "cargo clippy hyphen hyphen all hyphen targets" produces `--all-targets`
+  rather than `-all-targets`.
+
+  `collapse_repeated_words` runs before both the punctuation stage and the personal
+  dictionary, so anything it ate was gone before the stage that needed it. Three separate
+  reports turned out to share that one cause: the double hyphen, laughter dictated as
+  "ha ha ha" arriving as "ha", and a spoken "hehe" arriving as "he". The exemption list is
+  **derived from the punctuation table**, so a phrase added there is covered for free.
+
+  Ordinary repeats still collapse — "the the dog" and "very very good" are what the stage
+  is for. "he" is deliberately **not** exempt: it is a pronoun, and exempting it would
+  preserve every genuine stutter.
+
+  One limit: an utterance *opening* with "hyphen hyphen" still renders one mark, since the
+  punctuation pattern reads the first word as an ordinary prefix. A flag never starts a
+  sentence in practice.
 
 - **A spoken "dot" no longer capitalises the next word.** "main dot rs" gave `main.Rs`,
   "JSON dot parse" gave `JSON.Parse`, and "rocky at sign gmail dot com" gave `gmail.Com` —

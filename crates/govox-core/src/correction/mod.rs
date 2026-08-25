@@ -410,18 +410,62 @@ pub fn drop_filler_words(text: &str, fillers: &[String]) -> String {
     text
 }
 
+/// Laughter tokens whose repeat is the word, not a stutter.
+///
+/// **"he" is deliberately absent, and that is the hard case.** It is the form
+/// most often reported for a spoken "hehe", and it is also a pronoun — so
+/// exempting it would preserve every genuine stutter of "he he went…" as well.
+/// A stutter surviving into the document is a worse failure than a laugh
+/// arriving as one "he", and stutters are exactly what this stage exists to
+/// absorb. Bias is the lever for that case: teaching the recogniser to emit
+/// "hehe" as one token stops the repeat ever forming. See the dictionary.
+const LAUGHTER: &[&str] = &["ha", "hah", "heh", "hee"];
+
+/// Words that keep their repeats, because for these a repeat carries meaning.
+///
+/// Derived from `SPOKEN_PUNCTUATION` rather than listed, so a phrase added to
+/// that table is exempt here for free and the two cannot drift apart. Only
+/// single-word phrases are taken: the pattern captures `\w+`, so a multi-word
+/// phrase could never have been collapsed anyway.
+static COLLAPSE_EXEMPT: LazyLock<std::collections::HashSet<String>> = LazyLock::new(|| {
+    let mut set: std::collections::HashSet<String> = punctuation::SPOKEN_PUNCTUATION
+        .iter()
+        .map(|(phrase, _, _)| *phrase)
+        .filter(|phrase| !phrase.contains(' '))
+        .map(str::to_lowercase)
+        .collect();
+    set.extend(LAUGHTER.iter().map(|word| (*word).to_owned()));
+    set
+});
+
+fn is_collapse_exempt(word: &str) -> bool {
+    COLLAPSE_EXEMPT.contains(&word.to_lowercase())
+}
+
 /// "the the dog" → "the dog"; case-insensitive comparison, keep the first form.
 ///
 /// Needs a **backreference**, which the `regex` crate cannot express, so this is
 /// the second of the two `fancy-regex` users. Deliberately *not* hand-rolled as
 /// a token scan: `\b` means `"the, the"` is not collapsed, and reproducing that
 /// by hand invites exactly the silent divergence the corpus exists to catch.
+///
+/// A word in `COLLAPSE_EXEMPT` keeps its repeats. This stage runs *before*
+/// `apply_spoken_punctuation` and before the personal dictionary, so anything it
+/// eats is gone before the stage that needed it ever runs — which is how
+/// "hyphen hyphen" stopped being able to produce `--`. Three separate symptoms
+/// traced back to that one mechanism; see docs/parity.md.
 #[must_use]
 pub fn collapse_repeated_words(text: &str) -> String {
     static PATTERN: LazyLock<FancyRegex> =
         LazyLock::new(|| FancyRegex::new(r"(?i)\b(\w+)(\s+\1\b)+").unwrap());
     punctuation::replace_all(&PATTERN, text, |caps| {
-        caps.get(1).expect("first group").as_str().to_owned()
+        let first = caps.get(1).expect("first group").as_str();
+        if is_collapse_exempt(first) {
+            // Returned verbatim, so the repeat survives exactly as spoken
+            // rather than being normalised to some canonical spacing.
+            return caps.get(0).expect("whole match").as_str().to_owned();
+        }
+        first.to_owned()
     })
 }
 
@@ -489,7 +533,7 @@ pub fn command_text(name: &str) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{FieldRules, apply_rules, field_rules};
+    use super::{FieldRules, apply_rules, collapse_repeated_words, field_rules, punctuation};
     use crate::config::CorrectionConfig;
 
     fn config() -> CorrectionConfig {
@@ -590,5 +634,74 @@ mod tests {
                 "{purpose} separator"
             );
         }
+    }
+
+    /// The defect this exemption exists for: `--all-targets` could not be said.
+    ///
+    /// `collapse_repeated_words` ran before `apply_spoken_punctuation`, so the
+    /// second "hyphen" was eaten before the stage that renders marks ever saw
+    /// it, and the flag came out `-all-targets`.
+    #[test]
+    fn a_repeated_punctuation_word_survives_to_be_rendered() {
+        assert_eq!(
+            collapse_repeated_words("hyphen hyphen all hyphen targets"),
+            "hyphen hyphen all hyphen targets"
+        );
+    }
+
+    /// Derived from the table, not listed, so this holds for every single-word
+    /// phrase in it rather than the handful someone remembered to write down.
+    #[test]
+    fn every_single_word_punctuation_phrase_is_exempt() {
+        for (phrase, _, _) in punctuation::SPOKEN_PUNCTUATION {
+            if phrase.contains(' ') {
+                continue;
+            }
+            let doubled = format!("{phrase} {phrase}");
+            assert_eq!(
+                collapse_repeated_words(&doubled),
+                doubled,
+                "{phrase} should survive being repeated"
+            );
+        }
+    }
+
+    /// The stage still does its job. This is what it exists for.
+    #[test]
+    fn an_ordinary_repeat_still_collapses() {
+        assert_eq!(collapse_repeated_words("the the dog"), "the dog");
+        assert_eq!(collapse_repeated_words("very very good"), "very good");
+        assert_eq!(
+            collapse_repeated_words("but the the pipeline runs runs"),
+            "but the pipeline runs"
+        );
+    }
+
+    /// Laughter keeps its repeat so a dictionary rule can reach it.
+    #[test]
+    fn laughter_survives_but_the_pronoun_still_collapses() {
+        assert_eq!(collapse_repeated_words("ha ha"), "ha ha");
+        assert_eq!(collapse_repeated_words("hee hee"), "hee hee");
+
+        // "he" is NOT exempt, deliberately: it is a pronoun, so exempting it
+        // would preserve every genuine stutter. Bias is the lever for a spoken
+        // "hehe", not this table.
+        assert_eq!(collapse_repeated_words("he he went home"), "he went home");
+    }
+
+    /// Case is folded for the lookup, as it is for the match itself.
+    #[test]
+    fn an_exempt_word_is_recognised_whatever_its_case() {
+        assert_eq!(collapse_repeated_words("Hyphen hyphen"), "Hyphen hyphen");
+        assert_eq!(collapse_repeated_words("HA ha"), "HA ha");
+    }
+
+    /// Three or more repeats are one match, and all of them survive.
+    #[test]
+    fn a_longer_exempt_run_survives_whole() {
+        assert_eq!(
+            collapse_repeated_words("hyphen hyphen hyphen"),
+            "hyphen hyphen hyphen"
+        );
     }
 }
