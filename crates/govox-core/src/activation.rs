@@ -47,6 +47,27 @@ pub fn is_modifier(key: &str) -> bool {
     MODIFIER_KEYS.contains(&key)
 }
 
+/// How long after an *automatic* stop a completed toggle gesture is read as the
+/// stop the user was already performing, rather than a request to start again.
+///
+/// [`ActivationController::auto_stop_at`] and a user's double-tap both run
+/// through `flip_toggle`, which is a bare boolean flip — so a stop govox decided
+/// on and a stop the user asked for were indistinguishable to it. When silence
+/// or a submitted single-line field ended a session first, the double-tap that
+/// followed found the toggle already off and turned it back *on*, starting a
+/// session nobody asked for. That session then holds Enter, Tab and the arrows
+/// behind a commit which never comes, because nobody is speaking: it reads as
+/// the keyboard freezing, and it clears only when the silence timeout fires.
+///
+/// Observed on 2026-08-26: two such sessions began 0.79 s and 0.98 s after the
+/// preceding one ended. 1.5 s covers a hand still finishing its gesture, and is
+/// short enough that deliberately restarting dictation after an automatic stop
+/// waits out a pause the user was taking anyway.
+///
+/// Deliberately *not* `double_tap_s`: at its 0.7 s default that window is
+/// shorter than both observations and would have caught neither.
+const AUTO_STOP_GUARD_S: f64 = 1.5;
+
 /// One key transition, by canonical evdev name (`KEY_RIGHTCTRL`).
 ///
 /// Autorepeat (evdev value 2) is dropped before it gets here, so a held key
@@ -112,6 +133,13 @@ pub struct ActivationController {
     /// it a keylogger.
     held_modifiers: BTreeSet<String>,
     last_tap_ts: Option<f64>,
+    /// When govox last stopped a session *on its own*, if it has.
+    ///
+    /// Only [`ActivationController::auto_stop_at`] sets this. A stop the user
+    /// performed — the stop key, or [`ActivationController::abort`] — leaves it
+    /// clear on purpose: someone who presses Escape and then double-taps is
+    /// asking to dictate, not repeating themselves.
+    last_auto_stop_ts: Option<f64>,
 }
 
 impl ActivationController {
@@ -133,6 +161,7 @@ impl ActivationController {
             last_tap_ts: None,
             stop_key: ActivationKeys::from(Vec::new()),
             last_stop_tap_ts: None,
+            last_auto_stop_ts: None,
         }
     }
 
@@ -332,6 +361,17 @@ impl ActivationController {
         match self.last_tap_ts {
             Some(previous) if now_s - previous <= self.double_tap_s => {
                 self.last_tap_ts = None;
+                if self.absorbs_restart(now_s) {
+                    // Consumed, so the *next* gesture starts a session normally:
+                    // absorbing twice would be its own way of ignoring the user.
+                    self.last_auto_stop_ts = None;
+                    // Safe to log: this is the configured shortcut, not the
+                    // keystroke stream the module docs warn about.
+                    tracing::debug!(
+                        "toggle absorbed; govox had already stopped the session itself"
+                    );
+                    return None;
+                }
                 self.flip_toggle()
             }
             _ => {
@@ -357,14 +397,33 @@ impl ActivationController {
     /// Flip a toggle/double-tap session off via the normal stop path.
     ///
     /// The silence auto-stop calls this so an automatic stop is
-    /// indistinguishable from a manual one in the feedback layers: it runs the
+    /// indistinguishable from a manual one *in the feedback layers*: it runs the
     /// same `idle` transition and stop cues. A no-op for push-to-talk, which
     /// has no latched session, and when not currently listening.
-    pub fn auto_stop(&mut self) -> Option<Transition> {
+    ///
+    /// It is not indistinguishable to the controller itself, which is the point
+    /// of `now_s`: the stop is remembered so that a toggle arriving in the next
+    /// [`AUTO_STOP_GUARD_S`] is read as the gesture the user was mid-way
+    /// through, not as a request to start over. The timestamp shares
+    /// [`handle_event_at`](Self::handle_event_at)'s clock and must be taken from
+    /// the same source, or the two are compared across clocks.
+    pub fn auto_stop_at(&mut self, now_s: f64) -> Option<Transition> {
         if self.mode == ActivationMode::PushToTalk || !self.listening {
             return None;
         }
+        self.last_auto_stop_ts = Some(now_s);
         self.flip_toggle()
+    }
+
+    /// Whether a completed toggle gesture should be absorbed.
+    ///
+    /// Only ever true when the toggle would *start* a session: a gesture that
+    /// would stop one is always the user's to make.
+    fn absorbs_restart(&self, now_s: f64) -> bool {
+        !self.toggle_active
+            && self
+                .last_auto_stop_ts
+                .is_some_and(|stopped| now_s - stopped <= AUTO_STOP_GUARD_S)
     }
 
     /// Drive the indicator only on real transitions, so the icon flips to the
@@ -685,6 +744,86 @@ mod tests {
     }
 
     #[test]
+    fn a_toggle_just_after_an_automatic_stop_does_not_restart() {
+        // The keyboard-freeze bug. Silence — or a submitted single-line field —
+        // ends the session, and the double-tap the user was already performing
+        // lands a beat later. Before this guard it found the toggle off and
+        // turned dictation back *on*, and that unasked-for session then held
+        // Enter, Tab and the arrows behind a commit which never came, because
+        // nobody was speaking.
+        let mut c = controller(ActivationMode::DoubleTap);
+        c.handle_event_at(&down(TOGGLE), 0.0);
+        assert_eq!(
+            c.handle_event_at(&down(TOGGLE), 0.1),
+            Some(Transition::StartListening)
+        );
+        assert_eq!(c.auto_stop_at(5.0), Some(Transition::StopListening));
+
+        // 0.8 s after the stop; the two gaps measured on 2026-08-26 were 0.79 s
+        // and 0.98 s.
+        c.handle_event_at(&down(TOGGLE), 5.7);
+        assert_eq!(c.handle_event_at(&down(TOGGLE), 5.8), None);
+        assert!(
+            !c.listening(),
+            "the stop the user was performing, not a session they never asked for"
+        );
+    }
+
+    #[test]
+    fn the_guard_expires_so_dictation_can_start_again() {
+        let mut c = controller(ActivationMode::DoubleTap);
+        c.handle_event_at(&down(TOGGLE), 0.0);
+        c.handle_event_at(&down(TOGGLE), 0.1);
+        c.auto_stop_at(5.0);
+
+        // Past the window: a person deciding to dictate, not a hand still
+        // finishing the previous gesture.
+        let late = 5.0 + AUTO_STOP_GUARD_S + 0.1;
+        c.handle_event_at(&down(TOGGLE), late);
+        assert_eq!(
+            c.handle_event_at(&down(TOGGLE), late + 0.1),
+            Some(Transition::StartListening)
+        );
+    }
+
+    #[test]
+    fn only_one_toggle_is_absorbed() {
+        // Absorbing every gesture inside the window would be its own way of
+        // ignoring the user. Once is the correction; twice is a fault.
+        let mut c = controller(ActivationMode::DoubleTap);
+        c.handle_event_at(&down(TOGGLE), 0.0);
+        c.handle_event_at(&down(TOGGLE), 0.1);
+        c.auto_stop_at(5.0);
+
+        c.handle_event_at(&down(TOGGLE), 5.1);
+        assert_eq!(c.handle_event_at(&down(TOGGLE), 5.2), None, "absorbed");
+
+        c.handle_event_at(&down(TOGGLE), 5.3);
+        assert_eq!(
+            c.handle_event_at(&down(TOGGLE), 5.4),
+            Some(Transition::StartListening),
+            "a second gesture inside the window is unambiguous"
+        );
+    }
+
+    #[test]
+    fn a_stop_the_user_performed_does_not_arm_the_guard() {
+        // `abort` is the Escape path, which the IBus engine consumes itself.
+        // Someone who presses Escape and then double-taps is asking to dictate,
+        // so absorbing that would be the same silent surprise in reverse.
+        let mut c = controller(ActivationMode::DoubleTap);
+        c.handle_event_at(&down(TOGGLE), 0.0);
+        c.handle_event_at(&down(TOGGLE), 0.1);
+        assert_eq!(c.abort(), Some(Transition::Abort));
+
+        c.handle_event_at(&down(TOGGLE), 0.3);
+        assert_eq!(
+            c.handle_event_at(&down(TOGGLE), 0.4),
+            Some(Transition::StartListening)
+        );
+    }
+
+    #[test]
     fn a_third_press_does_not_ride_the_second() {
         // After a successful double-tap the timer is cleared, so three presses
         // are one toggle and one pending tap — not two toggles. This is what
@@ -751,7 +890,7 @@ mod tests {
     fn auto_stop_ends_a_latched_session() {
         let mut c = controller(ActivationMode::Toggle);
         c.handle_event(&down(TOGGLE));
-        assert_eq!(c.auto_stop(), Some(Transition::StopListening));
+        assert_eq!(c.auto_stop_at(0.0), Some(Transition::StopListening));
         assert!(!c.listening());
         // And the next press starts a fresh session rather than resuming.
         assert_eq!(
@@ -762,12 +901,12 @@ mod tests {
 
     #[test]
     fn auto_stop_is_a_no_op_when_idle_or_push_to_talk() {
-        assert_eq!(controller(ActivationMode::Toggle).auto_stop(), None);
+        assert_eq!(controller(ActivationMode::Toggle).auto_stop_at(0.0), None);
 
         let mut ptt = controller(ActivationMode::PushToTalk);
         ptt.handle_event(&down(PTT));
         assert_eq!(
-            ptt.auto_stop(),
+            ptt.auto_stop_at(0.0),
             None,
             "push-to-talk has no latched session to end"
         );

@@ -997,12 +997,7 @@ impl<A: Announcer> EventLoop<'_, A> {
     }
 
     async fn on_key(&mut self, key: &KeyEvent) {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs_f64();
-
-        let Some(transition) = self.controller.handle_event_at(key, now) else {
+        let Some(transition) = self.controller.handle_event_at(key, activation_now_s()) else {
             return;
         };
         tracing::info!(state = transition.state(), "activation");
@@ -1088,7 +1083,7 @@ impl<A: Announcer> EventLoop<'_, A> {
     /// transition and the same cues, so the user is not left guessing whether
     /// govox is still listening.
     async fn auto_stop(&mut self, reason: &'static str) {
-        let Some(transition) = self.controller.auto_stop() else {
+        let Some(transition) = self.controller.auto_stop_at(activation_now_s()) else {
             return;
         };
         tracing::info!(reason, "stopping the session");
@@ -1274,7 +1269,7 @@ impl<A: Announcer> EventLoop<'_, A> {
         // is not.
         if chord == "enter" && !multiline {
             tracing::info!("single-line field submitted; ending the session");
-            if let Some(transition) = self.controller.auto_stop() {
+            if let Some(transition) = self.controller.auto_stop_at(activation_now_s()) {
                 self.announcer.set_state(transition.state());
             }
             self.stop_session().await;
@@ -1428,6 +1423,19 @@ fn input_nodes() -> BTreeSet<std::ffi::OsString> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// The clock the activation controller is driven by, in seconds.
+///
+/// Named once and shared rather than taken at each call site, because
+/// `ActivationController` compares a toggle's timestamp against the one recorded
+/// by `auto_stop_at`. Two call sites reading different clocks would make that
+/// comparison meaningless in a way nothing would report.
+fn activation_now_s() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs_f64()
 }
 
 /// Read every keyboard that can send an activation key — now, and later.
