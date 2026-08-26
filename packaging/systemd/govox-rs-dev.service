@@ -18,7 +18,13 @@ Conflicts=govox.service
 # nothing to start — and at login that would otherwise be a restart loop whose
 # journal says only "no such file". A skipped unit says exactly what is
 # missing, once.
-ConditionPathExists=%h/dev/personal/personal-playground/govox-rs/target/debug/govox
+#
+# The flip side is worth stating, because it has already cost a debugging
+# session: a *stale* path here is skipped exactly as quietly as a missing
+# binary. This names the checkout, so moving or renaming that directory leaves
+# a unit which reports no error at all, having never tried to start — `status`
+# says only "condition failed". Edit it to match your checkout.
+ConditionPathExists=%h/dev/personal/repos/govox-rs/target/debug/govox
 
 [Service]
 Type=simple
@@ -30,7 +36,7 @@ Type=simple
 #
 # Point at the shared target directory rather than a worktree, so the unit
 # keeps working whichever worktree the build came from.
-ExecStart=%h/dev/personal/personal-playground/govox-rs/target/debug/govox run
+ExecStart=%h/dev/personal/repos/govox-rs/target/debug/govox run
 Restart=on-failure
 RestartSec=2
 # Exit 2 is a configuration or personal-dictionary error: govox refuses to run
