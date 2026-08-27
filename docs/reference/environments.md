@@ -63,8 +63,16 @@ machine, so the CUDA variant has never been compiled or run. See
 | `wl-clipboard` | `/usr/bin/wl-copy` | Clipboard fallback. |
 | GNOME extensions | `ubuntu-appindicators` | **Provides the `StatusNotifierWatcher` the tray needs.** GNOME has no built-in tray, so without an extension of this kind the icon silently never appears. |
 
-Audio input is a USB Blue microphone at 32 kHz, resampled to the 16 kHz Whisper expects. A
-Logitech C922 webcam microphone is also present and selectable.
+Audio input is a USB Blue microphone, captured at 48 kHz stereo and resampled to the
+16 kHz Whisper expects. A Logitech C922 webcam microphone is also present and selectable,
+and that one runs at 32 kHz.
+
+The two rates are worth keeping straight. This entry read "32 kHz" for the Blue until
+2026-08-27; the hardware does not offer that rate at all, advertising only 44.1 and
+48 kHz, so the figure was the webcam's, recorded while it was the default source. That is
+the exact confusion `[audio] device` exists to prevent — an empty setting follows
+whatever PipeWire calls the default, so unplugging the Blue moves capture to the webcam
+silently, and a measurement taken then describes the wrong microphone.
 
 Three monitors, in a mixed portrait/landscape layout (two 3840×2160 landscape, one
 2160×3840 portrait). This is worth recording because overlay placement and caret-following
