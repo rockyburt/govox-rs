@@ -324,6 +324,47 @@ impl Overlay {
         ))
     }
 
+    /// `Xft.dpi` from the root window's resource manager, if it is set.
+    ///
+    /// This is how the overlay learns that the X11 coordinates it places
+    /// windows in are not the logical coordinates its caret arrives in. See
+    /// [`crate::geometry::xwayland_scale`] for why this resource is the signal
+    /// and what is done with it.
+    ///
+    /// `RESOURCE_MANAGER` is the same string `xrdb -query` prints: newline
+    /// separated `name:\tvalue` pairs. Parsed by hand rather than by pulling in
+    /// an Xresources crate, because one lookup of one key does not justify a
+    /// dependency in the process that must never take dictation down.
+    ///
+    /// Every failure returns `None`, which `xwayland_scale` reads as 1 — the
+    /// behaviour of every release before this existed.
+    pub fn xft_dpi(&self) -> Option<i32> {
+        let root = self.connection.setup().roots[self.screen].root;
+        // Long enough for a full resource database; `xrdb -query` output on the
+        // reference machine is a few hundred bytes. The reply is truncated
+        // rather than refused if it runs over, and a truncated database simply
+        // may not contain the key, which is the same as not being set.
+        let reply = self
+            .connection
+            .get_property(
+                false,
+                root,
+                xproto::AtomEnum::RESOURCE_MANAGER,
+                xproto::AtomEnum::STRING,
+                0,
+                4096,
+            )
+            .ok()?
+            .reply()
+            .ok()?;
+
+        let database = std::str::from_utf8(&reply.value).ok()?;
+        database.lines().find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            (name.trim() == "Xft.dpi").then(|| value.trim().parse().ok())?
+        })
+    }
+
     /// Where the pointer is, for choosing the corner monitor.
     ///
     /// The pointer's monitor, not the primary one: "primary" is a fixed screen

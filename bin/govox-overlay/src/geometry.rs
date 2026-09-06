@@ -177,6 +177,69 @@ impl Rect {
     }
 }
 
+/// The X11 resource-manager DPI that means "no scaling".
+///
+/// X has always defined 96 as the unscaled default, and mutter derives the
+/// value it publishes from that same base.
+pub const BASE_DPI: i32 = 96;
+
+/// The largest XWayland buffer scale worth believing.
+///
+/// XWayland scales are small integers. A larger number is a misread resource or
+/// a hand-set font DPI, and acting on it would throw the card off screen.
+const MAX_SCALE: i32 = 4;
+
+/// How many X11 pixels there are per logical pixel.
+///
+/// The overlay lives in two coordinate spaces at once and, until this existed,
+/// silently assumed they were one. It places its own window through X11, but
+/// the caret rectangle it is given arrives from IBus in *logical* Wayland
+/// coordinates. With `xwayland-native-scaling` enabled — mutter's default way
+/// of keeping X11 clients sharp under fractional scaling — XWayland hands X
+/// clients a coordinate space that is an integer multiple of the logical one.
+///
+/// Measured on a three-monitor 4K desk at fractional scale 1.25: the logical
+/// desktop is 7872x3072 and `xdpyinfo` reports 15744x6144, exactly twice. A
+/// caret on the middle monitor then hit-tests as being on the left one, so
+/// `caret_position` either placed the card on the wrong display or, via its
+/// `monitor.contains` guard, declined to place it at all.
+///
+/// `Xft.dpi` is the signal used because it needs nothing but the X connection
+/// the overlay already holds. mutter publishes `96 * scale` there for exactly
+/// this class of client, and on an unscaled session it is either absent or 96 —
+/// both of which mean 1.
+///
+/// Only exact multiples of the base are accepted. `Xft.dpi` is nominally a
+/// *font* hint, and a user may have set it by hand to something like 110 to
+/// make text bigger; that says nothing about XWayland's buffer scale, and
+/// scaling the caret by 1.15 would move the card for no reason. Demanding an
+/// exact multiple keeps the hand-tuned case at 1, which is the safe answer.
+#[must_use]
+pub fn xwayland_scale(xft_dpi: Option<i32>) -> i32 {
+    let Some(dpi) = xft_dpi else { return 1 };
+    if dpi <= 0 || dpi % BASE_DPI != 0 {
+        return 1;
+    }
+    (dpi / BASE_DPI).clamp(1, MAX_SCALE)
+}
+
+/// Convert a logical rectangle into the X11 space the window is placed in.
+///
+/// A scale of 1 is the identity, which is the whole of an unscaled session and
+/// every session before this function existed.
+#[must_use]
+pub fn logical_to_x11(rect: Rect, scale: i32) -> Rect {
+    if scale <= 1 {
+        return rect;
+    }
+    Rect::new(
+        rect.x.saturating_mul(scale),
+        rect.y.saturating_mul(scale),
+        rect.width.saturating_mul(scale),
+        rect.height.saturating_mul(scale),
+    )
+}
+
 /// The part of `monitor` a card may actually occupy.
 ///
 /// X11 reports monitors as their full physical rectangle, which takes no notice
@@ -403,6 +466,78 @@ mod tests {
         // Negative levels cannot arrive from the daemon, but a clamp here is
         // cheaper than a NaN from powf on a negative base.
         assert_eq!(bar_scale(-1.0, 1.0), 0.0);
+    }
+
+    #[test]
+    fn an_absent_or_unscaled_dpi_means_one() {
+        assert_eq!(xwayland_scale(None), 1, "no resource set");
+        assert_eq!(xwayland_scale(Some(96)), 1, "the unscaled default");
+    }
+
+    #[test]
+    fn the_measured_desk_reports_two() {
+        // Three 4K monitors at fractional 1.25: mutter publishes 192, and the
+        // X11 screen measured exactly twice the logical desktop.
+        assert_eq!(xwayland_scale(Some(192)), 2);
+    }
+
+    #[test]
+    fn a_hand_set_font_dpi_is_ignored() {
+        // Xft.dpi is a font hint first. Someone enlarging text to 110 or 144
+        // has said nothing about XWayland's buffer scale, and moving the card
+        // on that basis would be acting on the wrong signal.
+        assert_eq!(xwayland_scale(Some(110)), 1);
+        assert_eq!(
+            xwayland_scale(Some(144)),
+            1,
+            "1.5x is not an XWayland scale"
+        );
+    }
+
+    #[test]
+    fn nonsense_cannot_throw_the_card_off_screen() {
+        assert_eq!(xwayland_scale(Some(0)), 1);
+        assert_eq!(xwayland_scale(Some(-192)), 1);
+        assert_eq!(xwayland_scale(Some(96 * 99)), 4, "clamped, not believed");
+    }
+
+    #[test]
+    fn scaling_by_one_leaves_a_rectangle_alone() {
+        let r = Rect::new(746, 1263, 10, 22);
+        assert_eq!(logical_to_x11(r, 1), r);
+        assert_eq!(logical_to_x11(r, 0), r, "a bad scale is not a shrink");
+    }
+
+    #[test]
+    fn a_logged_caret_lands_where_x11_expects_it() {
+        // The rectangle IBus actually reported on the reference desk. A 22px
+        // caret is a logical-pixel text cursor; in the doubled space it is 44.
+        let caret = Rect::new(746, 1263, 10, 22);
+        assert_eq!(logical_to_x11(caret, 2), Rect::new(1492, 2526, 20, 44));
+    }
+
+    #[test]
+    fn scaling_moves_a_caret_onto_the_monitor_it_belongs_to() {
+        // The bug, as a test. DP-1 is the middle monitor: logical x 3072..6144,
+        // which X11 presents as 6144..12288. A caret logically on DP-1 falls
+        // inside DP-2's X11 rectangle unless it is scaled first.
+        let dp2 = Rect::new(0, 0, 6144, 3456);
+        let dp1 = Rect::new(6144, 0, 6144, 3456);
+        let caret = Rect::new(4000, 800, 10, 22);
+
+        let monitors = [dp2, dp1];
+        assert_eq!(
+            monitor_at(&monitors, caret.x, caret.y),
+            Some(dp2),
+            "unscaled, the caret is read as being on the wrong monitor"
+        );
+
+        let scaled = logical_to_x11(caret, 2);
+        assert_eq!(
+            monitor_at(&monitors, scaled.x, scaled.y),
+            Some(dp1),
+            "scaled, it lands on the monitor it is really on"
+        );
     }
 
     #[test]

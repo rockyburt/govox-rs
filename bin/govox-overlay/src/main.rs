@@ -253,7 +253,18 @@ impl Hud {
         // rectangle would reject it and send the card to the corner instead.
         let work_area = self.window.work_area();
 
-        if let Some(caret) = self.anchor
+        // The anchor arrives from IBus in logical coordinates; `monitors`,
+        // `work_area` and the window itself are all in X11's. Under
+        // `xwayland-native-scaling` those are not the same space, so the caret
+        // is converted before it is compared against anything.
+        //
+        // Read per reposition rather than cached at startup: the scale changes
+        // when monitors are reconfigured, and a stale factor is exactly the
+        // failure this fixes. It is one round trip on a connection already
+        // open, against a repaint that happens only when the card moves.
+        let scale = g::xwayland_scale(self.window.xft_dpi());
+
+        if let Some(caret) = self.anchor.map(|caret| g::logical_to_x11(caret, scale))
             && let Some(monitor) = g::monitor_at(&monitors, caret.x, caret.y)
             && let Some((x, y)) =
                 g::caret_position(caret, monitor, g::usable_area(monitor, work_area), card)
