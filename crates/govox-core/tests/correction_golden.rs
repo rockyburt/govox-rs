@@ -49,6 +49,10 @@ const CORPUS: &[u8] = include_bytes!("../../../corpus/correction.jsonl.gz");
 fn dictionary_fixture() -> PersonalDictionary {
     PersonalDictionary {
         bias_terms: vec!["Rentals.ca".into()],
+        // Empty on purpose. Bias groups select which terms reach *recognition*,
+        // and this corpus records the correction pipeline, which runs after it.
+        // Nothing here can observe them.
+        bias_groups: Vec::new(),
         replacements: vec![
             ("rentals api".into(), "Rentals-API".into()),
             ("see plus plus".into(), "C++".into()),

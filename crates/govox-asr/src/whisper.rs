@@ -682,6 +682,7 @@ mod tests {
 
         let dictionary = PersonalDictionary {
             bias_terms: vec!["Kubernetes".to_owned()],
+            bias_groups: Vec::new(),
             replacements: Vec::new(),
         };
         let recognizer =

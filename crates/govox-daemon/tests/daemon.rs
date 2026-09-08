@@ -1148,6 +1148,7 @@ fn publishing_a_reload_swaps_every_dictionary_consumer_at_once() {
     config.correction.enabled = false;
     let dictionary = PersonalDictionary {
         bias_terms: vec!["Kubernetes".to_owned()],
+        bias_groups: Vec::new(),
         replacements: vec![("rentals api".to_owned(), "Rentals-API".to_owned())],
     };
     shared.publish(config, dictionary);

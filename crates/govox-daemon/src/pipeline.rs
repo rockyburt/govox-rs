@@ -148,6 +148,9 @@ pub async fn run(
     let recognizer = WhisperRecognizer::start(&config.recognition, &dictionary, queue_size)?;
     let asr = recognizer.handle();
     let asr_handle = recognizer.handle();
+    // A third handle, for re-biasing per session. Cheap: the handle is a clone
+    // of two channel senders, not a second recogniser.
+    let bias_handle = recognizer.handle();
 
     // Load the model before the first utterance rather than during it: a
     // multi-second cold start on the user's first phrase reads as a hang.
@@ -406,6 +409,8 @@ pub async fn run(
         voiced_s: 0.0,
         voiced_since_decode: 0.0,
         app_rule: None,
+        bias: bias_handle,
+
         feedback: loop_feedback,
         last_anchor: None,
         last_compact: None,
@@ -594,6 +599,13 @@ struct EventLoop<'a, A: Announcer> {
     /// at the start: the focused window does not change mid-session, and
     /// re-resolving it per update would be an AT-SPI round trip per frame.
     app_rule: Option<govox_core::config::OverlayAppRule>,
+    /// Where a session's bias terms are published, so the prompt can depend on
+    /// which window has focus.
+    ///
+    /// The recogniser's prompt is the only place a `[[dictionary.bias_group]]`
+    /// can take effect: bias is fed to whisper.cpp *before* it decodes, so
+    /// nothing downstream of recognition can stand in for it.
+    bias: govox_asr::WhisperHandle,
     /// The overlay's own settings, for the anchoring decisions.
     feedback: govox_core::config::FeedbackConfig,
     /// The last anchor sent, so an unmoved caret is not re-sent.
@@ -614,6 +626,36 @@ struct EventLoop<'a, A: Announcer> {
 }
 
 impl<A: Announcer> EventLoop<'_, A> {
+    /// Select this session's bias terms from the focused window.
+    ///
+    /// The core list applies always; a `[[dictionary.bias_group]]` whose
+    /// `while_using` matches is appended. Selection lives in `govox-core`
+    /// alongside the matcher `feedback.app_rules` uses, so "which app is this"
+    /// has one answer rather than two that agree until they do not.
+    ///
+    /// Recomputed unconditionally rather than cached against the last
+    /// selection. A cache would have to be invalidated when the dictionary is
+    /// reloaded — and the reload path re-biases from the core alone, having no
+    /// window to select on — so a stale cache would skip the next session and
+    /// leave the group unbiased. That is a silent wrong answer, traded for
+    /// rebuilding a ~40-word string once per keypress.
+    fn rebias(&mut self, window: Option<&str>) {
+        let dictionary = self.shared.dictionary.load();
+        // Nothing to select between: leave the prompt the recogniser was
+        // started with rather than re-storing the same list per session.
+        if dictionary.bias_groups.is_empty() {
+            return;
+        }
+
+        let terms = dictionary.bias_for(window);
+        tracing::debug!(
+            window = window.unwrap_or("<unnamed>"),
+            terms = terms.len(),
+            "selected the session's bias terms"
+        );
+        self.bias.set_bias_terms(&terms);
+    }
+
     /// Feed one captured frame to the live recognizer, and show what it hears.
     ///
     /// The whole hypothesis is re-corrected every poll rather than diffed
@@ -956,6 +998,11 @@ impl<A: Announcer> EventLoop<'_, A> {
                 self.app_rule =
                     govox_core::caret::match_app_rule(window.as_deref(), &self.feedback.app_rules)
                         .cloned();
+                // Bias off the same resolved window. This has to happen here
+                // and not later: the prompt is handed to whisper.cpp before it
+                // decodes, so a group selected after the first utterance would
+                // miss the words it exists to catch.
+                self.rebias(window.as_deref());
                 // Logged with the label whether or not it matched: a line only
                 // on success cannot tell "could not name the window" from
                 // "named it, no rule covers it", and those need opposite fixes.

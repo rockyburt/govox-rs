@@ -65,6 +65,42 @@ fallback_to_utterance = true
 
 [correction]
 enabled = true
+# Path to the personal dictionary. Two mechanisms live in that file and they are
+# not interchangeable:
+#
+#   bias     terms fed to Whisper as `initial_prompt` BEFORE it decodes. A nudge
+#            toward a spelling; it cannot force anything.
+#   replace  ordered literal find/replace applied AFTER recognition, last in the
+#            correction pipeline. Deterministic.
+#
+# The bias prompt is capped by `[recognition] bias_prompt_token_budget`, and past
+# that cap terms are dropped silently, in list order. One flat list therefore
+# cannot hold the vocabulary of every project at once. `[[dictionary.bias_group]]`
+# spends the budget on whatever has focus instead:
+#
+#   [dictionary]
+#   bias = ["JIRA", "GitHub"]            # always, whatever has focus
+#
+#   [[dictionary.bias_group]]
+#   while_using = "*RentalsCa*"          # same patterns as feedback.app_rules
+#   terms = ["Rentsync", "Jobber"]
+#
+#   [[dictionary.bias_group]]
+#   while_using = "*govox*"
+#   terms = ["ydotool", "whisper"]
+#
+# The core is emitted first and the matching group after it, because truncation
+# is by word in order: position is priority, and the words said everywhere must
+# outrank one project's vocabulary.
+#
+# First match wins; groups are not merged. A window that matches nothing gets the
+# core alone, as does a window govox cannot name — biasing one project's terms
+# into every other is worse than biasing none, because bias is invisible and its
+# effects read as the model being wrong.
+#
+# Resolved once per session, off the same window lookup `feedback.app_rules`
+# already makes. Recognition reads the prompt before it decodes, so a group
+# cannot be selected any later than the moment you press the activation key.
 dictionary_path = ""
 # Drop standalone verbal fillers ("um", "uh", ...) before injection.
 drop_fillers = true

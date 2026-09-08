@@ -230,6 +230,25 @@ impl FieldSnapshot {
     }
 }
 
+/// Bias terms that apply only while a matching window has focus.
+///
+/// The bias prompt has a hard ceiling — `[recognition] bias_prompt_token_budget`,
+/// 180 words by default — and overshooting it pushes real audio context out of
+/// Whisper's window. A single flat list therefore cannot hold the vocabulary of
+/// every project at once: past the budget, terms are dropped silently, in list
+/// order, with nothing to say which.
+///
+/// A group is the way out. Terms that only matter in one context are spent only
+/// in that context, so the budget buys the vocabulary of the thing being worked
+/// on rather than a truncated slice of everything.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BiasGroup {
+    /// A window-label pattern, with exactly the semantics of
+    /// `feedback.app_rules` and a custom command's `while_using`.
+    pub while_using: String,
+    pub terms: Vec<String>,
+}
+
 /// Terms biased into recognition, and literal replacements applied after it.
 ///
 /// Loaded from a TOML file named by `[correction] dictionary_path`:
@@ -238,13 +257,21 @@ impl FieldSnapshot {
 /// [dictionary]
 /// bias = ["Rentals.ca", "ydotool"]
 ///
+/// [[dictionary.bias_group]]
+/// while_using = "*RentalsCa*"
+/// terms = ["Rentsync", "Jobber"]
+///
 /// [[dictionary.replace]]
 /// from = "rentals api"
 /// to = "Rentals-API"
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PersonalDictionary {
+    /// Always biased, whatever has focus.
     pub bias_terms: Vec<String>,
+    /// Biased only while their pattern matches. First match wins, as everywhere
+    /// else a window label is matched in this project.
+    pub bias_groups: Vec<BiasGroup>,
     /// Ordered `(from, to)` pairs. Order matters: they are applied in sequence.
     pub replacements: Vec<(String, String)>,
 }
@@ -265,6 +292,12 @@ pub enum DictionaryError {
     NotATable,
     #[error("[dictionary].bias must be a list of strings")]
     BadBias,
+    #[error("[[dictionary.bias_group]] entries must be TOML tables")]
+    BadBiasGroupShape,
+    #[error(
+        "[[dictionary.bias_group]] requires a string \"while_using\" and a \"terms\" list of strings"
+    )]
+    BadBiasGroupEntry,
     #[error("[[dictionary.replace]] entries must be TOML tables")]
     BadReplaceShape,
     #[error("dictionary replacements require string \"from\" and \"to\"")]
@@ -315,6 +348,34 @@ impl PersonalDictionary {
             }
         }
 
+        let mut bias_groups = Vec::new();
+        if let Some(groups) = dictionary.get("bias_group") {
+            let toml::Value::Array(entries) = groups else {
+                return Err(DictionaryError::BadBiasGroupShape);
+            };
+            for entry in entries {
+                let toml::Value::Table(entry) = entry else {
+                    return Err(DictionaryError::BadBiasGroupShape);
+                };
+                let (Some(toml::Value::String(while_using)), Some(toml::Value::Array(items))) =
+                    (entry.get("while_using"), entry.get("terms"))
+                else {
+                    return Err(DictionaryError::BadBiasGroupEntry);
+                };
+                let mut terms = Vec::with_capacity(items.len());
+                for item in items {
+                    let toml::Value::String(term) = item else {
+                        return Err(DictionaryError::BadBiasGroupEntry);
+                    };
+                    terms.push(term.clone());
+                }
+                bias_groups.push(BiasGroup {
+                    while_using: while_using.clone(),
+                    terms,
+                });
+            }
+        }
+
         let mut replacements = Vec::new();
         if let Some(replace) = dictionary.get("replace") {
             let toml::Value::Array(entries) = replace else {
@@ -335,8 +396,43 @@ impl PersonalDictionary {
 
         Ok(Self {
             bias_terms,
+            bias_groups,
             replacements,
         })
+    }
+
+    /// The terms to bias while `label` has focus: the core, then the first
+    /// matching group.
+    ///
+    /// Core first is deliberate and load-bearing. The prompt is truncated by
+    /// word, in order, so position *is* priority — putting the core first means
+    /// the terms wanted everywhere survive a group large enough to overrun the
+    /// budget, and the group's tail is what gets dropped instead. The reverse
+    /// order would let one project's vocabulary silently evict the words said in
+    /// every project.
+    ///
+    /// First match wins rather than merging every match, because that is how a
+    /// window label is matched everywhere else here — `feedback.app_rules` and a
+    /// command's `while_using` both stop at the first. Two rules for "which app
+    /// is this" that agree in the common cases and diverge on overlapping
+    /// patterns would be a bug nobody could reproduce on purpose.
+    ///
+    /// An unknown window (`None`, or an empty label) gets the core alone. A
+    /// group that cannot be shown to apply must not be applied: biasing one
+    /// project's vocabulary into every other is worse than biasing none, because
+    /// bias is invisible and its effects are attributed to the model.
+    #[must_use]
+    pub fn bias_for(&self, label: Option<&str>) -> Vec<String> {
+        let mut terms = self.bias_terms.clone();
+        if let Some(label) = label.filter(|label| !label.is_empty())
+            && let Some(group) = self
+                .bias_groups
+                .iter()
+                .find(|group| crate::caret::app_label_matches(&group.while_using, label))
+        {
+            terms.extend(group.terms.iter().cloned());
+        }
+        terms
     }
 }
 
@@ -665,6 +761,162 @@ mod tests {
 
     fn dictionary(body: &str) -> Result<PersonalDictionary, DictionaryError> {
         PersonalDictionary::from_table(&body.parse::<toml::Table>().unwrap())
+    }
+
+    #[test]
+    fn a_dictionary_without_groups_biases_the_core_whatever_has_focus() {
+        let dict = dictionary(
+            r#"
+[dictionary]
+bias = ["Rentals.ca", "ydotool"]
+"#,
+        )
+        .unwrap();
+
+        assert!(dict.bias_groups.is_empty());
+        for label in [None, Some("Google Chrome / Inbox"), Some("")] {
+            assert_eq!(
+                dict.bias_for(label),
+                ["Rentals.ca", "ydotool"],
+                "label {label:?} must not change a dictionary with no groups"
+            );
+        }
+    }
+
+    #[test]
+    fn a_matching_group_is_appended_after_the_core() {
+        let dict = dictionary(
+            r#"
+[dictionary]
+bias = ["JIRA"]
+
+[[dictionary.bias_group]]
+while_using = "*rentalsca*"
+terms = ["Rentsync", "Jobber"]
+"#,
+        )
+        .unwrap();
+
+        // Core first: the prompt truncates by word in order, so this ordering is
+        // what stops a long group evicting the words said everywhere.
+        assert_eq!(
+            dict.bias_for(Some("Code / RentalsCa - main")),
+            ["JIRA", "Rentsync", "Jobber"]
+        );
+    }
+
+    #[test]
+    fn a_window_that_matches_nothing_gets_the_core_alone() {
+        let dict = dictionary(
+            r#"
+[dictionary]
+bias = ["JIRA"]
+
+[[dictionary.bias_group]]
+while_using = "*rentalsca*"
+terms = ["Rentsync"]
+"#,
+        )
+        .unwrap();
+
+        // Biasing one project's vocabulary into every other window is worse than
+        // biasing none: bias is invisible, so its effects read as the model
+        // being wrong.
+        assert_eq!(dict.bias_for(Some("Firefox / news")), ["JIRA"]);
+        assert_eq!(dict.bias_for(None), ["JIRA"], "an unknown window");
+        assert_eq!(dict.bias_for(Some("")), ["JIRA"], "a window with no label");
+    }
+
+    #[test]
+    fn the_first_matching_group_wins_and_the_rest_are_not_merged() {
+        let dict = dictionary(
+            r#"
+[dictionary]
+bias = ["JIRA"]
+
+[[dictionary.bias_group]]
+while_using = "*rentalsca*"
+terms = ["Rentsync"]
+
+[[dictionary.bias_group]]
+while_using = "*code*"
+terms = ["govox", "whisper"]
+"#,
+        )
+        .unwrap();
+
+        // Both patterns match this label. Stopping at the first is what
+        // app_rules and a command's while_using already do; merging here would
+        // be a second, quietly different answer to "which app is this".
+        assert_eq!(
+            dict.bias_for(Some("Code / RentalsCa - main")),
+            ["JIRA", "Rentsync"]
+        );
+        assert_eq!(
+            dict.bias_for(Some("Code / govox-rs - develop")),
+            ["JIRA", "govox", "whisper"],
+            "the second group still applies where the first does not"
+        );
+    }
+
+    #[test]
+    fn a_group_is_matched_with_the_same_rules_as_an_app_rule() {
+        let dict = dictionary(
+            r#"
+[dictionary]
+bias = []
+
+[[dictionary.bias_group]]
+while_using = "rentalsca"
+terms = ["Rentsync"]
+"#,
+        )
+        .unwrap();
+
+        // No wildcard means substring, case-insensitively -- the existing
+        // semantics, reached by sharing app_label_matches rather than by
+        // reimplementing it.
+        assert_eq!(dict.bias_for(Some("Code / RENTALSCA")), ["Rentsync"]);
+        assert!(dict.bias_for(Some("Code / govox")).is_empty());
+    }
+
+    #[test]
+    fn a_malformed_group_is_refused_rather_than_half_read() {
+        // A group whose terms are not strings, or which names no window, would
+        // otherwise load as an empty group that silently never fires.
+        assert!(
+            dictionary(
+                r#"
+[dictionary]
+[[dictionary.bias_group]]
+while_using = "*code*"
+terms = ["ok", 7]
+"#
+            )
+            .is_err()
+        );
+
+        assert!(
+            dictionary(
+                r#"
+[dictionary]
+[[dictionary.bias_group]]
+terms = ["ok"]
+"#
+            )
+            .is_err(),
+            "a group with no while_using"
+        );
+
+        assert!(
+            dictionary(
+                r#"
+[dictionary]
+bias_group = "not a list"
+"#
+            )
+            .is_err()
+        );
     }
 
     #[test]

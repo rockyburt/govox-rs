@@ -286,6 +286,7 @@ mod tests {
         config.correction.enabled = false;
         let dictionary = PersonalDictionary {
             bias_terms: vec!["Kubernetes".to_owned()],
+            bias_groups: Vec::new(),
             replacements: Vec::new(),
         };
         state.publish(config, dictionary);
