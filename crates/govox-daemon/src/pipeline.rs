@@ -1759,15 +1759,38 @@ fn bias_lists(bias: &govox_core::discovery::BiasPlan) -> Vec<(String, Vec<String
 
     let mut lists = Vec::new();
     if !hand.is_empty() {
-        lists.push(("Bias by hand".to_owned(), hand.to_vec()));
+        lists.push(("Bias by hand".to_owned(), sorted(hand)));
     }
     if !discovered.is_empty() {
-        lists.push(("Bias discovered".to_owned(), discovered.to_vec()));
+        lists.push(("Bias discovered".to_owned(), sorted(discovered)));
     }
     if !bias.dropped.is_empty() {
-        lists.push(("Bias dropped".to_owned(), bias.dropped.clone()));
+        lists.push(("Bias dropped".to_owned(), sorted(&bias.dropped)));
     }
     lists
+}
+
+/// Alphabetical, for reading. **Display only.**
+///
+/// The order of the real list is not cosmetic: `bias_prompt` truncates by word
+/// *in list order*, so position is priority, and the hand-written terms come
+/// first precisely so a long discovered tail cannot evict them. Sorting the
+/// list govox actually biases would silently change which terms survive the
+/// budget — an invisible accuracy change made for the sake of a menu. So the
+/// copy shown is sorted and the copy used is not.
+///
+/// Case-insensitive, because a menu sorted by ASCII puts every capitalised term
+/// above every lowercase one: `Claude` and `cache` would sit at opposite ends
+/// of the same short list, which is the opposite of findable. Ties fall back to
+/// the exact string so the order is total and two runs agree.
+fn sorted(terms: &[String]) -> Vec<String> {
+    let mut sorted = terms.to_vec();
+    sorted.sort_by(|left, right| {
+        left.to_lowercase()
+            .cmp(&right.to_lowercase())
+            .then_with(|| left.cmp(right))
+    });
+    sorted
 }
 
 /// What this session can do, as far as the pipeline needs to know.
@@ -2110,13 +2133,46 @@ mod about_tests {
         assert_eq!(
             lists,
             vec![
+                // Alphabetical for reading: "Jira" comes first here though the
+                // prompt keeps the two the other way round.
                 (
                     "Bias by hand".to_owned(),
-                    vec!["Rentsync".to_owned(), "Jira".to_owned()]
+                    vec!["Jira".to_owned(), "Rentsync".to_owned()]
                 ),
                 ("Bias discovered".to_owned(), vec!["govox-rs".to_owned()]),
                 ("Bias dropped".to_owned(), vec!["rockyburt".to_owned()]),
             ]
+        );
+    }
+
+    #[test]
+    fn the_menu_is_sorted_but_the_prompt_is_not() {
+        // The distinction that matters. `bias_prompt` truncates by word in
+        // list order, so position *is* priority; sorting the list govox
+        // actually biases would change which terms survive the budget — an
+        // invisible accuracy change made to tidy a menu.
+        let plan = BiasPlan {
+            terms: vec![
+                "zebra".to_owned(),
+                "Apple".to_owned(),
+                "cache".to_owned(),
+                "Claude".to_owned(),
+            ],
+            dropped: Vec::new(),
+            words: 4,
+            reserved: 0,
+            discovered: 0,
+        };
+        let lists = super::bias_lists(&plan);
+        assert_eq!(
+            lists[0].1,
+            vec!["Apple", "cache", "Claude", "zebra"],
+            "case-insensitive, or Claude and cache land at opposite ends"
+        );
+        assert_eq!(
+            plan.terms,
+            vec!["zebra", "Apple", "cache", "Claude"],
+            "the plan itself is untouched"
         );
     }
 
