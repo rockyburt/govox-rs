@@ -135,12 +135,27 @@ fn audio_device_candidates(config: &Config, spec: &DiscoverySpec) -> Vec<Candida
         return Vec::new();
     }
     let mut terms: Vec<String> = Vec::new();
-    // The configured device first: it is the one actually in use, and the one
-    // whose name the user chose and therefore says.
-    let labels = std::iter::once(config.audio.device.clone()).chain(
+    // Only the microphone actually in use, and the host's default — never the
+    // whole enumeration.
+    //
+    // ALSA reports one card many times over: `hw:`, `plughw:`, `sysdefault:`,
+    // `front:` and `dsnoop:` are the same microphone five ways. The list also
+    // carries backend furniture whose *label is a sentence* — "Discard all
+    // samples (playback) or generate zero samples (capture)". Splitting all of
+    // it into words produced 29 terms on the development desk, most of them
+    // ordinary English: `capture`, `playback`, `samples`, `zero`. Biasing those
+    // is worse than biasing nothing, because it nudges the decoder toward
+    // common words in every utterance and the damage is invisible — no error,
+    // just a wrong transcript that reads as the model being bad.
+    //
+    // What anyone actually says out loud is the name of their microphone, and
+    // that is the device they configured.
+    let configured = config.audio.device.clone();
+    let labels = std::iter::once(configured.clone()).chain(
         govox_audio::capture::list_devices()
             .into_iter()
-            .flat_map(|device| [device.id, device.name]),
+            .filter(|device| device.is_default || device.id == configured)
+            .map(|device| device.name),
     );
     for label in labels {
         for term in device_terms(&label) {

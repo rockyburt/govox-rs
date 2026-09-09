@@ -301,7 +301,15 @@ pub fn branch_terms(branch: &str) -> Vec<String> {
     terms
 }
 
-/// Words an audio backend puts in every device label, which name no device.
+/// Words an audio backend puts in device labels, which name no device.
+///
+/// Two kinds. The first is furniture — `usb`, `hw`, `sysdefault` — which is
+/// noise but harmless. The second is the dangerous kind: a backend label is not
+/// always a name at all, and ALSA's null device is described by the sentence
+/// "Discard all samples (playback) or generate zero samples (capture)". Split
+/// into words, that biases the decoder toward `capture`, `playback`, `samples`
+/// and `zero` in *every* utterance. Ordinary English in the bias prompt is
+/// worse than an empty one, and it fails invisibly.
 const DEVICE_STOPLIST: &[&str] = &[
     "usb",
     "audio",
@@ -309,6 +317,8 @@ const DEVICE_STOPLIST: &[&str] = &[
     "devices",
     "default",
     "sysdefault",
+    "plughw",
+    "dsnoop",
     "card",
     "dev",
     "mono",
@@ -319,6 +329,7 @@ const DEVICE_STOPLIST: &[&str] = &[
     "output",
     "front",
     "rear",
+    "alt",
     "pcm",
     "alsa",
     "pulse",
@@ -329,6 +340,27 @@ const DEVICE_STOPLIST: &[&str] = &[
     "internal",
     "generic",
     "controller",
+    // The null device's sentence, word by word.
+    "discard",
+    "all",
+    "samples",
+    "playback",
+    "generate",
+    "zero",
+    "capture",
+    "null",
+    "sound",
+    "server",
+    "media",
+    "currently",
+    // Function words, wherever they come from. A label someone wrote by hand
+    // ("Blue Microphones, pinned for govox") is still not a reason to bias
+    // "for" into every utterance.
+    "for",
+    "and",
+    "the",
+    "with",
+    "or",
 ];
 
 /// The words inside a capture device's id or label.
@@ -751,6 +783,25 @@ bc6e6dbf1f3d4e5a6b7c8d9e0f1a2b3c4d5e6f70 refs/heads/develop
                 .iter()
                 .all(|term| term != "ALSA" && term != "PipeWire"),
             "the backend names itself in every label; none of it is a device"
+        );
+    }
+
+    #[test]
+    fn a_device_label_that_is_a_sentence_contributes_no_ordinary_english() {
+        // ALSA's null device, verbatim. Observed on the development desk
+        // putting `capture`, `playback`, `samples` and `zero` into the bias
+        // prompt, where they nudge the decoder toward common words in every
+        // utterance — invisibly, since bias failure produces no error.
+        assert_eq!(
+            device_terms("Discard all samples (playback) or generate zero samples (capture)"),
+            Vec::<String>::new(),
+            "a description is not a name"
+        );
+        // The real microphone still survives it.
+        assert_eq!(
+            device_terms("Blue Microphones, pinned for govox"),
+            vec!["Blue", "Microphones", "pinned", "govox"],
+            "the name survives; the function word in it does not"
         );
     }
 
