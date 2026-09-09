@@ -79,6 +79,15 @@ pub trait Announcer: Send + Sync {
     fn expect_anchor(&self) {}
     /// Draw the reported caret rectangle, for calibrating an app rule.
     fn caret_marker(&self, _enabled: bool) {}
+    /// Re-read the About facts, because something behind them changed.
+    ///
+    /// Defaulted like `level` and `anchor`: only a surface that shows those
+    /// facts has anything to do with it. Needed because About is otherwise
+    /// republished on the session-stopped edge alone, and discovery moves on a
+    /// completely different trigger — a branch checked out, a repository
+    /// cloned — so the menu would keep naming a stale count until the user
+    /// happened to finish dictating.
+    fn refresh_about(&self) {}
     /// Enter or leave a sustained mode; `None` is plain dictation.
     ///
     /// Defaulted, like `level` and `anchor`: only the surfaces that can hold a
@@ -687,10 +696,19 @@ impl<T: Transcriber> Daemon<T> {
             Ok(config) => config,
             Err(error) => return ReloadOutcome::failed(error.to_string()),
         };
-        let (dictionary, discovered) = match crate::load_dictionary_with_discovery(&config) {
+        let loaded = match crate::load_dictionary_with_discovery(&config) {
             Ok(loaded) => loaded,
             Err(error) => return ReloadOutcome::failed(error.to_string()),
         };
+        let crate::LoadedDictionary {
+            dictionary,
+            watch: discovered,
+            plan,
+        } = loaded;
+        // Before the publish, so a menu opened immediately after cannot read a
+        // count that belongs to the previous dictionary.
+        self.shared.set_bias_plan(plan);
+        self.announcer.refresh_about();
         // A repository cloned under a configured root is not yet being
         // watched — it did not exist when the watch was established. Hand the
         // new set to whoever owns the watcher; it respawns only if the set

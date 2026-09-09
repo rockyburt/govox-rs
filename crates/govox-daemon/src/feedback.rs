@@ -257,6 +257,14 @@ impl<S: PlaySink + 'static> Announcer for FeedbackChannel<S> {
             overlay.send(&OverlayCommand::CaretMarker(enabled));
         }
     }
+
+    fn refresh_about(&self) {
+        // The same republish the session-stopped edge does, on the other
+        // trigger that can change the facts.
+        if let (Some(tray), Some(about)) = (&self.tray, &self.about) {
+            tray.set_about(about());
+        }
+    }
 }
 
 #[cfg(test)]

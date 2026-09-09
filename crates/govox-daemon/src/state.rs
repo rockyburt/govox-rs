@@ -31,6 +31,15 @@ pub struct SharedState {
     /// The correction pipeline, rebuilt on reload because it compiles the
     /// dictionary's patterns once at construction.
     pub corrector: ArcSwap<CorrectionPipeline>,
+    /// What the last bias plan decided, for the About menu to read back.
+    ///
+    /// Display only, and deliberately *outside* [`Self::publish`]'s atomic
+    /// swap. Everything in that swap is read while deciding what to type, so a
+    /// torn read there would put the wrong words in a document; this is read
+    /// when a menu is opened, where being one reload stale is invisible and
+    /// harmless. Kept separate so the guarantee that matters is not diluted by
+    /// a readout that does not need it.
+    pub bias_plan: ArcSwap<govox_core::discovery::BiasPlan>,
     /// Whether command mode is active.
     command_mode: AtomicBool,
     /// Letters are being spelled rather than words dictated.
@@ -91,6 +100,7 @@ impl SharedState {
             config: ArcSwap::from_pointee(config),
             dictionary: ArcSwap::from_pointee(dictionary),
             corrector: ArcSwap::from_pointee(corrector),
+            bias_plan: ArcSwap::from_pointee(govox_core::discovery::BiasPlan::default()),
             command_mode: AtomicBool::new(false),
             asleep: AtomicBool::new(false),
             spelling: AtomicBool::new(false),
@@ -218,6 +228,11 @@ impl SharedState {
         self.corrector.store(Arc::new(corrector));
         self.dictionary.store(Arc::new(dictionary));
         self.config.store(Arc::new(config));
+    }
+
+    /// Record what the bias plan decided, for the About menu.
+    pub fn set_bias_plan(&self, plan: govox_core::discovery::BiasPlan) {
+        self.bias_plan.store(Arc::new(plan));
     }
 }
 

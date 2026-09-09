@@ -89,7 +89,11 @@ pub async fn run(
     config_path: Option<std::path::PathBuf>,
     cancel: CancellationToken,
 ) -> Result<(), PipelineError> {
-    let (dictionary, discovered) = crate::load_dictionary_with_discovery(&config)?;
+    let crate::LoadedDictionary {
+        dictionary,
+        watch: discovered,
+        plan: bias_plan,
+    } = crate::load_dictionary_with_discovery(&config)?;
 
     // Resolved here, while `config` is still owned by this function and before
     // anything can swap it: these are the files *this* run was configured from,
@@ -158,6 +162,7 @@ pub async fn run(
     asr.warm_up().await?;
 
     let shared = Arc::new(SharedState::new(config, dictionary));
+    shared.set_bias_plan(bias_plan);
 
     // Every surface is optional and degrades on its own. A desktop with no
     // tray, no notification daemon or no sound card still dictates.
@@ -243,8 +248,12 @@ pub async fn run(
         let report = injection_report.clone();
         let preedit_active = preedit.is_some();
         let streaming_enabled = streaming_config.enabled;
+        // Live, unlike its neighbours. The others are snapshots fixed by the
+        // time the tray exists; the bias plan is re-decided on every reload, so
+        // it is read through the shared state rather than cloned in here.
+        let shared = Arc::clone(&shared);
         Arc::new(move || {
-            about_facts(
+            let mut facts = about_facts(
                 &recognition,
                 &caps,
                 method,
@@ -252,7 +261,16 @@ pub async fn run(
                 preedit_active,
                 field_reading,
                 streaming_enabled,
-            )
+            );
+            // Appended here rather than inside `about_facts`, because
+            // `AboutFacts` is explicitly "opaque rows, and which facts are
+            // worth showing is the daemon's to decide" — and because these are
+            // the only ones read live rather than from a startup snapshot.
+            facts.rows.extend(bias_rows(
+                &shared.bias_plan.load(),
+                recognition.bias_prompt_token_budget,
+            ));
+            facts
         })
     };
 
@@ -496,6 +514,9 @@ impl<A: Announcer> Announcer for SharedAnnouncer<A> {
     }
     fn caret_marker(&self, enabled: bool) {
         self.0.caret_marker(enabled);
+    }
+    fn refresh_about(&self) {
+        self.0.refresh_about();
     }
 }
 
@@ -1669,6 +1690,46 @@ fn about_facts(
     }
 }
 
+/// What the bias prompt is made of, for the About menu.
+///
+/// Counts rather than the words themselves. Twenty-six terms would be
+/// twenty-six rows in a menu whose entire other content is six, and the words
+/// are one `journalctl` away for anyone who wants them — whereas *how many, and
+/// were any lost* is the question the menu is opened to answer and is otherwise
+/// only in the log.
+///
+/// A dropped term is the one that matters, so it gets its own row and names the
+/// knob rather than the count alone. It appears only when there is one:
+/// "Dropped: 0" every day would make the row furniture, and it needs to read as
+/// an exception on the day it is not.
+///
+/// Nothing at all when the prompt is empty. A row asserting "0 discovered" on a
+/// machine that never asked for discovery describes a feature the reader has
+/// not switched on.
+fn bias_rows(bias: &govox_core::discovery::BiasPlan, budget: u32) -> Vec<(String, String)> {
+    if bias.terms.is_empty() {
+        return Vec::new();
+    }
+    let by_hand = bias.terms.len().saturating_sub(bias.discovered);
+    let mut rows = vec![(
+        "Bias".to_owned(),
+        format!(
+            "{} words of {budget} ({} discovered, {by_hand} by hand)",
+            bias.words, bias.discovered,
+        ),
+    )];
+    if !bias.dropped.is_empty() {
+        rows.push((
+            "Bias dropped".to_owned(),
+            format!(
+                "{} over budget — raise bias_prompt_token_budget",
+                bias.dropped.len()
+            ),
+        ));
+    }
+    rows
+}
+
 /// What this session can do, as far as the pipeline needs to know.
 ///
 /// The real probe — `/dev/uinput`, `$WAYLAND_DISPLAY`, `$PATH` — is `doctor`'s
@@ -1737,6 +1798,7 @@ mod keyboard_tests {
 mod about_tests {
     use super::about_facts;
     use govox_core::config::{Config, Environment, InjectionMethod};
+    use govox_core::discovery::BiasPlan;
     use govox_core::domain::Capabilities;
     use govox_input::UsedBackend;
 
@@ -1955,5 +2017,52 @@ mod about_tests {
         } else {
             assert_eq!(backend, compiled.name());
         }
+    }
+
+    // --- the bias rows ------------------------------------------------------
+
+    fn plan(discovered: usize, by_hand: usize, dropped: usize) -> BiasPlan {
+        let total = discovered + by_hand;
+        BiasPlan {
+            terms: (0..total).map(|n| format!("term{n}")).collect(),
+            dropped: (0..dropped).map(|n| format!("lost{n}")).collect(),
+            words: total,
+            reserved: 0,
+            discovered,
+        }
+    }
+
+    #[test]
+    fn a_machine_that_never_asked_for_discovery_gets_no_bias_row() {
+        // "0 discovered" would describe a feature the reader has not switched
+        // on, which is worse than saying nothing.
+        assert!(
+            super::bias_rows(&BiasPlan::default(), 180).is_empty(),
+            "an empty prompt is not a fact worth a row"
+        );
+    }
+
+    #[test]
+    fn the_bias_row_separates_what_was_found_from_what_was_written() {
+        let rows = super::bias_rows(&plan(20, 6, 0), 180);
+        assert_eq!(rows.len(), 1, "no dropped row when nothing was dropped");
+        assert_eq!(rows[0].0, "Bias");
+        assert_eq!(rows[0].1, "26 words of 180 (20 discovered, 6 by hand)");
+    }
+
+    #[test]
+    fn a_dropped_term_gets_its_own_row_naming_the_knob() {
+        // The row that matters: silent truncation is the failure discovery can
+        // cause, so on the day it happens it must read as an exception rather
+        // than as a number in a table.
+        let rows = super::bias_rows(&plan(180, 0, 12), 180);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[1].0, "Bias dropped");
+        assert!(rows[1].1.contains("12 over budget"), "{}", rows[1].1);
+        assert!(
+            rows[1].1.contains("bias_prompt_token_budget"),
+            "names what to change: {}",
+            rows[1].1
+        );
     }
 }

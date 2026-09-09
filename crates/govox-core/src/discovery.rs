@@ -534,6 +534,13 @@ pub struct BiasPlan {
     pub words: usize,
     /// Words held back so the largest group still fits beside them.
     pub reserved: usize,
+    /// How many of `terms` came from the machine rather than from the file.
+    ///
+    /// Kept because the merge destroys the distinction: once planned, a
+    /// discovered term and a hand-written one are both just strings, and
+    /// "what did discovery actually contribute" becomes unanswerable. The
+    /// About menu asks exactly that.
+    pub discovered: usize,
 }
 
 impl BiasPlan {
@@ -615,6 +622,7 @@ pub fn plan_bias(hand: &PersonalDictionary, found: &[Candidates], budget: u32) -
         dropped,
         words,
         reserved,
+        discovered,
     }
 }
 
@@ -898,6 +906,21 @@ bc6e6dbf1f3d4e5a6b7c8d9e0f1a2b3c4d5e6f70 refs/heads/develop
         );
         assert_eq!(plan.terms, vec!["Rentals.ca", "govox-rs"]);
         assert_eq!(plan.dropped, vec!["rockyburt"]);
+    }
+
+    #[test]
+    fn the_plan_remembers_how_many_terms_the_machine_contributed() {
+        // The merge destroys the distinction, so it is counted before it is
+        // lost: "20 discovered, 2 by hand" is the whole of what the About menu
+        // can honestly say once the two lists are one.
+        let hand = dictionary(&["Rentals.ca", "ydotool"]);
+        let plan = plan_bias(
+            &hand,
+            &[found(ProviderName::Repos, &["govox-rs", "rockyburt"])],
+            180,
+        );
+        assert_eq!(plan.terms.len(), 4);
+        assert_eq!(plan.discovered, 2, "the two the hand-written list did not");
     }
 
     #[test]

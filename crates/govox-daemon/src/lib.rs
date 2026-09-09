@@ -98,10 +98,14 @@ pub fn load_dictionary(config: &Config) -> Result<PersonalDictionary, Dictionary
 /// If the dictionary file cannot be read or does not parse.
 pub fn load_dictionary_with_discovery(
     config: &Config,
-) -> Result<(PersonalDictionary, WatchSet), DictionaryLoadError> {
+) -> Result<LoadedDictionary, DictionaryLoadError> {
     let mut dictionary = load_dictionary(config)?;
     let Some(spec) = dictionary.discover.clone() else {
-        return Ok((dictionary, WatchSet::default()));
+        return Ok(LoadedDictionary {
+            dictionary,
+            watch: WatchSet::default(),
+            plan: BiasPlan::default(),
+        });
     };
 
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
@@ -120,9 +124,26 @@ pub fn load_dictionary_with_discovery(
         words = plan.words,
         "planned the bias list"
     );
-    dictionary.bias_terms = plan.terms;
+    dictionary.bias_terms = plan.terms.clone();
 
-    Ok((dictionary, found.watch))
+    Ok(LoadedDictionary {
+        dictionary,
+        watch: found.watch,
+        plan,
+    })
+}
+
+/// What a dictionary load produced.
+///
+/// A struct rather than a tuple because the third element is easy to mistake
+/// for the second at a call site, and one of them decides what gets typed while
+/// the other only decides what a menu says.
+pub struct LoadedDictionary {
+    pub dictionary: PersonalDictionary,
+    /// Paths whose change should re-run discovery.
+    pub watch: WatchSet,
+    /// What the budget decided, for the About menu to read back.
+    pub plan: BiasPlan,
 }
 
 /// Capture device names, which discovery cannot ask for itself.
