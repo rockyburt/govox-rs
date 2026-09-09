@@ -266,10 +266,11 @@ pub async fn run(
             // `AboutFacts` is explicitly "opaque rows, and which facts are
             // worth showing is the daemon's to decide" — and because these are
             // the only ones read live rather than from a startup snapshot.
-            facts.rows.extend(bias_rows(
-                &shared.bias_plan.load(),
-                recognition.bias_prompt_token_budget,
-            ));
+            let bias = shared.bias_plan.load();
+            facts
+                .rows
+                .extend(bias_rows(&bias, recognition.bias_prompt_token_budget));
+            facts.lists.extend(bias_lists(&bias));
             facts
         })
     };
@@ -1687,6 +1688,9 @@ fn about_facts(
             ("Field reading".to_owned(), yes_no(field_reading, "AT-SPI")),
             ("Streaming".to_owned(), yes_no(streaming, "on")),
         ],
+        // Filled in by the caller, which is the half that can see the bias
+        // plan. See the closure in `run`.
+        lists: Vec::new(),
     }
 }
 
@@ -1728,6 +1732,42 @@ fn bias_rows(bias: &govox_core::discovery::BiasPlan, budget: u32) -> Vec<(String
         ));
     }
     rows
+}
+
+/// The bias terms themselves, as named lists for the About submenus.
+///
+/// The counts alone answer "how many" and leave "which ones" unanswerable
+/// without reading the journal — and "is my repository actually in there" is
+/// the question discovery provokes. A submenu costs one line until it is
+/// opened, so the list can be as long as it needs to be.
+///
+/// Split by provenance because the two halves are read for different reasons:
+/// the hand-written list is what you chose and can edit, the discovered one is
+/// what the machine offered and can change under you without anyone touching a
+/// file. Dropped terms get their own list for the same reason they get their
+/// own row — they are the failure case, and naming them is the only way to know
+/// which words were lost.
+///
+/// `plan_bias` emits the hand-written terms first and appends the discovered
+/// ones, so the split is a single index rather than a second pass.
+fn bias_lists(bias: &govox_core::discovery::BiasPlan) -> Vec<(String, Vec<String>)> {
+    if bias.terms.is_empty() {
+        return Vec::new();
+    }
+    let by_hand = bias.terms.len().saturating_sub(bias.discovered);
+    let (hand, discovered) = bias.terms.split_at(by_hand);
+
+    let mut lists = Vec::new();
+    if !hand.is_empty() {
+        lists.push(("Bias by hand".to_owned(), hand.to_vec()));
+    }
+    if !discovered.is_empty() {
+        lists.push(("Bias discovered".to_owned(), discovered.to_vec()));
+    }
+    if !bias.dropped.is_empty() {
+        lists.push(("Bias dropped".to_owned(), bias.dropped.clone()));
+    }
+    lists
 }
 
 /// What this session can do, as far as the pipeline needs to know.
@@ -2048,6 +2088,41 @@ mod about_tests {
         assert_eq!(rows.len(), 1, "no dropped row when nothing was dropped");
         assert_eq!(rows[0].0, "Bias");
         assert_eq!(rows[0].1, "26 words of 180 (20 discovered, 6 by hand)");
+    }
+
+    #[test]
+    fn the_lists_split_what_was_written_from_what_was_found() {
+        // `plan_bias` emits hand-written terms first and appends discovered
+        // ones, so the split is an index. If that order ever changes, this is
+        // what says so rather than the menu quietly mislabelling both halves.
+        let plan = BiasPlan {
+            terms: vec![
+                "Rentsync".to_owned(),
+                "Jira".to_owned(),
+                "govox-rs".to_owned(),
+            ],
+            dropped: vec!["rockyburt".to_owned()],
+            words: 3,
+            reserved: 0,
+            discovered: 1,
+        };
+        let lists = super::bias_lists(&plan);
+        assert_eq!(
+            lists,
+            vec![
+                (
+                    "Bias by hand".to_owned(),
+                    vec!["Rentsync".to_owned(), "Jira".to_owned()]
+                ),
+                ("Bias discovered".to_owned(), vec!["govox-rs".to_owned()]),
+                ("Bias dropped".to_owned(), vec!["rockyburt".to_owned()]),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_empty_prompt_offers_no_lists_to_open() {
+        assert!(super::bias_lists(&BiasPlan::default()).is_empty());
     }
 
     #[test]

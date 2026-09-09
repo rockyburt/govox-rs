@@ -38,6 +38,14 @@ pub struct AboutFacts {
     pub version: String,
     pub licence: String,
     pub rows: Vec<(String, String)>,
+    /// Named lists, each rendered as a submenu of its own.
+    ///
+    /// A row answers "how many"; this answers "which ones". Kept separate
+    /// rather than folded into `rows` as a joined string because the lists are
+    /// long — the bias prompt runs to dozens of terms — and a row is one line
+    /// in a panel that will not wrap it. A submenu holds as many as it likes
+    /// and costs one line until it is opened.
+    pub lists: Vec<(String, Vec<String>)>,
 }
 
 /// The SNI item itself. `ksni` calls into this from its own task.
@@ -184,7 +192,7 @@ fn about_items(facts: &AboutFacts) -> Vec<ksni::MenuItem<GovoxTray>> {
 
     // Before `set_about` has run — a window of a second or two at startup —
     // say so rather than showing a convincing but empty table.
-    if facts.version.is_empty() && facts.rows.is_empty() {
+    if facts.version.is_empty() && facts.rows.is_empty() && facts.lists.is_empty() {
         return vec![inert("Starting up…".to_owned())];
     }
 
@@ -200,6 +208,19 @@ fn about_items(facts: &AboutFacts) -> Vec<ksni::MenuItem<GovoxTray>> {
                 .iter()
                 .map(|(label, value)| inert(format!("{label}: {value}"))),
         );
+    }
+    if !facts.lists.is_empty() {
+        items.push(MenuItem::Separator);
+        items.extend(facts.lists.iter().map(|(label, entries)| {
+            // The parent stays enabled while its contents do not, for the same
+            // reason About itself does: a disabled parent does not open in most
+            // panels, so disabling it would hide the list rather than grey it.
+            MenuItem::SubMenu(ksni::menu::SubMenu {
+                label: format!("{label} ({})", entries.len()),
+                submenu: entries.iter().map(|entry| inert(entry.clone())).collect(),
+                ..Default::default()
+            })
+        }));
     }
     items
 }
@@ -446,6 +467,26 @@ mod tests {
             .map(|item| match item {
                 ksni::MenuItem::Standard(item) => item.label.clone(),
                 ksni::MenuItem::Separator => "—".to_owned(),
+                ksni::MenuItem::SubMenu(item) => item.label.clone(),
+                _ => "?".to_owned(),
+            })
+            .collect()
+    }
+
+    /// The entries inside one named submenu.
+    fn list(facts: &AboutFacts, label: &str) -> Vec<String> {
+        about_items(facts)
+            .into_iter()
+            .find_map(|item| match item {
+                ksni::MenuItem::SubMenu(item) if item.label.starts_with(label) => {
+                    Some(item.submenu)
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("no {label} submenu"))
+            .iter()
+            .map(|item| match item {
+                ksni::MenuItem::Standard(item) => item.label.clone(),
                 _ => "?".to_owned(),
             })
             .collect()
@@ -459,6 +500,7 @@ mod tests {
                 ("Model".to_owned(), "large-v3-turbo".to_owned()),
                 ("Backend".to_owned(), "vulkan · GPU 1".to_owned()),
             ],
+            lists: vec![("Bias by hand".to_owned(), vec!["Rentsync".to_owned()])],
         }
     }
 
@@ -472,6 +514,8 @@ mod tests {
                 "—",
                 "Model: large-v3-turbo",
                 "Backend: vulkan · GPU 1",
+                "—",
+                "Bias by hand (1)",
             ]
         );
     }
@@ -501,7 +545,50 @@ mod tests {
             version: "0.1.0".to_owned(),
             licence: String::new(),
             rows: Vec::new(),
+            lists: Vec::new(),
         };
         assert_eq!(labels(&facts), ["govox 0.1.0"]);
+    }
+
+    /// A count answers "how many"; the list answers "which ones". The whole
+    /// point of the submenu is that the second question is askable at all.
+    #[test]
+    fn a_list_becomes_a_submenu_carrying_its_own_length() {
+        let facts = AboutFacts {
+            version: "0.1.0".to_owned(),
+            licence: "MIT".to_owned(),
+            rows: Vec::new(),
+            lists: vec![(
+                "Discovered".to_owned(),
+                vec!["govox-rs".to_owned(), "Rentals-API".to_owned()],
+            )],
+        };
+        assert!(
+            labels(&facts).contains(&"Discovered (2)".to_owned()),
+            "{:?}",
+            labels(&facts)
+        );
+        assert_eq!(list(&facts, "Discovered"), ["govox-rs", "Rentals-API"]);
+    }
+
+    /// Nothing in a list is clickable either — it is a readout like every
+    /// other row, and the submenu must not become the one place that lies.
+    #[test]
+    fn nothing_inside_a_list_is_activatable() {
+        let facts = AboutFacts {
+            version: "0.1.0".to_owned(),
+            licence: "MIT".to_owned(),
+            rows: Vec::new(),
+            lists: vec![("Discovered".to_owned(), vec!["govox-rs".to_owned()])],
+        };
+        for item in about_items(&facts) {
+            if let ksni::MenuItem::SubMenu(item) = item {
+                for entry in item.submenu {
+                    if let ksni::MenuItem::Standard(entry) = entry {
+                        assert!(!entry.enabled, "{:?} is activatable", entry.label);
+                    }
+                }
+            }
+        }
     }
 }
