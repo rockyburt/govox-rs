@@ -17,6 +17,7 @@ pub mod audio;
 pub mod caret;
 pub mod config;
 pub mod correction;
+pub mod discovery;
 pub mod domain;
 pub mod editing;
 pub mod eval;

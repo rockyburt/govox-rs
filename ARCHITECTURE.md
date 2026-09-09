@@ -17,6 +17,7 @@ the way they are, see the decision record indexed from [docs/index.md](docs/inde
 | `crates/govox-input/` | evdev hotkey listening, `ydotool` and clipboard injection. |
 | `crates/govox-ime/` | The IBus engine, hand-rolled over raw D-Bus. |
 | `crates/govox-a11y/` | AT-SPI focus tracking and field reading, over raw D-Bus. |
+| `crates/govox-discover/` | Reading the machine for bias terms: repositories, branches, hosts, units. Filesystem only — no subprocess, no `git`. |
 | `crates/govox-ui/` | Tray (`ksni`), notifications, and the client half of the overlay protocol. |
 | `crates/govox-daemon/` | Orchestration, the event loop, reload, diagnostics, telemetry. |
 | `bin/govox/` | The CLI: `run`, `doctor`, `devices`, `keys`. |

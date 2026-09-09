@@ -8,6 +8,7 @@ members = [
     "crates/govox-input",
     "crates/govox-ime",
     "crates/govox-a11y",
+    "crates/govox-discover",
     "crates/govox-ui",
     "crates/govox-daemon",
     "bin/govox",
@@ -35,6 +36,7 @@ govox-asr = { path = "crates/govox-asr" }
 govox-input = { path = "crates/govox-input" }
 govox-ime = { path = "crates/govox-ime" }
 govox-a11y = { path = "crates/govox-a11y" }
+govox-discover = { path = "crates/govox-discover" }
 govox-ui = { path = "crates/govox-ui" }
 govox-daemon = { path = "crates/govox-daemon" }
 

@@ -21,6 +21,7 @@ cuda = ["govox-asr/cuda"]
 [dependencies]
 govox-core.workspace = true
 govox-audio.workspace = true
+govox-discover.workspace = true
 govox-vad.workspace = true
 govox-asr.workspace = true
 govox-input.workspace = true

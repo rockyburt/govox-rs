@@ -17,6 +17,11 @@ Task-oriented guidance that is too detailed for the README.
   and their `.en` variants, the ~20× decode-cost spread and what it does to streaming preview
   cadence, timing your own hardware with `times_the_configured_model`, and why `gpu_device`
   differs between the Vulkan and CUDA builds.
+- **[dictionary.md](dictionary.md)** — `bias` versus `replace` and which one you actually
+  want, spending the 180-word bias budget, scoping terms to a window with
+  `[[dictionary.bias_group]]`, and `[dictionary.discover]` — enumerating repositories,
+  branches, hosts and units from the machine so the list stops going stale. Reading what
+  discovery found and what it had to drop.
 - **[accuracy-eval.md](accuracy-eval.md)** — measuring word error rate and per-term recall
   with `tools/record-eval.sh` and `corpus/eval/manifest.toml`, why the audio is gitignored
   while the scores are tracked, the `say`/`expect` split separating what was spoken from

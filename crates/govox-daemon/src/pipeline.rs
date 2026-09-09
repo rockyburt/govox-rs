@@ -89,7 +89,7 @@ pub async fn run(
     config_path: Option<std::path::PathBuf>,
     cancel: CancellationToken,
 ) -> Result<(), PipelineError> {
-    let dictionary = crate::load_dictionary(&config)?;
+    let (dictionary, discovered) = crate::load_dictionary_with_discovery(&config)?;
 
     // Resolved here, while `config` is still owned by this function and before
     // anything can swap it: these are the files *this* run was configured from,
@@ -336,7 +336,44 @@ pub async fn run(
 
     // Held for the life of the run: dropping the watcher stops the watch, and a
     // daemon that has stopped watching looks exactly like one that is.
-    let _config_watcher = crate::watch::spawn(&watched, reloads_tx.clone(), &cancel);
+    //
+    // Owned by a task rather than a local, because discovery's half of the set
+    // changes: a repository cloned under a configured root was not there to be
+    // watched when this run started. The daemon sends the new set after each
+    // reload and the task re-establishes the watch, but only when the set
+    // actually moved — a respawn per checkout would drop events during the gap.
+    let (rewatch_tx, mut rewatch_rx) = mpsc::unbounded_channel::<govox_core::discovery::WatchSet>();
+    {
+        let watched = watched.clone();
+        let reloads_tx = reloads_tx.clone();
+        let cancel = cancel.clone();
+        tokio::spawn(async move {
+            let mut current = discovered;
+            let mut watcher = crate::watch::spawn(&watched, &current, reloads_tx.clone(), &cancel);
+            loop {
+                tokio::select! {
+                    () = cancel.cancelled() => break,
+                    next = rewatch_rx.recv() => {
+                        let Some(next) = next else { break };
+                        if next == current {
+                            continue;
+                        }
+                        tracing::debug!(
+                            files = next.files.len(),
+                            roots = next.dirs.len(),
+                            "the discovered watch set moved; re-establishing"
+                        );
+                        current = next;
+                        // Dropped only now, so the replacement is built from a
+                        // set that is already current.
+                        watcher =
+                            crate::watch::spawn(&watched, &current, reloads_tx.clone(), &cancel);
+                    }
+                }
+            }
+            drop(watcher);
+        });
+    }
 
     if let Some(mut commands) = tray_commands {
         let events = events_tx.clone();
@@ -368,6 +405,7 @@ pub async fn run(
             preedit: preedit.clone(),
             config_path: config_path.clone(),
             listening: false,
+            rewatch: Some(rewatch_tx),
         },
         utterances,
         reloads,
@@ -638,15 +676,23 @@ impl<A: Announcer> EventLoop<'_, A> {
     /// reloaded — and the reload path re-biases from the core alone, having no
     /// window to select on — so a stale cache would skip the next session and
     /// leave the group unbiased. That is a silent wrong answer, traded for
-    /// rebuilding a ~40-word string once per keypress.
+    /// rebuilding a ~180-word string once per keypress.
+    ///
+    /// There used to be an early return when no `[[dictionary.bias_group]]`
+    /// existed: with nothing to select between, the prompt the recogniser was
+    /// started with was already right. Discovery ended that. The core list now
+    /// changes underneath a running session — a branch checked out, a
+    /// repository cloned — with no group involved at all, so "no groups" no
+    /// longer means "nothing has moved", and the guard would pin the prompt to
+    /// whatever was true at startup.
+    ///
+    /// What is *not* recomputed here is discovery itself. Enumeration is
+    /// cached and invalidated by the file watcher; only the selection runs per
+    /// session. Scanning the disk here would put a filesystem walk in front of
+    /// every decode, behind an AT-SPI round trip that is already the slowest
+    /// thing between the keypress and the chime.
     fn rebias(&mut self, window: Option<&str>) {
         let dictionary = self.shared.dictionary.load();
-        // Nothing to select between: leave the prompt the recogniser was
-        // started with rather than re-storing the same list per session.
-        if dictionary.bias_groups.is_empty() {
-            return;
-        }
-
         let terms = dictionary.bias_for(window);
         tracing::debug!(
             window = window.unwrap_or("<unnamed>"),

@@ -101,6 +101,40 @@ enabled = true
 # Resolved once per session, off the same window lookup `feedback.app_rules`
 # already makes. Recognition reads the prompt before it decodes, so a group
 # cannot be selected any later than the moment you press the activation key.
+#
+# `[dictionary.discover]` fills the rest of the budget from the machine itself,
+# so the words that change weekly stop having to be typed out and kept in step:
+#
+#   [dictionary.discover]
+#   repo_roots = ["~/dev/*/repos"]     # absent table = discovery off
+#   providers  = ["repos", "branches", "hostname", "ssh_hosts",
+#                 "systemd_units", "audio_devices"]
+#   max_repos             = 64         # newest first, by when HEAD last moved
+#   max_branches_per_repo = 8
+#   max_terms             = 0          # 0 = whatever the budget allows
+#
+# Each provider enumerates and nothing more, the way a bash completion function
+# does; what to keep is decided afterwards, here. `repos` gives directory names
+# plus the org and name from `origin`, read out of `.git` directly — govox never
+# shells out to `git`, so a machine without it degrades to fewer terms rather
+# than to a daemon that will not start. `branches` gives the *words* inside a
+# branch: `feature/rentals-dashboard` is biased as "rentals" and "dashboard",
+# because nobody dictates the slug.
+#
+# Anything written by hand outranks anything found. The hand-written `bias` list
+# is emitted first and is never dropped to make room, room is held back for the
+# largest group, and discovered terms fill what is left in provider order. What
+# does not fit is named in the log rather than vanishing, which is the one thing
+# `bias_prompt_token_budget` truncation on its own cannot tell you.
+#
+# Enumerated at startup and at every reload, never while you are speaking, and
+# re-run when a repository is cloned under a root or a branch is checked out.
+# That reload is silent: nobody checks out a branch in order to be told about it.
+#
+# A malformed `[dictionary.discover]` refuses to start, exactly as the rest of
+# this file does. A missing root, an absent `~/.ssh/config` or a checkout
+# mid-rebase does not: those are not instructions, and they change nothing about
+# what gets typed except by omission.
 dictionary_path = ""
 # Drop standalone verbal fillers ("um", "uh", ...) before injection.
 drop_fillers = true

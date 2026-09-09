@@ -9,6 +9,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use govox_core::discovery::WatchSet;
 use govox_daemon::daemon::ReloadTrigger;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -53,8 +54,13 @@ async fn a_plain_write_triggers_a_reload() {
 
     let (tx, mut reloads) = mpsc::unbounded_channel();
     let cancel = CancellationToken::new();
-    let _watcher = govox_daemon::watch::spawn(std::slice::from_ref(&config), tx, &cancel)
-        .expect("a watch on a real dir");
+    let _watcher = govox_daemon::watch::spawn(
+        std::slice::from_ref(&config),
+        &WatchSet::default(),
+        tx,
+        &cancel,
+    )
+    .expect("a watch on a real dir");
 
     write(&config, "[correction]\nspoken_punctuation = false\n");
 
@@ -75,8 +81,13 @@ async fn an_atomic_save_triggers_a_reload_every_time() {
 
     let (tx, mut reloads) = mpsc::unbounded_channel();
     let cancel = CancellationToken::new();
-    let _watcher = govox_daemon::watch::spawn(std::slice::from_ref(&dictionary), tx, &cancel)
-        .expect("a watch");
+    let _watcher = govox_daemon::watch::spawn(
+        std::slice::from_ref(&dictionary),
+        &WatchSet::default(),
+        tx,
+        &cancel,
+    )
+    .expect("a watch");
 
     for round in 0..3 {
         save_atomically(
@@ -101,8 +112,13 @@ async fn a_file_created_after_the_watch_started_is_noticed() {
 
     let (tx, mut reloads) = mpsc::unbounded_channel();
     let cancel = CancellationToken::new();
-    let _watcher = govox_daemon::watch::spawn(std::slice::from_ref(&dictionary), tx, &cancel)
-        .expect("a watch");
+    let _watcher = govox_daemon::watch::spawn(
+        std::slice::from_ref(&dictionary),
+        &WatchSet::default(),
+        tx,
+        &cancel,
+    )
+    .expect("a watch");
 
     write(&dictionary, "[dictionary]\nbias = [\"govox\"]\n");
 
@@ -123,8 +139,13 @@ async fn one_save_is_one_reload() {
 
     let (tx, mut reloads) = mpsc::unbounded_channel();
     let cancel = CancellationToken::new();
-    let _watcher =
-        govox_daemon::watch::spawn(std::slice::from_ref(&config), tx, &cancel).expect("a watch");
+    let _watcher = govox_daemon::watch::spawn(
+        std::slice::from_ref(&config),
+        &WatchSet::default(),
+        tx,
+        &cancel,
+    )
+    .expect("a watch");
 
     for line in 0..20 {
         write(&config, &format!("# line {line}\n"));
@@ -152,8 +173,13 @@ async fn a_neighbouring_file_is_ignored() {
 
     let (tx, mut reloads) = mpsc::unbounded_channel();
     let cancel = CancellationToken::new();
-    let _watcher =
-        govox_daemon::watch::spawn(std::slice::from_ref(&config), tx, &cancel).expect("a watch");
+    let _watcher = govox_daemon::watch::spawn(
+        std::slice::from_ref(&config),
+        &WatchSet::default(),
+        tx,
+        &cancel,
+    )
+    .expect("a watch");
 
     write(&dir.join("notes.txt"), "unrelated\n");
     write(&dir.join(".config.toml.swp"), "vim\n");
@@ -167,6 +193,67 @@ async fn a_neighbouring_file_is_ignored() {
 }
 
 #[tokio::test]
+async fn a_repo_cloned_into_a_watched_root_triggers_a_quiet_reload() {
+    // Discovery's half of the watch, end to end: the root is watched so that a
+    // checkout appearing changes the answer, and it arrives as `Discovered` so
+    // that nobody is notified about their own `git clone`.
+    let dir = scratch("clone");
+    let roots = dir.join("repos");
+    std::fs::create_dir_all(&roots).expect("a root to watch");
+
+    let discovered = WatchSet {
+        files: Vec::new(),
+        dirs: vec![roots.clone()],
+    };
+
+    let (tx, mut reloads) = mpsc::unbounded_channel();
+    let cancel = CancellationToken::new();
+    let _watcher = govox_daemon::watch::spawn(&[], &discovered, tx, &cancel).expect("a watch");
+
+    std::fs::create_dir_all(roots.join("newly-cloned")).expect("clone");
+
+    assert_eq!(
+        next_reload(&mut reloads).await,
+        Some(ReloadTrigger::Discovered)
+    );
+    cancel.cancel();
+}
+
+#[tokio::test]
+async fn a_branch_checkout_triggers_a_silent_discovery_reload_not_a_notification() {
+    // `HEAD` is watched by name, so the `.git/index` churn beside it — every
+    // `git status`, every background fetch — stays out of the reload path.
+    let dir = scratch("checkout");
+    let git = dir.join("repo").join(".git");
+    std::fs::create_dir_all(&git).expect("a fixture .git");
+    let head = git.join("HEAD");
+    write(&head, "ref: refs/heads/develop\n");
+
+    let discovered = WatchSet {
+        files: vec![head.clone()],
+        dirs: Vec::new(),
+    };
+
+    let (tx, mut reloads) = mpsc::unbounded_channel();
+    let cancel = CancellationToken::new();
+    let _watcher = govox_daemon::watch::spawn(&[], &discovered, tx, &cancel).expect("a watch");
+
+    write(&git.join("index"), "churn from git status\n");
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    assert!(
+        reloads.try_recv().is_err(),
+        "writing .git/index asked for a reload"
+    );
+
+    write(&head, "ref: refs/heads/feature/rentals-dashboard\n");
+    assert_eq!(
+        next_reload(&mut reloads).await,
+        Some(ReloadTrigger::Discovered)
+    );
+    cancel.cancel();
+}
+
+#[tokio::test]
 async fn cancelling_stops_the_watch() {
     let dir = scratch("cancel");
     let config = dir.join("config.toml");
@@ -174,8 +261,13 @@ async fn cancelling_stops_the_watch() {
 
     let (tx, mut reloads) = mpsc::unbounded_channel();
     let cancel = CancellationToken::new();
-    let _watcher =
-        govox_daemon::watch::spawn(std::slice::from_ref(&config), tx, &cancel).expect("a watch");
+    let _watcher = govox_daemon::watch::spawn(
+        std::slice::from_ref(&config),
+        &WatchSet::default(),
+        tx,
+        &cancel,
+    )
+    .expect("a watch");
     cancel.cancel();
     // The debounce task observes the cancellation on its next turn.
     tokio::time::sleep(Duration::from_millis(100)).await;

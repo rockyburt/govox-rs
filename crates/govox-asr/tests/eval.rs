@@ -440,6 +440,14 @@ fn the_spoken_punctuation_targets_are_reachable_without_a_model() {
     );
 }
 
+/// The **hand-authored** dictionary, and deliberately not the discovered one.
+///
+/// `govox_daemon::load_dictionary_with_discovery` would fold in whatever
+/// repositories, branches and hosts happen to exist on the machine running the
+/// eval. A score that moves when you check out a branch is not a measurement,
+/// and the raw-versus-corrected gap this corpus exists to report would stop
+/// meaning anything. Discovery is a runtime feature; the eval measures the
+/// rules someone wrote down.
 fn load_dictionary(config: &Config) -> PersonalDictionary {
     let path = config.correction.dictionary_path.trim();
     if path.is_empty() {

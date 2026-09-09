@@ -53,6 +53,11 @@ fn dictionary_fixture() -> PersonalDictionary {
         // and this corpus records the correction pipeline, which runs after it.
         // Nothing here can observe them.
         bias_groups: Vec::new(),
+        // Empty for the same reason, one step further out: discovery only ever
+        // changes which terms reach recognition. A corpus whose answers
+        // depended on which repositories happened to be on the machine
+        // recording it would not be a corpus.
+        discover: None,
         replacements: vec![
             ("rentals api".into(), "Rentals-API".into()),
             ("see plus plus".into(), "C++".into()),

@@ -15,6 +15,7 @@ use govox_core::domain::{
 };
 use govox_core::editing::compile_edit;
 use govox_core::reload::{ReloadOutcome, restart_required};
+use tokio::sync::mpsc;
 
 use crate::state::SharedState;
 
@@ -184,6 +185,14 @@ pub enum ReloadTrigger {
     Requested,
     /// A watched file changed on disk.
     FileChanged,
+    /// Something discovery reads changed: a branch checked out, a repository
+    /// cloned under a configured root.
+    ///
+    /// The quietest of the three. Nobody checks out a branch in order to be
+    /// told about it, and a notification on every `git checkout` would train
+    /// the user to dismiss the one that says a restart is needed. Only a
+    /// *failure* is reported.
+    Discovered,
 }
 
 /// Owns the pipeline state. Driven by exactly one task, so nothing is locked.
@@ -202,6 +211,13 @@ pub struct Daemon<T: Transcriber> {
     /// Whether a toggle session is still active, for the state returned to
     /// after an utterance.
     pub listening: bool,
+    /// Where to send the paths discovery wants watched, after each reload.
+    ///
+    /// `None` when nothing is watching — a test, or a run whose watch could
+    /// not be established. The watch set is sent rather than applied here
+    /// because the watcher must outlive any one reload, and the daemon does
+    /// not own it.
+    pub rewatch: Option<mpsc::UnboundedSender<govox_core::discovery::WatchSet>>,
 }
 
 impl<T: Transcriber> Daemon<T> {
@@ -649,6 +665,12 @@ impl<T: Transcriber> Daemon<T> {
             tracing::debug!("configuration saved, nothing to apply");
             return outcome;
         }
+        // A checkout is not an announcement. It re-biases and says so to the
+        // log; only a failure is worth a caption and a notification.
+        if trigger == ReloadTrigger::Discovered && outcome.ok {
+            tracing::debug!("{}", outcome.summary());
+            return outcome;
+        }
         let summary = outcome.summary();
         if outcome.ok {
             tracing::info!("{summary}");
@@ -665,10 +687,17 @@ impl<T: Transcriber> Daemon<T> {
             Ok(config) => config,
             Err(error) => return ReloadOutcome::failed(error.to_string()),
         };
-        let dictionary = match crate::load_dictionary(&config) {
-            Ok(dictionary) => dictionary,
+        let (dictionary, discovered) = match crate::load_dictionary_with_discovery(&config) {
+            Ok(loaded) => loaded,
             Err(error) => return ReloadOutcome::failed(error.to_string()),
         };
+        // A repository cloned under a configured root is not yet being
+        // watched — it did not exist when the watch was established. Hand the
+        // new set to whoever owns the watcher; it respawns only if the set
+        // actually moved.
+        if let Some(rewatch) = &self.rewatch {
+            let _ = rewatch.send(discovered);
+        }
 
         let previous = self.shared.config.load_full();
         let mut applied = Vec::new();

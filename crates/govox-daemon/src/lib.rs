@@ -50,6 +50,9 @@ pub use pipeline::{PipelineError, run};
 pub use state::SharedState;
 
 use govox_core::config::Config;
+use govox_core::discovery::{
+    BiasPlan, Candidates, DiscoverySpec, ProviderName, WatchSet, device_terms, plan_bias,
+};
 use govox_core::domain::PersonalDictionary;
 
 /// Load the personal dictionary, or fail loudly.
@@ -75,6 +78,111 @@ pub fn load_dictionary(config: &Config) -> Result<PersonalDictionary, Dictionary
             source: Box::new(source),
         }
     })
+}
+
+/// Load the hand-authored dictionary, then fold in what the machine says.
+///
+/// Two failure classes, deliberately different. The **file** is fatal, exactly
+/// as [`load_dictionary`] describes: it is an instruction, and a typo in it
+/// means govox is doing something the user did not ask for. The **machine** is
+/// never fatal: a repository root that does not exist, an unreadable
+/// `~/.ssh/config`, a checkout mid-rebase — none of those are instructions, and
+/// none change what gets typed except by omission. Refusing to start because a
+/// directory was missing would be the worst of both.
+///
+/// Returns the paths worth watching alongside the dictionary, so a clone or a
+/// checkout can invalidate the answer without anything scanning the disk on the
+/// session hot path.
+///
+/// # Errors
+/// If the dictionary file cannot be read or does not parse.
+pub fn load_dictionary_with_discovery(
+    config: &Config,
+) -> Result<(PersonalDictionary, WatchSet), DictionaryLoadError> {
+    let mut dictionary = load_dictionary(config)?;
+    let Some(spec) = dictionary.discover.clone() else {
+        return Ok((dictionary, WatchSet::default()));
+    };
+
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    let extra = audio_device_candidates(config, &spec);
+    let found = govox_discover::discover(&spec, home.as_deref(), &extra);
+
+    let plan = plan_bias(
+        &dictionary,
+        &found.candidates,
+        config.recognition.bias_prompt_token_budget,
+    );
+    report_overflow(&plan, config.recognition.bias_prompt_token_budget);
+    tracing::info!(
+        found = found.len(),
+        biased = plan.terms.len(),
+        words = plan.words,
+        "planned the bias list"
+    );
+    dictionary.bias_terms = plan.terms;
+
+    Ok((dictionary, found.watch))
+}
+
+/// Capture device names, which discovery cannot ask for itself.
+///
+/// `govox-discover` deliberately does not depend on `cpal`: doing so would make
+/// every provider fail wherever the audio backend fails, for the sake of two
+/// words. The one crate that already owns the backend supplies them instead.
+fn audio_device_candidates(config: &Config, spec: &DiscoverySpec) -> Vec<Candidates> {
+    if !spec.runs(ProviderName::AudioDevices) {
+        return Vec::new();
+    }
+    let mut terms: Vec<String> = Vec::new();
+    // The configured device first: it is the one actually in use, and the one
+    // whose name the user chose and therefore says.
+    let labels = std::iter::once(config.audio.device.clone()).chain(
+        govox_audio::capture::list_devices()
+            .into_iter()
+            .flat_map(|device| [device.id, device.name]),
+    );
+    for label in labels {
+        for term in device_terms(&label) {
+            if !terms.contains(&term) {
+                terms.push(term);
+            }
+        }
+    }
+    vec![Candidates::new(ProviderName::AudioDevices, terms)]
+}
+
+/// Say what did not fit, since `bias_prompt` will not.
+///
+/// Truncation by word in list order is silent by design, which was fine while
+/// the list was hand-written and small. A machine-sized list needs someone to
+/// be able to answer "why is that word still coming out wrong", so the terms
+/// that were dropped are named, along with the two knobs that would have kept
+/// them.
+fn report_overflow(plan: &BiasPlan, budget: u32) {
+    if !plan.overflowed() {
+        return;
+    }
+    const NAMED: usize = 12;
+    let shown = plan
+        .dropped
+        .iter()
+        .take(NAMED)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    let rest = plan.dropped.len().saturating_sub(NAMED);
+    let tail = if rest > 0 {
+        format!(", and {rest} more")
+    } else {
+        String::new()
+    };
+    tracing::warn!(
+        "discovery found more terms than the {budget}-word bias budget holds; \
+         {} were dropped: {shown}{tail}. Raise [recognition] bias_prompt_token_budget \
+         or lower [dictionary.discover] max_repos.",
+        plan.dropped.len(),
+    );
 }
 
 /// Reported like every other bad configuration — one line naming the file and

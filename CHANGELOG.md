@@ -43,6 +43,40 @@ before 1.0.0, minor versions may change behaviour.
 
 ### Added
 
+- **Bias terms can be scoped to the focused window.** `[[dictionary.bias_group]]` takes a
+  `while_using` pattern — the same window-label matching `feedback.app_rules` uses — and
+  contributes its terms only while that window has focus.
+
+  The bias prompt is capped at `bias_prompt_token_budget` words and truncates in list order
+  without saying so, which means one flat list cannot hold the vocabulary of several
+  projects: growing it past the cap degrades recognition invisibly. A group spends the
+  budget on whatever is actually in front of you. The always-on `bias` list is still
+  emitted first, because position is priority under that truncation.
+
+- **The bias list can discover itself from the machine.** `[dictionary.discover]` enumerates
+  the words that change too often to keep typing out: repository names and their GitHub org,
+  the words inside live branch names, the hostname, `~/.ssh/config` hosts, systemd user
+  units and capture device names.
+
+  ```toml
+  [dictionary.discover]
+  repo_roots = ["~/dev/*/repos"]
+  ```
+
+  A hand-written list is correct on the day it is written and decays silently from then on —
+  a missing bias term reads as the model being wrong, not as a stale config. Each source is
+  a provider that enumerates and nothing more, in the shape of a bash completion function;
+  what to keep is decided in one place afterwards. Repositories are ordered by when `HEAD`
+  last moved, so when the budget runs out it is the checkout you are in today that survives,
+  and a branch contributes its words rather than its slug — `feature/rentals-dashboard`
+  becomes "rentals" and "dashboard", because nobody dictates the slug.
+
+  Anything written by hand outranks anything found, and terms that do not fit the budget are
+  named in the log instead of vanishing. Discovery re-runs when a repository is cloned or a
+  branch checked out, silently — nobody checks out a branch in order to be notified about
+  it. `.git` is read directly, so no `git` binary is required. A malformed
+  `[dictionary.discover]` refuses to start; a missing root or an absent ssh config does not.
+
 - **The accuracy corpus now covers programming vocabulary.** 13 clips over Rust and
   JavaScript — `serde`/`tokio`, `impl`/`mut`, `useState`/`useEffect`, `npm`, `async`/`await`
   — plus spoken-symbol identifier shapes like `parse_chord`, `main.rs` and `--all-targets`.

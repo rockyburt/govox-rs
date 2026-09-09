@@ -264,6 +264,9 @@ pub struct BiasGroup {
 /// [[dictionary.replace]]
 /// from = "rentals api"
 /// to = "Rentals-API"
+///
+/// [dictionary.discover]
+/// repo_roots = ["~/dev/*/repos"]
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PersonalDictionary {
@@ -274,6 +277,15 @@ pub struct PersonalDictionary {
     pub bias_groups: Vec<BiasGroup>,
     /// Ordered `(from, to)` pairs. Order matters: they are applied in sequence.
     pub replacements: Vec<(String, String)>,
+    /// What to enumerate from the machine, or `None` for "nothing" — absence
+    /// of the table is how discovery stays off for everyone who has not asked
+    /// for it.
+    ///
+    /// The spec lives beside the hand-written list rather than in
+    /// `config.toml` because discovered terms *are* dictionary content, and
+    /// splitting the source of the vocabulary from the vocabulary would be the
+    /// second answer to "where is the dictionary?" that `config.rs` refuses.
+    pub discover: Option<crate::discovery::DiscoverySpec>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -302,6 +314,16 @@ pub enum DictionaryError {
     BadReplaceShape,
     #[error("dictionary replacements require string \"from\" and \"to\"")]
     BadReplaceEntry,
+    #[error("[dictionary.discover] must be a TOML table")]
+    BadDiscoverShape,
+    #[error("[dictionary.discover].repo_roots must be a list of strings")]
+    BadDiscoverRoots,
+    #[error("[dictionary.discover].providers must be a list of strings")]
+    BadDiscoverProviders,
+    #[error("unknown discovery provider {name:?}; known: {known}")]
+    UnknownProvider { name: String, known: String },
+    #[error("[dictionary.discover].{key} must be a non-negative integer")]
+    BadDiscoverLimit { key: &'static str },
 }
 
 impl PersonalDictionary {
@@ -394,11 +416,82 @@ impl PersonalDictionary {
             }
         }
 
+        let discover = match dictionary.get("discover") {
+            None => None,
+            Some(toml::Value::Table(table)) => Some(Self::discovery_from_table(table)?),
+            Some(_) => return Err(DictionaryError::BadDiscoverShape),
+        };
+
         Ok(Self {
             bias_terms,
             bias_groups,
             replacements,
+            discover,
         })
+    }
+
+    /// Parse `[dictionary.discover]`.
+    ///
+    /// Loud about every mistake, because this table is an instruction rather
+    /// than an observation: a misspelled provider means govox is enumerating
+    /// something other than what was asked for, and silently doing three
+    /// quarters of what you asked is worse than refusing to start.
+    fn discovery_from_table(
+        table: &toml::Table,
+    ) -> Result<crate::discovery::DiscoverySpec, DictionaryError> {
+        use crate::discovery::{DiscoverySpec, ProviderName};
+
+        let mut spec = DiscoverySpec::default();
+
+        if let Some(roots) = table.get("repo_roots") {
+            let toml::Value::Array(items) = roots else {
+                return Err(DictionaryError::BadDiscoverRoots);
+            };
+            let mut parsed = Vec::with_capacity(items.len());
+            for item in items {
+                let toml::Value::String(root) = item else {
+                    return Err(DictionaryError::BadDiscoverRoots);
+                };
+                parsed.push(root.clone());
+            }
+            spec.repo_roots = parsed;
+        }
+
+        if let Some(providers) = table.get("providers") {
+            let toml::Value::Array(items) = providers else {
+                return Err(DictionaryError::BadDiscoverProviders);
+            };
+            let mut parsed = Vec::with_capacity(items.len());
+            for item in items {
+                let toml::Value::String(name) = item else {
+                    return Err(DictionaryError::BadDiscoverProviders);
+                };
+                let Some(provider) = ProviderName::parse(name) else {
+                    return Err(DictionaryError::UnknownProvider {
+                        name: name.clone(),
+                        known: ProviderName::known(),
+                    });
+                };
+                parsed.push(provider);
+            }
+            spec.providers = parsed;
+        }
+
+        for (key, slot) in [
+            ("max_repos", &mut spec.max_repos),
+            ("max_branches_per_repo", &mut spec.max_branches_per_repo),
+            ("max_terms", &mut spec.max_terms),
+        ] {
+            if let Some(value) = table.get(key) {
+                let limit = value
+                    .as_integer()
+                    .and_then(|limit| usize::try_from(limit).ok())
+                    .ok_or(DictionaryError::BadDiscoverLimit { key })?;
+                *slot = limit;
+            }
+        }
+
+        Ok(spec)
     }
 
     /// The terms to bias while `label` has focus: the core, then the first
@@ -916,6 +1009,85 @@ bias_group = "not a list"
 "#
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn a_dictionary_without_a_discover_table_discovers_nothing() {
+        // Absence is how discovery stays off for everyone who has not asked
+        // for it: no scan, no watches, no terms nobody chose.
+        let dict = dictionary(
+            r#"
+[dictionary]
+bias = ["Rentals.ca"]
+"#,
+        )
+        .unwrap();
+        assert_eq!(dict.discover, None);
+    }
+
+    #[test]
+    fn an_unknown_provider_name_is_refused_rather_than_ignored() {
+        // Ignoring it would enumerate three quarters of what was asked for and
+        // say nothing, leaving a missing word looking like a model failure.
+        let error = dictionary(
+            r#"
+[dictionary]
+[dictionary.discover]
+providers = ["repos", "nope"]
+"#,
+        )
+        .unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("nope"), "names the typo: {message}");
+        assert!(
+            message.contains("ssh_hosts"),
+            "and lists what it could have been: {message}"
+        );
+
+        assert!(
+            dictionary(
+                r#"
+[dictionary]
+discover = "not a table"
+"#
+            )
+            .is_err()
+        );
+        assert!(
+            dictionary(
+                r#"
+[dictionary]
+[dictionary.discover]
+max_repos = -1
+"#
+            )
+            .is_err(),
+            "a negative cap is not a cap"
+        );
+    }
+
+    #[test]
+    fn the_discover_limits_default_to_sixty_four_repos_and_eight_branches() {
+        // The dictionary file gets no golden snapshot, so this test is what
+        // stands between a silently changed default and a shipped release.
+        let dict = dictionary(
+            r#"
+[dictionary]
+[dictionary.discover]
+repo_roots = ["~/dev/*/repos"]
+"#,
+        )
+        .unwrap();
+        let discover = dict.discover.expect("the table was present");
+        assert_eq!(discover.repo_roots, vec!["~/dev/*/repos"]);
+        assert_eq!(discover.max_repos, 64);
+        assert_eq!(discover.max_branches_per_repo, 8);
+        assert_eq!(discover.max_terms, 0, "0 means whatever the budget allows");
+        assert_eq!(
+            discover.providers,
+            crate::discovery::ProviderName::ALL.to_vec(),
+            "every provider runs unless the list narrows them"
         );
     }
 

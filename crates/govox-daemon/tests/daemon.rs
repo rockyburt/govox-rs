@@ -262,6 +262,9 @@ fn harness_with(
             preedit: None,
             config_path: None,
             listening: false,
+            // Nothing is watching in a test, so there is nowhere to send a
+            // changed watch set and nothing that would act on it.
+            rewatch: None,
         },
         injector,
         announcer,
@@ -1150,6 +1153,7 @@ fn publishing_a_reload_swaps_every_dictionary_consumer_at_once() {
         bias_terms: vec!["Kubernetes".to_owned()],
         bias_groups: Vec::new(),
         replacements: vec![("rentals api".to_owned(), "Rentals-API".to_owned())],
+        discover: None,
     };
     shared.publish(config, dictionary);
 

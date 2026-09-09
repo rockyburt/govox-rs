@@ -1503,6 +1503,7 @@ dependencies = [
  "govox-asr",
  "govox-audio",
  "govox-core",
+ "govox-discover",
  "govox-ime",
  "govox-input",
  "govox-ui",
@@ -1511,6 +1512,14 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "tokio-util",
+ "tracing",
+]
+
+[[package]]
+name = "govox-discover"
+version = "0.2.0"
+dependencies = [
+ "govox-core",
  "tracing",
 ]
 

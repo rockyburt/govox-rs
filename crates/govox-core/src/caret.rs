@@ -29,7 +29,14 @@ pub const TRUSTED_CARET_MIN_WIDTH: i32 = 2;
 /// There is no escape syntax, so a literal `*` cannot be matched. Titles
 /// containing one are rare enough that an escape character would cost more
 /// confusion than it saves.
-fn glob_match(pattern: &[char], text: &[char]) -> bool {
+///
+/// Public because `govox-discover` matches `repo_roots` globs like
+/// `~/dev/*/repos` with it. One implementation of "does this wildcard apply",
+/// for the same reason [`app_label_matches`] is shared rather than described:
+/// two that agree on the easy cases and diverge on the hard ones would be a
+/// bug nobody could reproduce on purpose.
+#[must_use]
+pub fn glob_match(pattern: &[char], text: &[char]) -> bool {
     let (mut p, mut t) = (0_usize, 0_usize);
     // Where to resume if the current `*` turns out to have consumed too
     // little: step it forward one character and try again. This is what keeps

@@ -1,0 +1,12 @@
+[package]
+name = "govox-discover"
+description = "Enumerating bias terms from the machine: repositories, branches, hosts, units."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+govox-core.workspace = true
+tracing.workspace = true

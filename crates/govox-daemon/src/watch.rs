@@ -30,6 +30,7 @@ use std::time::Duration;
 
 use crate::daemon::ReloadTrigger;
 use govox_core::config::{Config, Environment};
+use govox_core::discovery::WatchSet;
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -84,18 +85,69 @@ pub fn watched_paths(config: &Config, explicit: Option<&Path>, env: &Environment
         .collect()
 }
 
-/// Whether an event on a watched directory concerns one of `watched`.
+/// Whether an event on a watched directory concerns one of `watched`, and if
+/// so which kind of change it was.
 ///
 /// Access events are ignored — reading `config.toml` is not a reason to reload
 /// it — and so is anything naming another file in the same directory, which for
 /// `~/.config/govox` includes every editor swap file written beside the one
 /// being edited.
-fn concerns(kind: EventKind, event_paths: &[PathBuf], watched: &HashSet<PathBuf>) -> bool {
+///
+/// Two answers rather than one because they are reported differently. A file
+/// the user edited deserves a notification; a repository they checked out does
+/// not, and saying so on every `git checkout` would train them to ignore the
+/// notification that means something needs a restart.
+fn concerns(kind: EventKind, event_paths: &[PathBuf], watched: &Watched) -> Option<ReloadTrigger> {
     let interesting = matches!(
         kind,
         EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) | EventKind::Any
     );
-    interesting && event_paths.iter().any(|path| watched.contains(path))
+    if !interesting {
+        return None;
+    }
+    // A file the user edited. Loud, because they are waiting to see whether it
+    // worked.
+    if event_paths.iter().any(|path| watched.loud.contains(path)) {
+        return Some(ReloadTrigger::FileChanged);
+    }
+    // A `.git/HEAD` moving, or a repository appearing under a configured root.
+    // Quiet: nobody checks out a branch in order to be told about it.
+    let discovered = event_paths.iter().any(|path| {
+        watched.quiet_files.contains(path)
+            || path
+                .parent()
+                .is_some_and(|parent| watched.quiet_dirs.contains(parent))
+    });
+    discovered.then_some(ReloadTrigger::Discovered)
+}
+
+/// The three sets a watch distinguishes, by how loudly a change is reported.
+#[derive(Debug, Default, Clone)]
+struct Watched {
+    /// Config and dictionary: the files a person edits on purpose.
+    loud: HashSet<PathBuf>,
+    /// Discovery's own files, named exactly so that the churn beside them —
+    /// `.git/index` on every `git status` — is ignored.
+    quiet_files: HashSet<PathBuf>,
+    /// Directories whose entries appearing or vanishing changes the answer.
+    quiet_dirs: HashSet<PathBuf>,
+}
+
+impl Watched {
+    fn every_parent(&self) -> Vec<PathBuf> {
+        let parents = self
+            .loud
+            .iter()
+            .chain(&self.quiet_files)
+            .filter_map(|path| path.parent().map(Path::to_path_buf));
+        // A watched directory is watched directly rather than through its
+        // parent: what matters is what appears *inside* it.
+        parents.chain(self.quiet_dirs.iter().cloned()).collect()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.loud.is_empty() && self.quiet_files.is_empty() && self.quiet_dirs.is_empty()
+    }
 }
 
 /// Watch `paths` and send on `reloads` when one of them changes.
@@ -106,23 +158,29 @@ fn concerns(kind: EventKind, event_paths: &[PathBuf], watched: &HashSet<PathBuf>
 #[must_use]
 pub fn spawn(
     paths: &[PathBuf],
+    discovered: &WatchSet,
     reloads: mpsc::UnboundedSender<ReloadTrigger>,
     cancel: &CancellationToken,
 ) -> Option<ConfigWatcher> {
-    if paths.is_empty() {
+    let watched = Watched {
+        loud: paths.iter().cloned().collect(),
+        quiet_files: discovered.files.iter().cloned().collect(),
+        quiet_dirs: discovered.dirs.iter().cloned().collect(),
+    };
+    if watched.is_empty() {
         return None;
     }
-    let watched: HashSet<PathBuf> = paths.iter().cloned().collect();
+    let parents = watched.every_parent();
 
-    let (hits, mut pending) = mpsc::unbounded_channel::<()>();
+    let (hits, mut pending) = mpsc::unbounded_channel::<ReloadTrigger>();
     let mut watcher = match notify::recommended_watcher(move |event| {
         let Ok(notify::Event { kind, paths, .. }) = event else {
             return;
         };
-        if concerns(kind, &paths, &watched) {
+        if let Some(trigger) = concerns(kind, &paths, &watched) {
             // The receiving task outlives the watcher, so a failure here means
             // the daemon is already stopping. Nothing to report.
-            let _ = hits.send(());
+            let _ = hits.send(trigger);
         }
     }) {
         Ok(watcher) => watcher,
@@ -135,9 +193,9 @@ pub fn spawn(
     // Parents, deduplicated: `config.toml` and `dictionary.toml` normally share
     // `~/.config/govox`, and watching it twice delivers every event twice.
     let mut watching = 0usize;
-    let mut parents: HashSet<&Path> = HashSet::new();
-    for parent in paths.iter().filter_map(|path| path.parent()) {
-        if !parents.insert(parent) {
+    let mut seen: HashSet<&Path> = HashSet::new();
+    for parent in &parents {
+        if !seen.insert(parent.as_path()) {
             continue;
         }
         match watcher.watch(parent, RecursiveMode::NonRecursive) {
@@ -151,24 +209,35 @@ pub fn spawn(
     if watching == 0 {
         return None;
     }
-    tracing::info!(files = paths.len(), "watching the configuration for edits");
+    tracing::info!(
+        files = paths.len(),
+        discovered = discovered.files.len(),
+        roots = discovered.dirs.len(),
+        "watching the configuration for edits"
+    );
 
     let cancel = cancel.clone();
     tokio::spawn(async move {
         loop {
-            tokio::select! {
+            let mut trigger = tokio::select! {
                 () = cancel.cancelled() => break,
                 hit = pending.recv() => {
-                    if hit.is_none() {
-                        break;
-                    }
+                    let Some(trigger) = hit else { break };
+                    trigger
+                }
+            };
+            // Let the rest of the save land, then treat everything it produced
+            // as the one change it was. An edit anywhere in the window makes
+            // the whole window an edit: if the user saved the dictionary while
+            // a checkout happened to land beside it, they are still waiting to
+            // hear whether their save worked.
+            tokio::time::sleep(DEBOUNCE).await;
+            while let Ok(also) = pending.try_recv() {
+                if also == ReloadTrigger::FileChanged {
+                    trigger = ReloadTrigger::FileChanged;
                 }
             }
-            // Let the rest of the save land, then treat everything it produced
-            // as the one change it was.
-            tokio::time::sleep(DEBOUNCE).await;
-            while pending.try_recv().is_ok() {}
-            if reloads.send(ReloadTrigger::FileChanged).is_err() {
+            if reloads.send(trigger).is_err() {
                 break;
             }
         }
@@ -233,47 +302,96 @@ mod tests {
         );
     }
 
-    fn watched() -> HashSet<PathBuf> {
-        [PathBuf::from("/c/govox/config.toml")]
-            .into_iter()
-            .collect()
+    fn watched() -> Watched {
+        Watched {
+            loud: [PathBuf::from("/c/govox/config.toml")]
+                .into_iter()
+                .collect(),
+            quiet_files: [PathBuf::from("/c/repos/govox-rs/.git/HEAD")]
+                .into_iter()
+                .collect(),
+            quiet_dirs: [PathBuf::from("/c/repos")].into_iter().collect(),
+        }
+    }
+
+    fn fired(kind: EventKind, path: &str) -> Option<ReloadTrigger> {
+        concerns(kind, &[PathBuf::from(path)], &watched())
     }
 
     #[test]
     fn a_write_to_a_watched_file_concerns_us() {
-        assert!(concerns(
-            EventKind::Modify(ModifyKind::Any),
-            &[PathBuf::from("/c/govox/config.toml")],
-            &watched(),
-        ));
+        assert_eq!(
+            fired(EventKind::Modify(ModifyKind::Any), "/c/govox/config.toml"),
+            Some(ReloadTrigger::FileChanged)
+        );
     }
 
     #[test]
     fn a_rename_into_place_concerns_us() {
         // What an editor's atomic save looks like from the directory, and the
         // reason the watch is on the directory rather than the file.
-        assert!(concerns(
-            EventKind::Create(CreateKind::File),
-            &[PathBuf::from("/c/govox/config.toml")],
-            &watched(),
-        ));
+        assert_eq!(
+            fired(EventKind::Create(CreateKind::File), "/c/govox/config.toml"),
+            Some(ReloadTrigger::FileChanged)
+        );
     }
 
     #[test]
     fn a_neighbouring_swap_file_does_not() {
-        assert!(!concerns(
-            EventKind::Modify(ModifyKind::Any),
-            &[PathBuf::from("/c/govox/.config.toml.swp")],
-            &watched(),
-        ));
+        assert_eq!(
+            fired(
+                EventKind::Modify(ModifyKind::Any),
+                "/c/govox/.config.toml.swp"
+            ),
+            None
+        );
     }
 
     #[test]
     fn merely_reading_the_file_does_not() {
-        assert!(!concerns(
-            EventKind::Access(AccessKind::Read),
-            &[PathBuf::from("/c/govox/config.toml")],
-            &watched(),
-        ));
+        assert_eq!(
+            fired(EventKind::Access(AccessKind::Read), "/c/govox/config.toml"),
+            None
+        );
+    }
+
+    #[test]
+    fn a_branch_checkout_is_a_discovery_reload_and_not_a_file_change() {
+        // The distinction the third trigger exists for: this re-biases, and
+        // says so only to the log. A notification per `git checkout` would
+        // train the user to dismiss the one that means a restart is needed.
+        assert_eq!(
+            fired(
+                EventKind::Modify(ModifyKind::Any),
+                "/c/repos/govox-rs/.git/HEAD"
+            ),
+            Some(ReloadTrigger::Discovered)
+        );
+    }
+
+    #[test]
+    fn a_repo_cloned_into_a_watched_root_triggers_a_reload() {
+        assert_eq!(
+            fired(
+                EventKind::Create(CreateKind::Folder),
+                "/c/repos/new-checkout"
+            ),
+            Some(ReloadTrigger::Discovered)
+        );
+    }
+
+    #[test]
+    fn writing_the_git_index_does_not_trigger_a_reload() {
+        // `.git/index` is rewritten by every `git status` and by every
+        // editor's background fetch. Watching it would turn an idle editor
+        // into a reload loop, which is why the watch names `HEAD` and
+        // `packed-refs` rather than the directory holding them.
+        assert_eq!(
+            fired(
+                EventKind::Modify(ModifyKind::Any),
+                "/c/repos/govox-rs/.git/index"
+            ),
+            None
+        );
     }
 }

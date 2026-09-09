@@ -288,6 +288,7 @@ mod tests {
             bias_terms: vec!["Kubernetes".to_owned()],
             bias_groups: Vec::new(),
             replacements: Vec::new(),
+            discover: None,
         };
         state.publish(config, dictionary);
 

@@ -684,6 +684,7 @@ mod tests {
             bias_terms: vec!["Kubernetes".to_owned()],
             bias_groups: Vec::new(),
             replacements: Vec::new(),
+            discover: None,
         };
         let recognizer =
             WhisperRecognizer::start(&config, &dictionary, 2).expect("starting needs no model");
