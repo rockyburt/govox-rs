@@ -123,10 +123,34 @@ rather than a silent no-op.
 
 ## Worked examples
 
-Every example below starts in **dictation** — ordinary typing, no mode set. Each
-line is one utterance: say it, then stop speaking. The `[…]` column is the state
-you are in *before* saying that line, so you can see exactly when a switch is
-needed and when it is not.
+### First, the thing that makes commands work at all
+
+**One command per utterance. Say it, then stop speaking.**
+
+A command is recognised when the utterance *ends*, and an utterance ends after a
+run of silence — `[vad] hangover_ms`, 400 ms by default and longer if you have
+tuned it. Run two commands together and govox hears one, with the second half
+swallowed as an argument to the first:
+
+```
+you say:   "replace Saturday with Sunday"  "text mode"
+govox hears: replace Saturday with Sunday text mode
+                                          ^^^^^^^^^ part of the phrase
+```
+
+Nothing is broken when that happens and nothing says so — the command simply
+does not do what you meant, and the mode you tried to leave is still on. The
+live caption is the tell: while it is still growing, the utterance has not
+closed, and nothing has run yet.
+
+The pause is shown as `⏸` below. It is not decoration; it is the part that turns
+two phrases into two commands.
+
+### Reading the examples
+
+Every example starts in **dictation** — ordinary typing, no mode set. The `[…]`
+column is the state you are in *before* saying that line, so you can see exactly
+when a switch is needed and when it is not.
 
 `[dictation]` is the state; `text mode` is the phrase that returns you to it.
 They differ because the state is named for what govox does and the phrase is
@@ -146,11 +170,18 @@ We drove out to Twillingate on Saturday afternoon.
 
 ```
 [dictation] command mode
+         ⏸
 [commands]  replace Saturday with Sunday
+         ⏸
 [commands]  text mode
+         ⏸
 [dictation]
 → We drove out to Twillingate on Sunday afternoon.
 ```
+
+Run those three together without pausing and you get one utterance —
+`command mode replace Saturday with Sunday text mode` — which matches nothing
+and is discarded.
 
 That last line matters more than it looks: leaving command mode is what makes
 your *next* sentence get typed instead of being hunted for as a command. Forget
@@ -165,8 +196,11 @@ so a sentence that vanishes is telling you which mode you are in.
 
 ```
 [dictation] command mode
+         ⏸
 [commands]  delete on Sunday afternoon
+         ⏸
 [commands]  text mode
+         ⏸
 [dictation]
 → We drove out to Twillingate .
 ```
@@ -188,11 +222,18 @@ only — and you must leave it again before the words you want typed:
 
 ```
 [dictation] command mode
+         ⏸
 [commands]  move after Twillingate
+         ⏸
 [commands]  text mode
+         ⏸
 [dictation] comma which was packed
 → We drove out to Twillingate, which was packed on Sunday afternoon.
 ```
+
+The last line is ordinary dictation, so it does not need a pause *before* the
+words — but it does need one after `text mode`, or the sentence you meant to
+type joins the mode phrase and is discarded with it.
 
 ### Fix the tail without naming it
 
@@ -215,8 +256,11 @@ in dictation:
 
 ```
 [dictation] command mode
+         ⏸
 [commands]  select Twillingate
+         ⏸
 [commands]  text mode
+         ⏸
 [dictation] Bonavista
 → We drove out to Bonavista on Sunday afternoon.
 ```
@@ -228,12 +272,22 @@ typed:
 
 ```
 [dictation] command mode
+         ⏸
 [commands]  replace Saturday with Sunday
+         ⏸
 [commands]  delete previous two words
+         ⏸
 [commands]  move to end of line
+         ⏸
 [commands]  text mode
+         ⏸
 [dictation]
 ```
+
+Five pauses for five commands. This is the example where rattling them off is
+most tempting and least likely to work — and where the failure is quietest,
+because four commands merged into one still leaves you in command mode with the
+field unchanged.
 
 Note `delete previous two words` works here too. Structural commands are
 available in *both* modes — command mode adds the phrase commands rather than
@@ -274,10 +328,26 @@ Every refusal names its cause. The three you are most likely to meet:
 | *"X is not in the field"* | The phrase was read correctly but is not present — check what actually landed, not what you meant. |
 | *"nothing dictated to delete"* | The last insertion expired or was never govox's. |
 
+The failure that does **not** name itself is two commands run together, because
+govox never saw a second command to refuse. Symptoms: the mode did not change,
+the field did not change, and the caption showed a long line containing both
+things you said. The fix is the pause, not the phrasing.
+
 To see what govox heard versus what it did:
 
 ```bash
-journalctl --user -u govox-rs-dev -f
+journalctl --user -u govox-rs-dev -f | grep -v whisper_
+```
+
+Captions arrive as the utterance grows, so a run of lines each longer than the
+last is one utterance still open — not several commands. The line after it says
+what actually ran:
+
+```
+caption text="replace fairy with"
+caption text="replace fairy with just"
+caption text="replace fairy with just Text mode"    ← still one utterance
+WARN edit command unavailable reason="“fairy” is not in the field"
 ```
 
 ## Related
