@@ -13,7 +13,7 @@ use govox_core::domain::{
     EditOp, GovoxError, Injector, InsertionAction, PipelineAction, PreeditSink, TextModel,
     Utterance,
 };
-use govox_core::editing::compile_edit;
+use govox_core::editing::compile_edit_for;
 use govox_core::reload::{ReloadOutcome, restart_required};
 use tokio::sync::mpsc;
 
@@ -477,7 +477,18 @@ impl<T: Transcriber> Daemon<T> {
     }
 
     fn apply_edit(&mut self, action: &govox_core::domain::EditAction) -> Result<(), GovoxError> {
-        let plan = compile_edit(action, self.text_model.as_ref());
+        // The purpose comes from IBus rather than AT-SPI, so it is the only
+        // signal here that knows what *kind* of thing has focus. Logged beside
+        // the field snapshot so the two can be read together when a phrase edit
+        // lands somewhere unexpected.
+        tracing::info!(
+            op = ?action.op,
+            purpose = self.field_purpose().as_deref().unwrap_or("<none>"),
+            app = self.shared.app().as_deref().unwrap_or("<unnamed>"),
+            "applying an edit"
+        );
+        let purpose = self.field_purpose();
+        let plan = compile_edit_for(action, self.text_model.as_ref(), purpose.as_deref());
         if !plan.ok() {
             let reason = plan.unsupported.as_deref().unwrap_or("command unavailable");
             tracing::warn!(reason, "edit command unavailable");

@@ -155,6 +155,32 @@ fn verb_name(op: EditOp) -> &'static str {
     }
 }
 
+/// Field purposes whose target has a caret but no *selection*.
+///
+/// Measured rather than assumed. A terminal running a TUI reports its whole
+/// screen over AT-SPI and moves its caret with the arrow keys like anything
+/// else — the offsets and the motion agree, which is why phrase editing looked
+/// like it should work. What is missing is the selection: `shift+left` arrives
+/// as a plain `left`, the shift silently dropped, so a plan that selects a span
+/// and overwrites it instead walks the caret past the span and types into the
+/// middle of the line.
+///
+/// Observed in Ptyxis running zellij and the Claude Code CLI: replacing
+/// "Saturday" with "sunday" produced `onsundaySaturday` — eight `shift+left`
+/// presses moved eight characters further left, and the `backspace` that should
+/// have cleared the selection ate the space instead.
+pub const NO_SELECTION_PURPOSES: &[&str] = &["TERMINAL"];
+
+/// Can this target hold a selection?
+///
+/// Unknown means yes: `None` is the common answer from a client that simply
+/// reports nothing, and assuming otherwise would give every ordinary text field
+/// the fallback plan.
+#[must_use]
+pub fn supports_selection(purpose: Option<&str>) -> bool {
+    !purpose.is_some_and(|purpose| NO_SELECTION_PURPOSES.contains(&purpose))
+}
+
 fn is_phrase_op(op: EditOp) -> bool {
     matches!(
         op,
@@ -272,8 +298,27 @@ fn verified_last(model: &dyn TextModel, verb: &str) -> Result<String, String> {
     Ok(last)
 }
 
+/// Compile an intent into keystrokes, for a target that holds a selection.
+///
+/// Kept for callers with nothing to say about the field — the golden corpus
+/// replays through here, and its records were made before a purpose existed.
 #[must_use]
 pub fn compile_edit(action: &EditAction, model: &dyn TextModel) -> EditPlan {
+    compile_edit_for(action, model, None)
+}
+
+/// Compile an intent into keystrokes for a field of a known purpose.
+///
+/// The purpose is the daemon's to supply: it comes from IBus, which is a
+/// different seam from the AT-SPI text this reads, and neither one can see the
+/// other. It matters because a target without a selection needs a different
+/// plan for the same intent — see [`NO_SELECTION_PURPOSES`].
+#[must_use]
+pub fn compile_edit_for(
+    action: &EditAction,
+    model: &dyn TextModel,
+    purpose: Option<&str>,
+) -> EditPlan {
     if let Some(chords) = simple_chords(action.op) {
         return EditPlan::keys(chords.iter().map(|c| (*c).to_owned()).collect());
     }
@@ -289,13 +334,19 @@ pub fn compile_edit(action: &EditAction, model: &dyn TextModel) -> EditPlan {
         return compile_case_transform(action, model);
     }
     if is_unit_motion(action.op) {
+        // Selecting needs a selection to make. `delete previous three words`
+        // is `ctrl+backspace` and works anywhere; `select previous three
+        // words` has nothing to leave behind.
+        if action.op == EditOp::SelectUnit && !supports_selection(purpose) {
+            return EditPlan::refuse("this field has no selection to make");
+        }
         return compile_unit_motion(action, model);
     }
     if action.op == EditOp::MoveToEdge {
         return compile_move_to_edge(action);
     }
     if is_phrase_op(action.op) {
-        return compile_phrase_edit(action, model);
+        return compile_phrase_edit(action, model, purpose);
     }
 
     EditPlan::refuse(format!("unhandled edit operation {:?}", action.op))
@@ -454,7 +505,11 @@ fn compile_press_key(action: &EditAction) -> EditPlan {
     }
 }
 
-fn compile_phrase_edit(action: &EditAction, model: &dyn TextModel) -> EditPlan {
+fn compile_phrase_edit(
+    action: &EditAction,
+    model: &dyn TextModel,
+    purpose: Option<&str>,
+) -> EditPlan {
     let Some(phrase) = action.phrase.as_deref().filter(|p| !p.is_empty()) else {
         return EditPlan::refuse("that command needs something to find");
     };
@@ -465,18 +520,79 @@ fn compile_phrase_edit(action: &EditAction, model: &dyn TextModel) -> EditPlan {
         ));
     };
 
+    // What the field actually looked like, when a phrase command was asked for.
+    //
+    // Structure only — lengths, lines, offsets — never the text itself, which
+    // is the user's document and may be a password field's neighbour.
+    //
+    // Worth logging because this is the one command family that can fail
+    // *silently*: every step succeeds, and the result still lands in the wrong
+    // place, if the caret offsets this reads do not correspond to the caret
+    // motion the keystrokes produce. A terminal is the known case — its
+    // accessible text is the whole screen while its arrow keys move within one
+    // input line — and these numbers are what distinguish it from a text field.
+    let lines = snapshot.text.lines().count();
+    let chars = snapshot.text.chars().count();
+    tracing::info!(
+        chars,
+        lines,
+        caret = snapshot.caret,
+        "read the field for a phrase edit"
+    );
+
     let Some((start, end)) = spans::find_phrase(&snapshot.text, snapshot.caret, phrase) else {
         return EditPlan::refuse(format!("\u{201c}{phrase}\u{201d} is not in the field"));
     };
 
     let caret = snapshot.caret as i64;
     let length = (end - start) as i64;
+    tracing::info!(
+        start,
+        end,
+        distance = end as i64 - caret,
+        "found the phrase; this many arrow keys away"
+    );
 
     if action.op == EditOp::MoveBeforePhrase {
         return bounded(travel(start as i64 - caret));
     }
     if action.op == EditOp::MoveAfterPhrase {
         return bounded(travel(end as i64 - caret));
+    }
+
+    // Without a selection, the same intent is expressed by deleting instead:
+    // walk to the end of the match and backspace over it. Strictly more
+    // portable than selecting — every line editor has backspace, and only a
+    // real text widget has a selection — but it costs one keystroke per
+    // character, so it stays the fallback rather than the default.
+    if !supports_selection(purpose) {
+        return match action.op {
+            // Nothing to leave selected, and pretending otherwise would move
+            // the caret and call it a selection.
+            EditOp::SelectPhrase => EditPlan::refuse("this field has no selection to make"),
+            EditOp::DeletePhrase => {
+                let mut chords = travel(end as i64 - caret);
+                chords.extend(repeat(&["backspace"], length));
+                bounded(chords)
+            }
+            EditOp::ReplacePhrase => {
+                let mut chords = travel(end as i64 - caret);
+                chords.extend(repeat(&["backspace"], length));
+                let plan = bounded(chords);
+                if !plan.ok() {
+                    return plan;
+                }
+                let mut actions = plan.actions;
+                actions.push(InsertionAction::Text(
+                    action.replacement.clone().unwrap_or_default(),
+                ));
+                EditPlan {
+                    actions,
+                    unsupported: None,
+                }
+            }
+            _ => EditPlan::refuse(format!("unhandled edit operation {:?}", action.op)),
+        };
     }
 
     // The rest all start from the end of the match and select backwards over it.
@@ -507,5 +623,138 @@ fn compile_phrase_edit(action: &EditAction, model: &dyn TextModel) -> EditPlan {
             }
         }
         _ => EditPlan::refuse(format!("unhandled edit operation {:?}", action.op)),
+    }
+}
+
+#[cfg(test)]
+mod terminal_tests {
+    use super::*;
+    use crate::domain::{EditAction, FieldSnapshot};
+
+    /// A field whose text and caret are known.
+    struct Field {
+        text: String,
+        caret: usize,
+    }
+
+    impl TextModel for Field {
+        fn last_insertion(&self) -> Option<String> {
+            None
+        }
+        fn record_insertion(&self, _text: &str) {}
+        fn consume_last(&self) -> Option<String> {
+            None
+        }
+        fn read_field(&self) -> Option<FieldSnapshot> {
+            Some(FieldSnapshot {
+                text: self.text.clone(),
+                caret: self.caret,
+            })
+        }
+        fn reset(&self) {}
+    }
+
+    /// The measured case, reproduced.
+    ///
+    /// Ptyxis + zellij + Claude Code CLI, caret at the end of the line and an
+    /// eight-character match behind it. The old plan sent `shift+left` eight
+    /// times — the shift dropped on the way — then backspaced the space,
+    /// giving `onsundaySaturday`.
+    fn sentence() -> Field {
+        Field {
+            text: "we drove out to Twillingate on Saturday afternoon.".to_owned(),
+            caret: 49,
+        }
+    }
+
+    fn replace() -> EditAction {
+        EditAction {
+            op: EditOp::ReplacePhrase,
+            phrase: Some("Saturday".to_owned()),
+            replacement: Some("sunday".to_owned()),
+            unit: None,
+            direction: None,
+            count: 1,
+        }
+    }
+
+    fn keys(plan: &EditPlan) -> Vec<String> {
+        plan.actions
+            .iter()
+            .flat_map(|action| match action {
+                InsertionAction::Keys(chords) => chords.clone(),
+                InsertionAction::Text(text) => vec![format!("<{text}>")],
+                _ => Vec::new(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_terminal_replace_backspaces_rather_than_selecting() {
+        let plan = compile_edit_for(&replace(), &sentence(), Some("TERMINAL"));
+        assert!(plan.ok(), "{:?}", plan.unsupported);
+        let chords = keys(&plan);
+        assert!(
+            !chords.iter().any(|chord| chord.starts_with("shift+")),
+            "a terminal drops the shift, so the plan must not rely on it: {chords:?}"
+        );
+        assert_eq!(
+            chords.iter().filter(|chord| *chord == "backspace").count(),
+            8,
+            "one per character of \"Saturday\": {chords:?}"
+        );
+        assert_eq!(chords.last().map(String::as_str), Some("<sunday>"));
+    }
+
+    #[test]
+    fn an_ordinary_field_still_selects() {
+        // The fallback is a fallback: selecting costs one keystroke per span
+        // rather than per character, so it stays the default where it works.
+        let plan = compile_edit_for(&replace(), &sentence(), None);
+        let chords = keys(&plan);
+        assert_eq!(
+            chords.iter().filter(|chord| *chord == "shift+left").count(),
+            8
+        );
+    }
+
+    #[test]
+    fn selecting_a_phrase_in_a_terminal_is_refused_rather_than_faked() {
+        // Moving the caret and calling it a selection is the bug, not the fix.
+        let action = EditAction {
+            op: EditOp::SelectPhrase,
+            phrase: Some("Saturday".to_owned()),
+            replacement: None,
+            unit: None,
+            direction: None,
+            count: 1,
+        };
+        let plan = compile_edit_for(&action, &sentence(), Some("TERMINAL"));
+        assert!(!plan.ok());
+        assert!(
+            plan.unsupported
+                .as_deref()
+                .unwrap_or_default()
+                .contains("selection"),
+            "{:?}",
+            plan.unsupported
+        );
+    }
+
+    #[test]
+    fn deleting_words_needs_no_selection_and_is_unaffected() {
+        // `ctrl+backspace` already worked in a terminal; it must not have been
+        // dragged into the refusal.
+        let action = EditAction {
+            op: EditOp::DeleteUnit,
+            unit: Some(Unit::Word),
+            direction: Some(Direction::Previous),
+            count: 2,
+            phrase: None,
+            replacement: None,
+        };
+        let plan = compile_edit_for(&action, &sentence(), Some("TERMINAL"));
+        assert!(plan.ok(), "{:?}", plan.unsupported);
+        assert_eq!(keys(&plan), vec!["ctrl+backspace", "ctrl+backspace"]);
     }
 }
