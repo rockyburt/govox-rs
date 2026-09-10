@@ -112,16 +112,41 @@ pub fn load_dictionary_with_discovery(
     let extra = audio_device_candidates(config, &spec);
     let found = govox_discover::discover(&spec, home.as_deref(), &extra);
 
-    let plan = plan_bias(
+    let mut plan = plan_bias(
         &dictionary,
         &found.candidates,
         config.recognition.bias_prompt_token_budget,
     );
+
+    // Replacements, for the spellings biasing cannot reach. A joined name like
+    // `RentalsCa` comes back from recognition as "Rentals CA" however heavily
+    // it is biased — Whisper decodes words, and nothing in the prompt makes it
+    // join two of them. Only a rule running after recognition produces the
+    // exact string, and only the directory listing knows what the exact string
+    // is: "rentals API" is `Rentals-API` here while "rentals CA" is
+    // `RentalsCa`.
+    //
+    // Hand-written rules come first and are never displaced. They apply in
+    // sequence, so an earlier rule has already rewritten the text by the time a
+    // generated one is tried; a generated rule for a phrase the user has
+    // already written a rule about is dropped outright rather than left to lose
+    // a race nobody can see.
+    let written: std::collections::HashSet<String> = dictionary
+        .replacements
+        .iter()
+        .map(|(from, _)| from.to_lowercase())
+        .collect();
+    plan.replacements = govox_core::discovery::discovered_replacements(&found.candidates)
+        .into_iter()
+        .filter(|(from, _)| !written.contains(&from.to_lowercase()))
+        .collect();
+    dictionary.replacements.extend(plan.replacements.clone());
     report_overflow(&plan, config.recognition.bias_prompt_token_budget);
     tracing::info!(
         found = found.len(),
         biased = plan.terms.len(),
         words = plan.words,
+        replacements = plan.replacements.len(),
         "planned the bias list"
     );
     dictionary.bias_terms = plan.terms.clone();

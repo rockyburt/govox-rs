@@ -386,6 +386,129 @@ pub fn device_terms(label: &str) -> Vec<String> {
     terms
 }
 
+/// Function words, which no repository name may be turned into a rule about.
+///
+/// The guard exists for a name like `DoIt`: its spoken form is "do it", and a
+/// replacement rewriting that phrase would corrupt every ordinary sentence
+/// containing it. Rule 1 of the personal dictionary's standard — only rewrite a
+/// string with no legitimate meaning of its own — is the line being held, and
+/// here it can be held automatically because the hazard is exactly "the parts
+/// are common English".
+const SPOKEN_FUNCTION_WORDS: &[&str] = &[
+    "a", "an", "and", "any", "are", "as", "at", "be", "but", "by", "can", "do", "for", "get", "go",
+    "had", "has", "have", "he", "her", "him", "his", "how", "i", "if", "in", "is", "it", "its",
+    "let", "me", "my", "no", "not", "now", "of", "off", "on", "one", "or", "our", "out", "put",
+    "run", "say", "see", "set", "she", "so", "the", "them", "then", "they", "this", "to", "too",
+    "try", "two", "up", "us", "use", "was", "way", "we", "were", "what", "when", "who", "why",
+    "will", "with", "you", "your",
+];
+
+/// Split a joined identifier at its case boundaries.
+///
+/// `RentalsCa` is two words, `TorontoRentalsCom` three, and an acronym run ends
+/// where the next word begins: `LLMInstructions` is `LLM` then `Instructions`.
+fn case_split(name: &str) -> Vec<String> {
+    let chars: Vec<char> = name.chars().collect();
+    let mut parts: Vec<String> = Vec::new();
+    let mut current = String::new();
+    for (index, &c) in chars.iter().enumerate() {
+        let starts_word = index > 0
+            && c.is_uppercase()
+            && (
+                // a lowercase run ending: "sC" in RentalsCa
+                chars[index - 1].is_lowercase()
+                // or an acronym run ending: the "I" of "LLMInstructions"
+                || chars.get(index + 1).is_some_and(|next| next.is_lowercase())
+                    && chars[index - 1].is_uppercase()
+            );
+        if starts_word && !current.is_empty() {
+            parts.push(std::mem::take(&mut current));
+        }
+        current.push(c);
+    }
+    if !current.is_empty() {
+        parts.push(current);
+    }
+    parts
+}
+
+/// How a joined repository name is likely to arrive from recognition.
+///
+/// The problem this solves cannot be solved by biasing. Bias nudges *which
+/// words* Whisper decodes; it has no way to make it join them, so a checkout
+/// called `RentalsCa` comes back as "Rentals CA" or "Rentals-CA" however
+/// heavily the term is biased. Only a replacement, which runs after
+/// recognition, produces the exact string.
+///
+/// And the exact string cannot be guessed from the sound. On this machine
+/// "rentals API" must become `Rentals-API` while "rentals CA" must become
+/// `RentalsCa` — identical spoken shapes, different spellings, and nothing but
+/// the directory listing can say which is which. That is the whole argument for
+/// generating these from discovery rather than writing them out: a hand-written
+/// list would be wrong the first time a repository was renamed.
+///
+/// **Only names that are already joined get variants.** A name that carries its
+/// own separator — `Rentals-API`, `Rentals-LLM-Instructions` — is one Whisper
+/// can plausibly produce unaided, and generating a rule for it is where the
+/// danger lives: `Rentals-DO` would rewrite the phrase "rentals do", which is
+/// ordinary English. Joined names are the case where the rule is always earning
+/// its place, because the correct output is otherwise unreachable.
+///
+/// Returns the spoken forms to match, or empty when the name is not a
+/// candidate. The canonical name itself is the replacement.
+#[must_use]
+pub fn spoken_variants(name: &str) -> Vec<String> {
+    // Already separated: not our case, and the risky one.
+    if name.contains(['-', '_', '.', ' ']) {
+        return Vec::new();
+    }
+    let parts = case_split(name);
+    if parts.len() < 2 {
+        return Vec::new();
+    }
+    let lowered: Vec<String> = parts.iter().map(|part| part.to_lowercase()).collect();
+    if lowered
+        .iter()
+        .any(|part| SPOKEN_FUNCTION_WORDS.contains(&part.as_str()))
+    {
+        return Vec::new();
+    }
+
+    // Space and hyphen: the two ways Whisper renders a boundary it heard.
+    // Both are matched case-insensitively by the dictionary, so only these two
+    // shapes are needed rather than every capitalisation of them.
+    let spaced = lowered.join(" ");
+    let hyphenated = lowered.join("-");
+    if spaced == name.to_lowercase() {
+        return Vec::new();
+    }
+    vec![spaced, hyphenated]
+}
+
+/// Replacement rules derived from discovered names.
+///
+/// Ordered by the candidates given, and deduplicated: two repositories that
+/// sound the same would otherwise produce two rules for one phrase, and the
+/// second could never fire.
+#[must_use]
+pub fn discovered_replacements(found: &[Candidates]) -> Vec<(String, String)> {
+    let mut rules: Vec<(String, String)> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    for answer in found
+        .iter()
+        .filter(|answer| answer.provider == Some(ProviderName::Repos))
+    {
+        for name in &answer.terms {
+            for variant in spoken_variants(name) {
+                if seen.insert(variant.clone()) {
+                    rules.push((variant, name.clone()));
+                }
+            }
+        }
+    }
+    rules
+}
+
 /// A remote as it is written in `.git/config`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GitRemote {
@@ -534,6 +657,14 @@ pub struct BiasPlan {
     pub words: usize,
     /// Words held back so the largest group still fits beside them.
     pub reserved: usize,
+    /// Replacement rules derived from discovered names, in the order they were
+    /// appended after the hand-written ones.
+    ///
+    /// Carried here rather than in a struct of its own because it travels with
+    /// the plan everywhere the plan goes — published once, read once, shown in
+    /// the same menu — and a second parallel value would only create the chance
+    /// of the two disagreeing.
+    pub replacements: Vec<(String, String)>,
     /// How many of `terms` came from the machine rather than from the file.
     ///
     /// Kept because the merge destroys the distinction: once planned, a
@@ -623,6 +754,9 @@ pub fn plan_bias(hand: &PersonalDictionary, found: &[Candidates], budget: u32) -
         words,
         reserved,
         discovered,
+        // Not a budget decision: replacements run after recognition and cost
+        // no prompt words at all. Filled in by the caller.
+        replacements: Vec::new(),
     }
 }
 
@@ -811,6 +945,82 @@ bc6e6dbf1f3d4e5a6b7c8d9e0f1a2b3c4d5e6f70 refs/heads/develop
             vec!["Blue", "Microphones", "pinned", "govox"],
             "the name survives; the function word in it does not"
         );
+    }
+
+    #[test]
+    fn a_joined_repository_name_yields_the_shapes_recognition_will_produce() {
+        // The reported failure, exactly: "RentalsCa" arrived as "Rentals-CA".
+        assert_eq!(
+            spoken_variants("RentalsCa"),
+            vec!["rentals ca", "rentals-ca"]
+        );
+        assert_eq!(
+            spoken_variants("TorontoRentalsCom"),
+            vec!["toronto rentals com", "toronto-rentals-com"]
+        );
+        assert_eq!(spoken_variants("LouerCa"), vec!["louer ca", "louer-ca"]);
+    }
+
+    #[test]
+    fn a_name_that_already_carries_a_separator_gets_no_rule() {
+        // Where the danger lives. "Rentals-DO" would rewrite "rentals do",
+        // which is an ordinary English phrase — and unlike the joined case,
+        // recognition can produce these unaided anyway.
+        assert!(spoken_variants("Rentals-DO").is_empty());
+        assert!(spoken_variants("Rentals-API").is_empty());
+        assert!(spoken_variants("Rentals-LLM-Instructions").is_empty());
+        assert!(spoken_variants("govox-rs").is_empty());
+    }
+
+    #[test]
+    fn a_name_made_of_ordinary_words_gets_no_rule_even_when_joined() {
+        // `DoIt` is joined and would otherwise qualify, but its spoken form is
+        // a phrase anyone might dictate. Rule 1 of the dictionary's standard,
+        // enforced where it can be enforced automatically.
+        assert!(spoken_variants("DoIt").is_empty());
+        assert!(spoken_variants("UseIt").is_empty());
+        assert!(
+            !spoken_variants("RentalsCa").is_empty(),
+            "the guard must not swallow the case this exists for"
+        );
+    }
+
+    #[test]
+    fn a_single_word_name_has_no_spoken_boundary_to_repair() {
+        assert!(spoken_variants("Domum").is_empty());
+        assert!(spoken_variants("govox").is_empty());
+    }
+
+    #[test]
+    fn an_acronym_run_ends_where_the_next_word_starts() {
+        assert_eq!(case_split("LLMInstructions"), vec!["LLM", "Instructions"]);
+        assert_eq!(case_split("RentalsCa"), vec!["Rentals", "Ca"]);
+    }
+
+    #[test]
+    fn two_names_that_sound_alike_yield_one_rule_not_two() {
+        // The second could never fire, and a rule that cannot fire is a lie
+        // about what the dictionary does.
+        let found = vec![found(ProviderName::Repos, &["RentalsCa", "RentalsCa"])];
+        let rules = discovered_replacements(&found);
+        assert_eq!(
+            rules,
+            vec![
+                ("rentals ca".to_string(), "RentalsCa".to_string()),
+                ("rentals-ca".to_string(), "RentalsCa".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn only_repository_names_become_replacements() {
+        // A branch word or a hostname is not a spelling anyone is trying to
+        // reproduce exactly.
+        let found = vec![
+            found(ProviderName::Branches, &["DashBoard"]),
+            found(ProviderName::Hostname, &["RockyBurt"]),
+        ];
+        assert!(discovered_replacements(&found).is_empty());
     }
 
     #[test]

@@ -93,6 +93,33 @@ The six providers, in the priority order the budget spends them:
 Anything written by hand outranks anything found, and a discovered term that
 duplicates a hand-written one keeps your spelling and costs nothing.
 
+### Discovered replacements
+
+Discovery also generates a few `replace` rules, because some spellings are out
+of bias's reach. Bias decides *which words* are decoded; it cannot make Whisper
+join two of them. A checkout called `RentalsCa` therefore comes back as
+"Rentals CA" no matter how heavily it is biased, and only a rule applied after
+recognition produces the exact string:
+
+```
+rentals ca  → RentalsCa
+rentals-ca  → RentalsCa
+```
+
+Which spelling is correct cannot be guessed from the sound — "rentals API" is
+`Rentals-API` while "rentals CA" is `RentalsCa` — so the directory listing is
+the only source, and a hand-written list would go stale on the first rename.
+
+**Only joined names get a rule.** `Rentals-API` and `govox-rs` already carry
+their separator, recognition can produce them unaided, and generating rules for
+them is where the harm is: `Rentals-DO` would rewrite the ordinary phrase
+"rentals do". A joined name whose parts are all function words — `DoIt` → "do
+it" — is refused for the same reason.
+
+Hand-written rules always win: a generated rule for a phrase you have already
+written a rule about is discarded rather than left to lose a race. What was
+generated is listed in the tray under **About → Replacements discovered**.
+
 `.git` is read directly — `config`, `HEAD`, `packed-refs`, `refs/heads` — so no
 `git` binary is needed and nothing forks on the reload path.
 

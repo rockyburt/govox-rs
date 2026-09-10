@@ -77,6 +77,19 @@ before 1.0.0, minor versions may change behaviour.
   it. `.git` is read directly, so no `git` binary is required. A malformed
   `[dictionary.discover]` refuses to start; a missing root or an absent ssh config does not.
 
+- **Discovery now generates replacement rules for joined repository names.** A checkout
+  called `RentalsCa` came back from dictation as "Rentals-CA" however heavily the term was
+  biased, because bias decides which words are decoded and cannot make Whisper join two of
+  them. Discovery now derives `rentals ca → RentalsCa` from the directory listing, which is
+  the only thing that knows "rentals API" is `Rentals-API` here while "rentals CA" is
+  `RentalsCa`.
+
+  Only names that are already joined qualify. One carrying its own separator can be
+  produced unaided, and generating a rule for it is where the harm is — `Rentals-DO` would
+  rewrite the ordinary phrase "rentals do". A joined name whose parts are all function
+  words (`DoIt`) is refused for the same reason. Hand-written rules always win, and what
+  was generated is listed under **About → Replacements discovered**.
+
 - **The accuracy corpus now covers programming vocabulary.** 13 clips over Rust and
   JavaScript — `serde`/`tokio`, `impl`/`mut`, `useState`/`useEffect`, `npm`, `async`/`await`
   — plus spoken-symbol identifier shapes like `parse_chord`, `main.rs` and `--all-targets`.

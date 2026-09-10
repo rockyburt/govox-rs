@@ -1767,7 +1767,27 @@ fn bias_lists(bias: &govox_core::discovery::BiasPlan) -> Vec<(String, Vec<String
     if !bias.dropped.is_empty() {
         lists.push(("Bias dropped".to_owned(), sorted(&bias.dropped)));
     }
+    lists.extend(replacement_list(bias));
     lists
+}
+
+/// The replacement rules discovery generated, as `from → to`.
+///
+/// Shown for the same reason the bias terms are, only more so: these rewrite
+/// text *deterministically*, so a rule nobody can see is a rule nobody can
+/// debug when it fires somewhere unexpected. Hand-written rules are not listed
+/// — they are in a file the user already has open.
+fn replacement_list(bias: &govox_core::discovery::BiasPlan) -> Vec<(String, Vec<String>)> {
+    if bias.replacements.is_empty() {
+        return Vec::new();
+    }
+    let mut shown: Vec<String> = bias
+        .replacements
+        .iter()
+        .map(|(from, to)| format!("{from} → {to}"))
+        .collect();
+    shown.sort_by_key(|entry| entry.to_lowercase());
+    vec![("Replacements discovered".to_owned(), shown)]
 }
 
 /// Alphabetical, for reading. **Display only.**
@@ -2092,6 +2112,7 @@ mod about_tests {
             words: total,
             reserved: 0,
             discovered,
+            replacements: Vec::new(),
         }
     }
 
@@ -2128,6 +2149,7 @@ mod about_tests {
             words: 3,
             reserved: 0,
             discovered: 1,
+            replacements: Vec::new(),
         };
         let lists = super::bias_lists(&plan);
         assert_eq!(
@@ -2162,6 +2184,7 @@ mod about_tests {
             words: 4,
             reserved: 0,
             discovered: 0,
+            replacements: Vec::new(),
         };
         let lists = super::bias_lists(&plan);
         assert_eq!(
@@ -2173,6 +2196,48 @@ mod about_tests {
             plan.terms,
             vec!["zebra", "Apple", "cache", "Claude"],
             "the plan itself is untouched"
+        );
+    }
+
+    #[test]
+    fn the_generated_replacements_are_shown_as_from_and_to() {
+        // These rewrite text deterministically, so a rule nobody can see is a
+        // rule nobody can debug when it fires somewhere unexpected.
+        let plan = BiasPlan {
+            terms: vec!["RentalsCa".to_owned()],
+            dropped: Vec::new(),
+            words: 1,
+            reserved: 0,
+            discovered: 1,
+            replacements: vec![
+                ("rentals-ca".to_owned(), "RentalsCa".to_owned()),
+                ("rentals ca".to_owned(), "RentalsCa".to_owned()),
+            ],
+        };
+        let lists = super::bias_lists(&plan);
+        let (label, entries) = lists.last().expect("a replacements list");
+        assert_eq!(label, "Replacements discovered");
+        assert_eq!(
+            entries,
+            &["rentals ca → RentalsCa", "rentals-ca → RentalsCa"],
+            "sorted for reading, like every other list"
+        );
+    }
+
+    #[test]
+    fn no_generated_replacements_means_no_list_at_all() {
+        let plan = BiasPlan {
+            terms: vec!["Jira".to_owned()],
+            dropped: Vec::new(),
+            words: 1,
+            reserved: 0,
+            discovered: 0,
+            replacements: Vec::new(),
+        };
+        assert!(
+            super::bias_lists(&plan)
+                .iter()
+                .all(|(label, _)| label != "Replacements discovered")
         );
     }
 
