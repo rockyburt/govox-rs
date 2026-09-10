@@ -315,10 +315,11 @@ fn draw_pill(canvas: &mut PixmapMut<'_>, state: &State) {
         state.level
     };
 
-    draw_microphone(
+    draw_mode_glyph(
         canvas,
         group_x + g::MIC_CRADLE_RADIUS - g::MIC_WIDTH / 2.0,
         mid_y,
+        state.mode.as_deref(),
         tint,
         alpha,
     );
@@ -382,6 +383,105 @@ fn draw_microphone(
     stem.line_to(centre_x, cradle_y + r + g::MIC_STEM);
     if let Some(path) = stem.finish() {
         canvas.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+    }
+}
+
+/// The glyph for the mode govox is in, in the microphone's place.
+///
+/// Colour alone was carrying this, and it is not enough. The pill sits in the
+/// corner of your eye while you look at the text you are editing, and a blue
+/// microphone against a red one is a distinction you have to *inspect* — by
+/// which point you have already said the thing that went wrong. Silhouette
+/// reads peripherally; hue does not.
+///
+/// So each mode gets a shape that differs in outline, and keeps its colour as
+/// reinforcement rather than as the signal:
+///
+/// - **dictation** — the microphone, unchanged. Speech is becoming text.
+/// - **command** — a chevron, the prompt every terminal has trained everyone
+///   to read as "waiting for an instruction".
+/// - **spelling** — a letter `A`, because that is literally what is being
+///   entered, one at a time.
+/// - **asleep** — two pause bars. Not a moon: sleep here means "not acting on
+///   speech", which is pause, not night.
+///
+/// An unknown mode gets a filled circle: a shape that plainly is not the
+/// microphone, since the daemon only sends a name when it is *not* dictating.
+fn draw_mode_glyph(
+    canvas: &mut PixmapMut<'_>,
+    x: f32,
+    mid_y: f32,
+    mode: Option<&str>,
+    tint: (f32, f32, f32),
+    alpha: f32,
+) {
+    let Some(mode) = mode else {
+        draw_microphone(canvas, x, mid_y, tint, alpha);
+        return;
+    };
+
+    let paint = rgba(tint.0, tint.1, tint.2, 0.95 * alpha);
+    // The same box the microphone occupies, so the waveform beside it does not
+    // shift when the mode changes.
+    let width = g::MIC_CRADLE_RADIUS * 2.0;
+    let centre_x = x + g::MIC_WIDTH / 2.0;
+    let half = width / 2.0;
+    let stroke = Stroke {
+        width: 2.6,
+        line_cap: tiny_skia::LineCap::Round,
+        line_join: tiny_skia::LineJoin::Round,
+        ..Stroke::default()
+    };
+
+    match mode {
+        "command" => {
+            // A chevron, drawn as one open path so the join is mitred rather
+            // than two strokes crossing at a seam.
+            let mut path = PathBuilder::new();
+            path.move_to(centre_x - half * 0.5, mid_y - half * 0.8);
+            path.line_to(centre_x + half * 0.45, mid_y);
+            path.line_to(centre_x - half * 0.5, mid_y + half * 0.8);
+            if let Some(path) = path.finish() {
+                canvas.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+            }
+        }
+        "spelling" => {
+            // A capital A: two legs and a crossbar.
+            let top = mid_y - half * 0.85;
+            let bottom = mid_y + half * 0.85;
+            let mut legs = PathBuilder::new();
+            legs.move_to(centre_x - half * 0.62, bottom);
+            legs.line_to(centre_x, top);
+            legs.line_to(centre_x + half * 0.62, bottom);
+            if let Some(path) = legs.finish() {
+                canvas.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+            }
+            let mut bar = PathBuilder::new();
+            bar.move_to(centre_x - half * 0.34, mid_y + half * 0.25);
+            bar.line_to(centre_x + half * 0.34, mid_y + half * 0.25);
+            if let Some(path) = bar.finish() {
+                canvas.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+            }
+        }
+        "asleep" => {
+            // Two pause bars, filled: a stroked outline at this size reads as
+            // a rectangle rather than as a control.
+            let bar_w = half * 0.36;
+            let bar_h = half * 1.5;
+            for side in [-1.0_f32, 1.0] {
+                let bar_x = centre_x + side * half * 0.42 - bar_w / 2.0;
+                if let Some(bar) =
+                    rounded_rect(bar_x, mid_y - bar_h / 2.0, bar_w, bar_h, bar_w / 2.0)
+                {
+                    canvas.fill_path(&bar, &paint, FillRule::Winding, Transform::identity(), None);
+                }
+            }
+        }
+        _ => {
+            if let Some(dot) = PathBuilder::from_circle(centre_x, mid_y, half * 0.62) {
+                canvas.fill_path(&dot, &paint, FillRule::Winding, Transform::identity(), None);
+            }
+        }
     }
 }
 
@@ -634,6 +734,57 @@ mod tests {
         );
         let painted = pixmap.pixels().iter().filter(|p| p.alpha() > 0).count();
         assert!(painted > 1000, "only {painted} pixels were painted");
+    }
+
+    /// Render one pill per mode, and prove the glyphs differ in *shape*.
+    ///
+    /// Colour was the whole signal before this, and a tint comparison would
+    /// have passed on the old code too. So the pixmaps are compared with the
+    /// tint removed — coverage alone, alpha only — which only differs if the
+    /// silhouettes differ.
+    ///
+    /// Set `GOVOX_RENDER_OUT=/some/dir` to write the four out as PNGs and look
+    /// at them.
+    #[test]
+    fn every_mode_has_its_own_silhouette() {
+        let text = Text::load().expect("a system font");
+        let modes = [None, Some("command"), Some("spelling"), Some("asleep")];
+
+        let mut coverage: Vec<(String, Vec<u8>)> = Vec::new();
+        for mode in modes {
+            let mut pixmap = Pixmap::new(g::PILL_WIDTH as u32, g::PILL_HEIGHT as u32).unwrap();
+            draw(
+                &mut pixmap,
+                &State {
+                    opacity: 1.0,
+                    // Held still, or the waveform would differ between runs
+                    // and mask a glyph that did not.
+                    level: 0.0,
+                    compact: true,
+                    mode: mode.map(str::to_owned),
+                    width: g::PILL_WIDTH,
+                    height: g::PILL_HEIGHT,
+                    ..State::default()
+                },
+                &text,
+            );
+            if let Ok(dir) = std::env::var("GOVOX_RENDER_OUT") {
+                let name = mode.unwrap_or("dictation");
+                let _ = pixmap.save_png(format!("{dir}/mode-{name}.png"));
+            }
+            let alpha: Vec<u8> = pixmap.pixels().iter().map(|pixel| pixel.alpha()).collect();
+            coverage.push((mode.unwrap_or("dictation").to_owned(), alpha));
+        }
+
+        for (i, (left_name, left)) in coverage.iter().enumerate() {
+            for (right_name, right) in coverage.iter().skip(i + 1) {
+                assert_ne!(
+                    left, right,
+                    "{left_name} and {right_name} paint the same shape; \
+                     colour alone is not a mode indicator"
+                );
+            }
+        }
     }
 
     #[test]
