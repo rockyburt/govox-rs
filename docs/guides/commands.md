@@ -32,17 +32,30 @@ instruction, so it only counts as a command once you have said it is.
 
 ```
 command mode          ┐
-start command mode    ├─ any of these
+start command mode    ├─ any of these to enter
 start commands        │
 let's command         ┘
 
-dictation mode        ┐
-dictate               ├─ any of these to leave
-stop commands         ┘
+text mode             ┐
+type mode             │
+dictation mode        ├─ any of these to leave
+dictate               │
+stop commands         │
+exit command mode     ┘
 ```
+
+The examples below use **`text mode`** to leave. It is two short words rather
+than a four-syllable one, which is one fewer thing for recognition to get wrong
+in the phrase whose whole job is getting you out of a mode. Any of the others
+does the same thing, so use whichever you say most naturally.
 
 While in command mode nothing is typed. The tray icon changes, and the mode
 outlives the utterance — it stays until you leave it.
+
+Worth knowing what these phrases really do: dictation is not a mode you enter,
+it is the state left when no mode is set. Command mode, spelling and sleep are
+flags; plain dictation is all of them off. So every phrase in the second group
+is *leaving*, not *arriving*, however it is worded.
 
 ## Structural editing: position
 
@@ -110,10 +123,14 @@ rather than a silent no-op.
 
 ## Worked examples
 
-Every example below starts in **dictation**, the mode you are in after saying
-something. Each line is one utterance: say it, then stop speaking. The `[mode]`
-column is where you are *before* saying that line, so you can see exactly when a
-switch is needed and when it is not.
+Every example below starts in **dictation** — ordinary typing, no mode set. Each
+line is one utterance: say it, then stop speaking. The `[…]` column is the state
+you are in *before* saying that line, so you can see exactly when a switch is
+needed and when it is not.
+
+`[dictation]` is the state; `text mode` is the phrase that returns you to it.
+They differ because the state is named for what govox does and the phrase is
+chosen for being easy to say.
 
 Remember the mode is sustained — it stays until you change it. If you are
 already in command mode, skip the first line; if you are staying in command mode
@@ -130,7 +147,7 @@ We drove out to Twillingate on Saturday afternoon.
 ```
 [dictation] command mode
 [commands]  replace Saturday with Sunday
-[commands]  dictation mode
+[commands]  text mode
 [dictation]
 → We drove out to Twillingate on Sunday afternoon.
 ```
@@ -149,7 +166,7 @@ so a sentence that vanishes is telling you which mode you are in.
 ```
 [dictation] command mode
 [commands]  delete on Sunday afternoon
-[commands]  dictation mode
+[commands]  text mode
 [dictation]
 → We drove out to Twillingate .
 ```
@@ -172,7 +189,7 @@ only — and you must leave it again before the words you want typed:
 ```
 [dictation] command mode
 [commands]  move after Twillingate
-[commands]  dictation mode
+[commands]  text mode
 [dictation] comma which was packed
 → We drove out to Twillingate, which was packed on Sunday afternoon.
 ```
@@ -199,7 +216,7 @@ in dictation:
 ```
 [dictation] command mode
 [commands]  select Twillingate
-[commands]  dictation mode
+[commands]  text mode
 [dictation] Bonavista
 → We drove out to Bonavista on Sunday afternoon.
 ```
@@ -214,7 +231,7 @@ typed:
 [commands]  replace Saturday with Sunday
 [commands]  delete previous two words
 [commands]  move to end of line
-[commands]  dictation mode
+[commands]  text mode
 [dictation]
 ```
 
