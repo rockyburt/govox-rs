@@ -449,6 +449,7 @@ impl PersonalDictionary {
             ("repo_roots", &mut spec.repo_roots),
             ("dir_roots", &mut spec.dir_roots),
             ("term_files", &mut spec.term_files),
+            ("bin_roots", &mut spec.bin_roots),
         ] {
             let Some(value) = table.get(key) else {
                 continue;
@@ -489,6 +490,7 @@ impl PersonalDictionary {
         for (key, slot) in [
             ("max_repos", &mut spec.max_repos),
             ("max_dirs", &mut spec.max_dirs),
+            ("max_commands", &mut spec.max_commands),
             ("max_branches_per_repo", &mut spec.max_branches_per_repo),
             ("max_terms", &mut spec.max_terms),
         ] {

@@ -110,6 +110,9 @@ fn built_in(
         Box::new(listed::DirProvider {
             roots: roots::expand_roots(&spec.dir_roots, home.as_deref()),
         }),
+        Box::new(listed::CommandProvider {
+            roots: roots::expand_roots(&spec.bin_roots, home.as_deref()),
+        }),
         Box::new(machine::HostnameProvider {
             path: PathBuf::from(machine::ETC_HOSTNAME),
             fallback: std::env::var("HOSTNAME").ok(),

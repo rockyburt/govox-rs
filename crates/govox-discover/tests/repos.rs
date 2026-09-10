@@ -320,6 +320,50 @@ fn directories_are_capped_because_nothing_vouches_for_them() {
 }
 
 #[test]
+fn only_executables_are_commands_and_a_version_pin_collapses() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let root = scratch("commands");
+    let exe = |name: &str| {
+        let path = root.join(name);
+        fs::write(&path, "#!/bin/sh\n").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    };
+    exe("zellij");
+    exe("kubectl");
+    exe("kubectl-1.37.9");
+    exe("penwell-gui");
+    // Not executable, so not a tool: a README and an editor's backup.
+    fs::write(root.join("README"), "").unwrap();
+    fs::write(root.join("claude~"), "").unwrap();
+
+    let provider = govox_discover::listed::CommandProvider {
+        roots: vec![root.clone()],
+    };
+    let mut found = terms(&provider, &DiscoverySpec::default());
+    found.sort();
+    assert_eq!(
+        found,
+        vec!["kubectl", "penwell-gui", "zellij"],
+        "one kubectl, not two, and nothing that cannot be run"
+    );
+}
+
+#[test]
+fn a_bin_root_that_does_not_exist_yields_no_commands_and_no_error() {
+    let root = scratch("commands-missing");
+    let provider = govox_discover::listed::CommandProvider {
+        roots: vec![root.join("nowhere")],
+    };
+    assert!(terms(&provider, &DiscoverySpec::default()).is_empty());
+    assert_eq!(
+        provider.watch_paths(&DiscoverySpec::default()).dirs.len(),
+        1,
+        "watched anyway: installing the first tool should be noticed"
+    );
+}
+
+#[test]
 fn a_term_file_is_read_and_a_missing_one_is_not_an_error() {
     let dir = scratch("term-files");
     let listed = dir.join("clients.txt");

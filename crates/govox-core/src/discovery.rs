@@ -35,6 +35,9 @@ pub const DEFAULT_MAX_BRANCHES_PER_REPO: usize = 8;
 /// many names that are only folders.
 pub const DEFAULT_MAX_DIRS: usize = 32;
 
+/// Executables considered per run, most recently installed first.
+pub const DEFAULT_MAX_COMMANDS: usize = 64;
+
 /// A named source of candidate bias terms.
 ///
 /// The declaration order is the priority order: when the budget runs out it is
@@ -55,6 +58,8 @@ pub enum ProviderName {
     Branches,
     /// Plain directory names, for project folders that are not checkouts.
     Dirs,
+    /// Executables in the directories the user installs tools into.
+    Commands,
     /// This machine's own name.
     Hostname,
     /// The hosts named in `~/.ssh/config`.
@@ -67,11 +72,12 @@ pub enum ProviderName {
 
 impl ProviderName {
     /// Every provider, in priority order.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Files,
         Self::Repos,
         Self::Branches,
         Self::Dirs,
+        Self::Commands,
         Self::Hostname,
         Self::SshHosts,
         Self::SystemdUnits,
@@ -86,6 +92,7 @@ impl ProviderName {
             Self::Repos => "repos",
             Self::Branches => "branches",
             Self::Dirs => "dirs",
+            Self::Commands => "commands",
             Self::Hostname => "hostname",
             Self::SshHosts => "ssh_hosts",
             Self::SystemdUnits => "systemd_units",
@@ -129,10 +136,19 @@ pub struct DiscoverySpec {
     /// Files listing terms, one per line or whitespace-separated. Globbed the
     /// same way the roots are.
     pub term_files: Vec<String>,
+    /// Directories whose executables are named for the `commands` provider.
+    ///
+    /// Deliberately explicit rather than `$PATH`: `/usr/bin` alone is thousands
+    /// of entries and would swallow the whole budget. A directory someone
+    /// installs into by hand — `~/.local/bin` — is a list of tools they chose,
+    /// which is the same thing as a list of tools they talk about.
+    pub bin_roots: Vec<String>,
     pub max_repos: usize,
     /// A cap on `dirs`, which has no `.git` gate to keep it honest and would
     /// otherwise put every folder under a broad root into the budget.
     pub max_dirs: usize,
+    /// A cap on `commands`, for the same reason `dirs` has one.
+    pub max_commands: usize,
     pub max_branches_per_repo: usize,
     /// A hard ceiling on discovered terms, or `0` for "whatever the bias
     /// budget allows".
@@ -146,8 +162,10 @@ impl Default for DiscoverySpec {
             repo_roots: Vec::new(),
             dir_roots: Vec::new(),
             term_files: Vec::new(),
+            bin_roots: Vec::new(),
             max_repos: DEFAULT_MAX_REPOS,
             max_dirs: DEFAULT_MAX_DIRS,
+            max_commands: DEFAULT_MAX_COMMANDS,
             max_branches_per_repo: DEFAULT_MAX_BRANCHES_PER_REPO,
             max_terms: 0,
         }
@@ -332,6 +350,34 @@ pub fn branch_terms(branch: &str) -> Vec<String> {
         }
     }
     terms
+}
+
+/// The command someone actually says, from an executable's filename.
+///
+/// A version-pinned copy sits beside the real one — `kubectl` and
+/// `kubectl-1.37.9` are one tool, and nobody dictates the second. Stripping a
+/// trailing run of digits and dots collapses them, and the global dedup then
+/// keeps one term rather than two.
+///
+/// Only a *trailing* version goes: `s3cmd` and `python3` end in a digit that is
+/// part of the name, so a bare digit run is only removed when a `-` or `_`
+/// introduces it.
+#[must_use]
+pub fn strip_version_suffix(name: &str) -> &str {
+    let Some(cut) = name.rfind(['-', '_']) else {
+        return name;
+    };
+    let (head, tail) = name.split_at(cut);
+    let version = &tail[1..];
+    if !version.is_empty()
+        && version.chars().all(|c| c.is_ascii_digit() || c == '.')
+        && version.chars().any(|c| c.is_ascii_digit())
+        && !head.is_empty()
+    {
+        head
+    } else {
+        name
+    }
 }
 
 /// Terms listed in a file the user maintains.
@@ -965,6 +1011,24 @@ bc6e6dbf1f3d4e5a6b7c8d9e0f1a2b3c4d5e6f70 refs/heads/develop
             None,
             "a multi-word label costs several budget units to buy one term"
         );
+    }
+
+    #[test]
+    fn a_version_pinned_copy_collapses_onto_the_tool_it_is_a_copy_of() {
+        // Both sit in ~/.local/bin; only one is ever said out loud.
+        assert_eq!(strip_version_suffix("kubectl-1.37.9"), "kubectl");
+        assert_eq!(strip_version_suffix("kubectl"), "kubectl");
+        assert_eq!(strip_version_suffix("node_22"), "node");
+    }
+
+    #[test]
+    fn a_digit_that_belongs_to_the_name_is_not_a_version() {
+        // The reason only a `-` or `_` introduces a strippable run.
+        assert_eq!(strip_version_suffix("s3cmd"), "s3cmd");
+        assert_eq!(strip_version_suffix("python3"), "python3");
+        assert_eq!(strip_version_suffix("rentals-do"), "rentals-do");
+        assert_eq!(strip_version_suffix("penwell-gui"), "penwell-gui");
+        assert_eq!(strip_version_suffix("-1.2"), "-1.2", "nothing to keep");
     }
 
     #[test]

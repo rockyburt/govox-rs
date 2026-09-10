@@ -70,13 +70,15 @@ That is the whole of a working configuration. Everything else has a default:
 | `repo_roots` | `[]` | Directories whose children are checkouts. `~` and `*` are expanded |
 | `dir_roots` | `[]` | Directories whose children are named regardless of whether they are checkouts |
 | `term_files` | `[]` | Files listing terms. Same globbing as the roots |
-| `providers` | all eight | Which sources to run |
+| `bin_roots` | `[]` | Directories whose executables are named. Not `$PATH` — see below |
+| `providers` | all nine | Which sources to run |
 | `max_repos` | `64` | Newest first, by when `HEAD` last moved |
 | `max_dirs` | `32` | Same ordering. Lower, because nothing vouches for a plain directory |
+| `max_commands` | `64` | Same ordering, by when each executable was installed |
 | `max_branches_per_repo` | `8` | Most recently touched first |
 | `max_terms` | `0` | A hard cap on discovered terms; `0` means "whatever the budget allows" |
 
-The eight providers, in the priority order the budget spends them:
+The nine providers, in the priority order the budget spends them:
 
 - **`files`** — terms from `term_files`, one per line or whitespace-separated,
   with `#` starting a comment. First, because it is the only source you wrote
@@ -93,6 +95,14 @@ The eight providers, in the priority order the budget spends them:
   `HEAD` out of it, so it skips these entirely. Dotfile directories are ignored,
   and the cap is lower than `max_repos` because a `.git` is evidence somebody
   works there and a bare directory is not.
+- **`commands`** — executables under `bin_roots`, for the tools you run by name.
+  `~/.local/bin` is a good source for exactly the reason `$PATH` is a bad one:
+  it holds a few dozen things you installed deliberately, where `/usr/bin` holds
+  thousands nobody chose and would swallow the budget whole. Only files with the
+  executable bit count, so a README or an editor backup beside a tool is
+  ignored, and a trailing version is stripped — `kubectl-1.37.9` and `kubectl`
+  are one term, not two. A digit that belongs to the name survives: `s3cmd` and
+  `python3` are left alone.
 - **`hostname`** — this machine, and the first label if it is an FQDN.
 - **`ssh_hosts`** — every alias on a `Host` line in `~/.ssh/config`. Wildcards
   are skipped, and `Include` is not followed.

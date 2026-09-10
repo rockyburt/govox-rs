@@ -10,7 +10,7 @@ use std::time::SystemTime;
 
 use govox_core::discovery::{
     Candidates, DiscoverySpec, ProviderName, TermProvider, WatchSet, normalize_candidate,
-    parse_term_file,
+    parse_term_file, strip_version_suffix,
 };
 
 /// Directory names under the configured roots.
@@ -74,6 +74,70 @@ impl TermProvider for DirProvider {
     }
 
     fn watch_paths(&self, _spec: &DiscoverySpec) -> WatchSet {
+        WatchSet {
+            files: Vec::new(),
+            dirs: self.roots.clone(),
+        }
+    }
+}
+
+/// Executables in the directories the user installs tools into.
+///
+/// `~/.local/bin` is a good source for the same reason `$PATH` is a bad one:
+/// it holds what someone put there deliberately, a few dozen entries, whereas
+/// `/usr/bin` holds thousands nobody chose and would swallow the budget whole.
+/// The tools you install by hand are the tools you talk about.
+pub struct CommandProvider {
+    pub roots: Vec<PathBuf>,
+}
+
+impl TermProvider for CommandProvider {
+    fn name(&self) -> ProviderName {
+        ProviderName::Commands
+    }
+
+    fn candidates(&self, spec: &DiscoverySpec) -> Candidates {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let mut found: Vec<(String, SystemTime)> = Vec::new();
+        for root in &self.roots {
+            let Ok(entries) = std::fs::read_dir(root) else {
+                tracing::debug!(dir = %root.display(), "cannot list; no command names");
+                continue;
+            };
+            for entry in entries.flatten() {
+                let Ok(meta) = entry.metadata() else {
+                    continue;
+                };
+                // The executable bit is what separates a tool from a stray
+                // README or a backup file left beside one.
+                if meta.is_dir() || meta.permissions().mode() & 0o111 == 0 {
+                    continue;
+                }
+                let raw = entry.file_name().to_string_lossy().to_string();
+                let Some(name) = normalize_candidate(strip_version_suffix(&raw)) else {
+                    continue;
+                };
+                let touched = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+                found.push((name, touched));
+            }
+        }
+
+        found.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
+        let mut terms: Vec<String> = Vec::new();
+        for (name, _) in found {
+            if !terms.contains(&name) {
+                terms.push(name);
+            }
+            if terms.len() >= spec.max_commands {
+                break;
+            }
+        }
+        Candidates::new(self.name(), terms)
+    }
+
+    fn watch_paths(&self, _spec: &DiscoverySpec) -> WatchSet {
+        // The directory, so installing or removing a tool changes the answer.
         WatchSet {
             files: Vec::new(),
             dirs: self.roots.clone(),
