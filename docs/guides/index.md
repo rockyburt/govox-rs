@@ -17,6 +17,11 @@ Task-oriented guidance that is too detailed for the README.
   and their `.en` variants, the ~20× decode-cost spread and what it does to streaming preview
   cadence, timing your own hardware with `times_the_configured_model`, and why `gpu_device`
   differs between the Vulkan and CUDA builds.
+- **[commands.md](commands.md)** — editing by voice: the structural grammar
+  (`delete previous three words`) versus phrase editing (`replace Saturday with
+  Sunday`) and why the second needs command mode, what "that" refers to in
+  `delete that` and when it expires, which commands need AT-SPI and which do
+  not, and worked examples of changing a sentence you have already dictated.
 - **[dictionary.md](dictionary.md)** — `bias` versus `replace` and which one you actually
   want, spending the 180-word bias budget, scoping terms to a window with
   `[[dictionary.bias_group]]`, and `[dictionary.discover]` — enumerating repositories,

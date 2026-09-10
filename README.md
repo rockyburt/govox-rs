@@ -25,7 +25,10 @@ network once the model is cached.
   ("twenty five dollars" → "$25"), spoken emoji, spoken case ("all caps hello"), filler
   removal, sentence casing, and a personal dictionary for names the model keeps mangling.
   Run `govox commands` for the full list and what is switched on.
-- **Takes editing commands.** "delete that", "capitalize that", "undo", "press control s".
+- **Takes editing commands.** "delete that", "undo", "press control s", and a composable
+  motion grammar — "delete previous three words", "move to end of document". In command
+  mode you can also name what to change rather than where it is: "replace Saturday with
+  Sunday". See [docs/guides/commands.md](docs/guides/commands.md).
 - **Four modes, as macOS Voice Control has them.** Dictation, a command mode where nothing
   is typed unless it matches a command, a spelling mode for the strings recognition cannot
   get right, and sleep. Say "command mode", "spelling mode" or "go to sleep" and it takes
