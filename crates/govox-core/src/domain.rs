@@ -316,7 +316,7 @@ pub enum DictionaryError {
     BadReplaceEntry,
     #[error("[dictionary.discover] must be a TOML table")]
     BadDiscoverShape,
-    #[error("[dictionary.discover].repo_roots must be a list of strings")]
+    #[error("[dictionary.discover] repo_roots, dir_roots and term_files must be lists of strings")]
     BadDiscoverRoots,
     #[error("[dictionary.discover].providers must be a list of strings")]
     BadDiscoverProviders,
@@ -443,18 +443,27 @@ impl PersonalDictionary {
 
         let mut spec = DiscoverySpec::default();
 
-        if let Some(roots) = table.get("repo_roots") {
-            let toml::Value::Array(items) = roots else {
+        // Three path lists, parsed identically: each is a list of strings that
+        // may carry `~` and wildcards, resolved by whoever touches the disk.
+        for (key, slot) in [
+            ("repo_roots", &mut spec.repo_roots),
+            ("dir_roots", &mut spec.dir_roots),
+            ("term_files", &mut spec.term_files),
+        ] {
+            let Some(value) = table.get(key) else {
+                continue;
+            };
+            let toml::Value::Array(items) = value else {
                 return Err(DictionaryError::BadDiscoverRoots);
             };
             let mut parsed = Vec::with_capacity(items.len());
             for item in items {
-                let toml::Value::String(root) = item else {
+                let toml::Value::String(path) = item else {
                     return Err(DictionaryError::BadDiscoverRoots);
                 };
-                parsed.push(root.clone());
+                parsed.push(path.clone());
             }
-            spec.repo_roots = parsed;
+            *slot = parsed;
         }
 
         if let Some(providers) = table.get("providers") {
@@ -479,6 +488,7 @@ impl PersonalDictionary {
 
         for (key, slot) in [
             ("max_repos", &mut spec.max_repos),
+            ("max_dirs", &mut spec.max_dirs),
             ("max_branches_per_repo", &mut spec.max_branches_per_repo),
             ("max_terms", &mut spec.max_terms),
         ] {
@@ -1027,6 +1037,37 @@ bias = ["Rentals.ca"]
     }
 
     #[test]
+    fn the_three_path_lists_are_parsed_the_same_way() {
+        let dict = dictionary(
+            r#"
+[dictionary]
+[dictionary.discover]
+repo_roots = ["~/dev/*/repos"]
+dir_roots  = ["~/dev/*", "~/work"]
+term_files = ["~/.config/govox/terms/*.txt"]
+max_dirs   = 8
+"#,
+        )
+        .unwrap();
+        let discover = dict.discover.expect("the table was present");
+        assert_eq!(discover.dir_roots, vec!["~/dev/*", "~/work"]);
+        assert_eq!(discover.term_files, vec!["~/.config/govox/terms/*.txt"]);
+        assert_eq!(discover.max_dirs, 8);
+
+        assert!(
+            dictionary(
+                r#"
+[dictionary]
+[dictionary.discover]
+term_files = "not a list"
+"#
+            )
+            .is_err(),
+            "the same refusal the roots get"
+        );
+    }
+
+    #[test]
     fn an_unknown_provider_name_is_refused_rather_than_ignored() {
         // Ignoring it would enumerate three quarters of what was asked for and
         // say nothing, leaving a missing word looking like a model failure.
@@ -1081,6 +1122,9 @@ repo_roots = ["~/dev/*/repos"]
         .unwrap();
         let discover = dict.discover.expect("the table was present");
         assert_eq!(discover.repo_roots, vec!["~/dev/*/repos"]);
+        assert_eq!(discover.dir_roots, Vec::<String>::new());
+        assert_eq!(discover.term_files, Vec::<String>::new());
+        assert_eq!(discover.max_dirs, 32, "lower than repos: no .git to vouch");
         assert_eq!(discover.max_repos, 64);
         assert_eq!(discover.max_branches_per_repo, 8);
         assert_eq!(discover.max_terms, 0, "0 means whatever the budget allows");

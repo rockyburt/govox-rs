@@ -68,19 +68,31 @@ That is the whole of a working configuration. Everything else has a default:
 | Key | Default | What it does |
 |---|---|---|
 | `repo_roots` | `[]` | Directories whose children are checkouts. `~` and `*` are expanded |
-| `providers` | all six | Which sources to run |
+| `dir_roots` | `[]` | Directories whose children are named regardless of whether they are checkouts |
+| `term_files` | `[]` | Files listing terms. Same globbing as the roots |
+| `providers` | all eight | Which sources to run |
 | `max_repos` | `64` | Newest first, by when `HEAD` last moved |
+| `max_dirs` | `32` | Same ordering. Lower, because nothing vouches for a plain directory |
 | `max_branches_per_repo` | `8` | Most recently touched first |
 | `max_terms` | `0` | A hard cap on discovered terms; `0` means "whatever the budget allows" |
 
-The six providers, in the priority order the budget spends them:
+The eight providers, in the priority order the budget spends them:
 
+- **`files`** — terms from `term_files`, one per line or whitespace-separated,
+  with `#` starting a comment. First, because it is the only source you wrote
+  out on purpose: the hand-written `bias` list's standing, kept somewhere else.
+  Use it for vocabulary nothing can infer — clients, people, jargon.
 - **`repos`** — the directory name, plus the repository and org names from
   `origin`.
 - **`branches`** — the *words* inside each branch. `feature/rentals-dashboard`
   contributes "rentals" and "dashboard": nobody dictates the slug, so biasing it
   would spend budget on a token Whisper will never emit. Scaffolding (`feature`,
   `fix`, `main`) and ticket ids are dropped.
+- **`dirs`** — plain directory names under `dir_roots`, for project folders that
+  were never checkouts. `repos` requires a `.git` and reads config, refs and
+  `HEAD` out of it, so it skips these entirely. Dotfile directories are ignored,
+  and the cap is lower than `max_repos` because a `.git` is evidence somebody
+  works there and a bare directory is not.
 - **`hostname`** — this machine, and the first label if it is an FQDN.
 - **`ssh_hosts`** — every alias on a `Host` line in `~/.ssh/config`. Wildcards
   are skipped, and `Include` is not followed.

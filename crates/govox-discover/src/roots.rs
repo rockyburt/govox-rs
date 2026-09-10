@@ -12,9 +12,26 @@ use govox_core::domain::expand_user;
 /// been set up yet — not an error worth reporting.
 #[must_use]
 pub fn expand_roots(roots: &[String], home: Option<&Path>) -> Vec<PathBuf> {
+    expand_all(roots, home, |path| path.is_dir())
+}
+
+/// Expand every configured pattern to the *files* it names.
+///
+/// The same globbing as [`expand_roots`], so one list of terms or a directory
+/// of them are written the same way.
+#[must_use]
+pub fn expand_files(patterns: &[String], home: Option<&Path>) -> Vec<PathBuf> {
+    expand_all(patterns, home, |path| path.is_file())
+}
+
+fn expand_all(
+    patterns: &[String],
+    home: Option<&Path>,
+    keep: impl Fn(&Path) -> bool + Copy,
+) -> Vec<PathBuf> {
     let mut found: Vec<PathBuf> = Vec::new();
-    for root in roots {
-        for path in expand_one(root, home) {
+    for pattern in patterns {
+        for path in expand_one(pattern, home, keep) {
             if !found.contains(&path) {
                 found.push(path);
             }
@@ -23,7 +40,7 @@ pub fn expand_roots(roots: &[String], home: Option<&Path>) -> Vec<PathBuf> {
     found
 }
 
-fn expand_one(pattern: &str, home: Option<&Path>) -> Vec<PathBuf> {
+fn expand_one(pattern: &str, home: Option<&Path>, keep: impl Fn(&Path) -> bool) -> Vec<PathBuf> {
     let expanded = expand_user(Path::new(pattern), home);
 
     let mut bases: Vec<PathBuf> = vec![PathBuf::new()];
@@ -51,7 +68,7 @@ fn expand_one(pattern: &str, home: Option<&Path>) -> Vec<PathBuf> {
         }
     }
 
-    bases.retain(|path| path.is_dir());
+    bases.retain(|path| keep(path));
     bases
 }
 

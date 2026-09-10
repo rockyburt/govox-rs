@@ -28,6 +28,13 @@ pub const DEFAULT_MAX_REPOS: usize = 64;
 /// Branches taken from each repository, most recently touched first.
 pub const DEFAULT_MAX_BRANCHES_PER_REPO: usize = 8;
 
+/// Plain directories considered, most recently touched first.
+///
+/// Lower than the repository cap on purpose. A checkout has a `.git` to prove
+/// it is a project; a directory has nothing, so a broad root can offer a great
+/// many names that are only folders.
+pub const DEFAULT_MAX_DIRS: usize = 32;
+
 /// A named source of candidate bias terms.
 ///
 /// The declaration order is the priority order: when the budget runs out it is
@@ -35,10 +42,19 @@ pub const DEFAULT_MAX_BRANCHES_PER_REPO: usize = 8;
 /// being worked on" down to "the machine it is being worked on".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ProviderName {
+    /// Terms listed in files the user names, one per line or whitespace-separated.
+    ///
+    /// First, because it is the only source the user wrote out on purpose. It
+    /// is the same standing as the hand-written `bias` list, just kept
+    /// somewhere else — so it outranks everything the machine merely happened
+    /// to contain.
+    Files,
     /// Repository directory names, and the org and name from `origin`.
     Repos,
     /// Words taken from the branches of those repositories.
     Branches,
+    /// Plain directory names, for project folders that are not checkouts.
+    Dirs,
     /// This machine's own name.
     Hostname,
     /// The hosts named in `~/.ssh/config`.
@@ -51,9 +67,11 @@ pub enum ProviderName {
 
 impl ProviderName {
     /// Every provider, in priority order.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 8] = [
+        Self::Files,
         Self::Repos,
         Self::Branches,
+        Self::Dirs,
         Self::Hostname,
         Self::SshHosts,
         Self::SystemdUnits,
@@ -64,8 +82,10 @@ impl ProviderName {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::Files => "files",
             Self::Repos => "repos",
             Self::Branches => "branches",
+            Self::Dirs => "dirs",
             Self::Hostname => "hostname",
             Self::SshHosts => "ssh_hosts",
             Self::SystemdUnits => "systemd_units",
@@ -102,7 +122,17 @@ pub struct DiscoverySpec {
     /// and any `*` are resolved by the caller, which is the half that is
     /// allowed to touch the filesystem.
     pub repo_roots: Vec<String>,
+    /// Directories whose children are named for the `dirs` provider. Unlike
+    /// `repo_roots` these need contain nothing in particular — a plain project
+    /// folder counts.
+    pub dir_roots: Vec<String>,
+    /// Files listing terms, one per line or whitespace-separated. Globbed the
+    /// same way the roots are.
+    pub term_files: Vec<String>,
     pub max_repos: usize,
+    /// A cap on `dirs`, which has no `.git` gate to keep it honest and would
+    /// otherwise put every folder under a broad root into the budget.
+    pub max_dirs: usize,
     pub max_branches_per_repo: usize,
     /// A hard ceiling on discovered terms, or `0` for "whatever the bias
     /// budget allows".
@@ -114,7 +144,10 @@ impl Default for DiscoverySpec {
         Self {
             providers: ProviderName::ALL.to_vec(),
             repo_roots: Vec::new(),
+            dir_roots: Vec::new(),
+            term_files: Vec::new(),
             max_repos: DEFAULT_MAX_REPOS,
+            max_dirs: DEFAULT_MAX_DIRS,
             max_branches_per_repo: DEFAULT_MAX_BRANCHES_PER_REPO,
             max_terms: 0,
         }
@@ -296,6 +329,32 @@ pub fn branch_terms(branch: &str) -> Vec<String> {
             && !terms.contains(&term)
         {
             terms.push(term);
+        }
+    }
+    terms
+}
+
+/// Terms listed in a file the user maintains.
+///
+/// One per line, or several separated by whitespace — a term cannot contain a
+/// space anyway, so splitting on it costs nothing and lets the file be written
+/// either way. `#` starts a comment, to the end of the line, so a list can
+/// carry its own reasoning the way the dictionary does.
+///
+/// Every term still goes through [`normalize_candidate`]: a file is a
+/// convenience for keeping a long list somewhere else, not a way to smuggle in
+/// something the budget cannot spend.
+#[must_use]
+pub fn parse_term_file(text: &str) -> Vec<String> {
+    let mut terms = Vec::new();
+    for line in text.lines() {
+        let line = line.split('#').next().unwrap_or_default();
+        for word in line.split_whitespace() {
+            if let Some(term) = normalize_candidate(word)
+                && !terms.contains(&term)
+            {
+                terms.push(term);
+            }
         }
     }
     terms
@@ -905,6 +964,33 @@ bc6e6dbf1f3d4e5a6b7c8d9e0f1a2b3c4d5e6f70 refs/heads/develop
             normalize_candidate("Blue Microphones"),
             None,
             "a multi-word label costs several budget units to buy one term"
+        );
+    }
+
+    #[test]
+    fn a_term_file_reads_one_per_line_or_several_and_carries_comments() {
+        let file = "\
+# clients, which no provider can infer
+Nuvei
+Jobber          # still the vendor's own spelling
+
+Twillingate Bonavista
+# a whole line of nothing
+";
+        assert_eq!(
+            parse_term_file(file),
+            vec!["Nuvei", "Jobber", "Twillingate", "Bonavista"]
+        );
+    }
+
+    #[test]
+    fn a_term_file_is_held_to_the_same_standard_as_any_other_source() {
+        // A file is somewhere else to keep a list, not a way around the rules
+        // about what a term may be.
+        assert_eq!(
+            parse_term_file("no 1841 bc6e6db Rentsync Rentsync"),
+            vec!["Rentsync"],
+            "too short, numeric, sha-like and duplicate all fall away"
         );
     }
 

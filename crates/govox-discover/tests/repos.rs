@@ -278,3 +278,85 @@ fn a_provider_the_spec_switches_off_is_not_run() {
         found.candidates
     );
 }
+
+// --- the two listed providers ------------------------------------------------
+
+#[test]
+fn a_plain_directory_contributes_its_name_without_needing_a_git() {
+    // The whole point of `dirs`: a project folder that was never a checkout,
+    // which `repos` skips entirely for want of a `.git`.
+    let root = scratch("dirs");
+    fs::create_dir_all(root.join("personal-playground")).unwrap();
+    fs::create_dir_all(root.join(".hidden-machinery")).unwrap();
+    fs::write(root.join("notes.txt"), "").unwrap();
+
+    let provider = govox_discover::listed::DirProvider {
+        roots: vec![root.clone()],
+    };
+    assert_eq!(
+        terms(&provider, &DiscoverySpec::default()),
+        vec!["personal-playground"],
+        "a dotfile directory is machinery and a file is not a directory"
+    );
+}
+
+#[test]
+fn directories_are_capped_because_nothing_vouches_for_them() {
+    // A checkout has a `.git` proving someone works there. A directory has
+    // nothing, so the cap is the only thing standing between a broad root and
+    // the whole budget.
+    let root = scratch("dirs-cap");
+    for name in ["alpha-project", "beta-project", "gamma-project"] {
+        fs::create_dir_all(root.join(name)).unwrap();
+    }
+    let spec = DiscoverySpec {
+        max_dirs: 1,
+        ..DiscoverySpec::default()
+    };
+    let provider = govox_discover::listed::DirProvider {
+        roots: vec![root.clone()],
+    };
+    assert_eq!(terms(&provider, &spec).len(), 1);
+}
+
+#[test]
+fn a_term_file_is_read_and_a_missing_one_is_not_an_error() {
+    let dir = scratch("term-files");
+    let listed = dir.join("clients.txt");
+    fs::write(&listed, "# clients\nNuvei\nJobber Twillingate\n").unwrap();
+
+    let provider = govox_discover::listed::FileProvider {
+        paths: vec![listed.clone(), dir.join("absent.txt")],
+    };
+    assert_eq!(
+        terms(&provider, &DiscoverySpec::default()),
+        vec!["Nuvei", "Jobber", "Twillingate"]
+    );
+    assert_eq!(
+        provider.watch_paths(&DiscoverySpec::default()).files.len(),
+        2,
+        "a file that does not exist yet is exactly the one to watch for"
+    );
+}
+
+#[test]
+fn a_glob_finds_every_term_file_and_nothing_that_is_not_one() {
+    let dir = scratch("term-glob");
+    let terms_dir = dir.join("terms");
+    fs::create_dir_all(&terms_dir).unwrap();
+    fs::write(terms_dir.join("clients.txt"), "Nuvei\n").unwrap();
+    fs::write(terms_dir.join("places.txt"), "Twillingate\n").unwrap();
+    fs::write(terms_dir.join("README.md"), "Ignored\n").unwrap();
+
+    let pattern = format!("{}/terms/*.txt", dir.display());
+    let paths = govox_discover::roots::expand_files(&[pattern], None);
+    assert_eq!(paths.len(), 2, "files only, and only .txt: {paths:?}");
+
+    let found = terms(
+        &govox_discover::listed::FileProvider { paths },
+        &DiscoverySpec::default(),
+    );
+    assert!(found.contains(&"Nuvei".to_string()));
+    assert!(found.contains(&"Twillingate".to_string()));
+    assert!(!found.contains(&"Ignored".to_string()));
+}

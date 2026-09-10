@@ -11,6 +11,7 @@
 //! returns no `Result`, so a quiet machine has no way to become a daemon that
 //! will not start.
 
+pub mod listed;
 pub mod machine;
 pub mod repos;
 pub mod roots;
@@ -99,10 +100,16 @@ fn built_in(
 ) -> Vec<Box<dyn TermProvider>> {
     let home = home.map(Path::to_path_buf);
     let providers: Vec<Box<dyn TermProvider>> = vec![
+        Box::new(listed::FileProvider {
+            paths: roots::expand_files(&spec.term_files, home.as_deref()),
+        }),
         Box::new(repos::RepoProvider {
             roots: roots.clone(),
         }),
         Box::new(repos::BranchProvider { roots }),
+        Box::new(listed::DirProvider {
+            roots: roots::expand_roots(&spec.dir_roots, home.as_deref()),
+        }),
         Box::new(machine::HostnameProvider {
             path: PathBuf::from(machine::ETC_HOSTNAME),
             fallback: std::env::var("HOSTNAME").ok(),
