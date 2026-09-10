@@ -110,61 +110,124 @@ rather than a silent no-op.
 
 ## Worked examples
 
+Every example below starts in **dictation**, the mode you are in after saying
+something. Each line is one utterance: say it, then stop speaking. The `[mode]`
+column is where you are *before* saying that line, so you can see exactly when a
+switch is needed and when it is not.
+
+Remember the mode is sustained — it stays until you change it. If you are
+already in command mode, skip the first line; if you are staying in command mode
+for another edit, skip the last.
+
 Take this in the field, caret at the end:
 
 ```
 We drove out to Twillingate on Saturday afternoon.
 ```
 
-**Change one word.** Say `command mode`, then:
+### Change one word
 
 ```
-replace Saturday with Sunday
+[dictation] command mode
+[commands]  replace Saturday with Sunday
+[commands]  dictation mode
+[dictation]
 → We drove out to Twillingate on Sunday afternoon.
 ```
 
-**Cut a clause.**
+That last line matters more than it looks: leaving command mode is what makes
+your *next* sentence get typed instead of being hunted for as a command. Forget
+it and the next thing you say is **discarded** rather than typed — in command
+mode an utterance matching no command is treated as a misrecognition, on the
+grounds that acting on a half-heard instruction is worse than ignoring it.
+
+It does say so. You get *"Not a command, discarded: …"* with the text it heard,
+so a sentence that vanishes is telling you which mode you are in.
+
+### Cut a clause
 
 ```
-delete on Sunday afternoon
+[dictation] command mode
+[commands]  delete on Sunday afternoon
+[commands]  dictation mode
+[dictation]
 → We drove out to Twillingate .
 ```
 
 Exactly the characters you named, and not one more — which is why there is now a
 space before the full stop. Phrase deletion does not tidy up around itself,
-because guessing at surrounding whitespace is how an edit surprises you. Follow
-it with `delete previous character` if the spacing matters.
-
-**Insert in the middle.** Put the caret where you want it, leave command mode,
-and dictate:
+because guessing at surrounding whitespace is how an edit surprises you. To fix
+the spacing you do **not** need command mode, because that is structural:
 
 ```
-move after Twillingate      (command mode)
-dictation mode
-comma which was packed      → We drove out to Twillingate, which was packed on Sunday afternoon.
+[dictation] delete previous character
+→ We drove out to Twillingate.
 ```
 
-**Fix the tail without naming it.** No mode change needed, since this is
-structural:
+### Insert in the middle
+
+The caret has to be moved by content, so command mode is needed for that step
+only — and you must leave it again before the words you want typed:
 
 ```
-delete previous two words
+[dictation] command mode
+[commands]  move after Twillingate
+[commands]  dictation mode
+[dictation] comma which was packed
+→ We drove out to Twillingate, which was packed on Sunday afternoon.
+```
+
+### Fix the tail without naming it
+
+No mode change at all. "previous two words" names a position, and structural
+commands are always on:
+
+```
+[dictation] delete previous two words
 → We drove out to Twillingate on
 ```
 
-**Select, then overtype.** Selecting leaves the selection live, and in most
-applications typing over a selection replaces it:
+This is worth preferring when it fits. Two fewer utterances, and no mode to
+leave behind.
+
+### Select, then overtype
+
+Selecting leaves the selection live, and in most applications typing over a
+selection replaces it — so the dictated word has to arrive *after* you are back
+in dictation:
 
 ```
-select Twillingate          (command mode)
-dictation mode
-Bonavista                   → We drove out to Bonavista on Sunday afternoon.
+[dictation] command mode
+[commands]  select Twillingate
+[commands]  dictation mode
+[dictation] Bonavista
+→ We drove out to Bonavista on Sunday afternoon.
 ```
 
-**Undo any of it.**
+### Several edits in a row
+
+Enter once, leave once. Everything between is a command, and nothing between is
+typed:
 
 ```
-undo that
+[dictation] command mode
+[commands]  replace Saturday with Sunday
+[commands]  delete previous two words
+[commands]  move to end of line
+[commands]  dictation mode
+[dictation]
+```
+
+Note `delete previous two words` works here too. Structural commands are
+available in *both* modes — command mode adds the phrase commands rather than
+replacing anything.
+
+### Undo any of it
+
+Also always on, so no mode change:
+
+```
+[dictation] undo that
 ```
 
 ## The "that" commands are a third thing
