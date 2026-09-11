@@ -252,7 +252,7 @@ pub fn apply_rules(
     if config.spoken_punctuation {
         normalized = punctuation::capitalize_after_terminators(&normalized);
     }
-    if !continuing {
+    if !continuing && wants_terminal_punctuation(&normalized) {
         normalized = ensure_terminal_punctuation(&normalized);
     }
     // Last, and deliberately after both casing stages: they only ever *add*
@@ -363,7 +363,22 @@ pub fn is_continuation(preceding: Option<&str>) -> bool {
     if last == '\r' || last == '\n' {
         return false; // a new line starts a new sentence
     }
-    !SENTENCE_TERMINATORS.contains(&last)
+    if SENTENCE_TERMINATORS.contains(&last) {
+        return false;
+    }
+    // No terminator, which used to settle it. It no longer does: a one-word
+    // answer and an emoji are left unpunctuated on purpose, so their missing
+    // full stop is not evidence of an unfinished sentence. Without this, "Yes"
+    // would swallow whatever was dictated next into the same lowercase run.
+    //
+    // Only the fragment since the last terminator is the sentence in progress;
+    // asking about the whole field would call a long document a one-word answer
+    // the moment it happened to end in one.
+    let current = trimmed
+        .rsplit(|char| SENTENCE_TERMINATORS.contains(&char) || char == '\n')
+        .next()
+        .unwrap_or(trimmed);
+    wants_terminal_punctuation(current)
 }
 
 /// A single space when the caret is flush against existing text.
@@ -514,6 +529,32 @@ pub fn sentence_case(text: &str) -> String {
     text.to_owned()
 }
 
+/// Is this utterance a sentence, or an answer?
+///
+/// A one-word reply — "yes", "approved", "tomorrow" — is not a sentence, and a
+/// full stop on it is wrong twice over: it is not how anyone writes a one-word
+/// answer, and in a chat box it reads as curt in a way the speaker did not
+/// intend. An emoji is the same case with the alphabet removed: "👍." is not
+/// something anyone types.
+///
+/// This is a *policy* about when to punctuate, so it lives beside the call
+/// rather than inside [`ensure_terminal_punctuation`], which stays the
+/// primitive that answers only "does this end in a terminator, and if not, add
+/// one". Keeping the two apart is what lets the recorded behaviour of the
+/// primitive stay unchanged while the policy above it moves.
+///
+/// Anything with no letter in it — an emoji, a bare number, a symbol — is never
+/// a sentence. Beyond that the test is simply whether there is more than one
+/// word.
+#[must_use]
+pub fn wants_terminal_punctuation(text: &str) -> bool {
+    let trimmed = text.trim();
+    if !trimmed.chars().any(char::is_alphabetic) {
+        return false;
+    }
+    trimmed.split_whitespace().count() > 1
+}
+
 #[must_use]
 pub fn ensure_terminal_punctuation(text: &str) -> String {
     if text.ends_with(['.', '!', '?', '\n']) {
@@ -528,6 +569,83 @@ pub fn command_text(name: &str) -> &'static str {
         "newline" => "\n",
         "new_paragraph" => "\n\n",
         _ => "",
+    }
+}
+
+#[cfg(test)]
+mod short_answer_tests {
+    use super::{is_continuation, wants_terminal_punctuation};
+
+    #[test]
+    fn a_one_word_answer_is_not_a_sentence() {
+        for answer in ["yes", "no", "approved", "tomorrow", "  maybe  "] {
+            assert!(
+                !wants_terminal_punctuation(answer),
+                "{answer:?} should not be given a full stop"
+            );
+        }
+    }
+
+    #[test]
+    fn an_emoji_is_never_a_sentence() {
+        // Including several: no alphabet, so no sentence, however many.
+        for text in [
+            "\u{1f44d}",
+            "\u{2705}",
+            "\u{1f44d} \u{1f389}",
+            "42",
+            "3.14",
+            "?!",
+        ] {
+            assert!(
+                !wants_terminal_punctuation(text),
+                "{text:?} should not be given a full stop"
+            );
+        }
+    }
+
+    #[test]
+    fn two_words_are_a_sentence_again() {
+        assert!(wants_terminal_punctuation("looks good"));
+        assert!(wants_terminal_punctuation("we drove out to Twillingate"));
+        // An emoji does not disqualify a sentence that also has words in it.
+        assert!(wants_terminal_punctuation("nice work \u{1f44d}"));
+    }
+
+    /// The reason this is not a one-line change.
+    ///
+    /// `is_continuation` read a missing full stop as an unfinished sentence.
+    /// Once one-word answers stop getting one, that inference is wrong: "Yes"
+    /// would swallow the next utterance into the same lowercase run.
+    #[test]
+    fn an_unpunctuated_answer_does_not_continue() {
+        assert!(!is_continuation(Some("Yes")));
+        assert!(!is_continuation(Some("\u{1f44d}")));
+    }
+
+    #[test]
+    fn a_genuinely_unfinished_sentence_still_continues() {
+        assert!(is_continuation(Some("we drove out to")));
+        assert!(is_continuation(Some("the answer is")));
+    }
+
+    /// Only the fragment since the last terminator is the sentence in progress.
+    /// A long field that happens to end in one word is not a one-word answer.
+    #[test]
+    fn a_long_field_ending_in_one_word_is_judged_on_its_last_sentence() {
+        assert!(is_continuation(Some("We shipped it. Now we wait for")));
+        // Ends mid-sentence with a single word after the full stop: still the
+        // middle of a sentence, because more is plainly coming.
+        assert!(!is_continuation(Some("We shipped it. Yes")));
+    }
+
+    #[test]
+    fn the_existing_answers_are_unchanged() {
+        assert!(!is_continuation(None));
+        assert!(!is_continuation(Some("")));
+        assert!(!is_continuation(Some("Done.")));
+        assert!(!is_continuation(Some("Really?")));
+        assert!(!is_continuation(Some("a line ends\n")));
     }
 }
 
@@ -702,6 +820,53 @@ mod tests {
         assert_eq!(
             collapse_repeated_words("hyphen hyphen hyphen"),
             "hyphen hyphen hyphen"
+        );
+    }
+}
+
+#[cfg(test)]
+mod after_a_short_answer_tests {
+    use super::{FieldRules, apply_rules};
+    use crate::config::CorrectionConfig;
+
+    fn config() -> CorrectionConfig {
+        CorrectionConfig {
+            enabled: true,
+            dictionary_path: String::new(),
+            drop_fillers: false,
+            filler_words: Vec::new(),
+            collapse_repeats: false,
+            spoken_punctuation: true,
+            spoken_emoji: false,
+            number_formatting: false,
+            case_control: false,
+        }
+    }
+
+    fn run(text: &str, preceding: Option<&str>) -> String {
+        apply_rules(text, &config(), preceding, FieldRules::Prose)
+    }
+
+    /// What actually lands in the field when dictation carries on past a
+    /// one-word answer. Recorded because the seam is the visible cost of the
+    /// change, and a future reader should see it stated rather than discover it.
+    #[test]
+    fn dictating_on_after_a_one_word_answer() {
+        // The answer itself: no full stop, which is the point.
+        assert_eq!(run("yes", None), "Yes");
+        // Carrying on starts a new sentence rather than running into the answer
+        // in lowercase. "Yes We" has no full stop between the two, and govox
+        // cannot reach back to add one -- it only emits the new text. The
+        // alternative is worse: continuing yields "Yes we should ship it" with
+        // no terminator anywhere.
+        assert_eq!(run("we should ship it", Some("Yes")), " We should ship it.");
+    }
+
+    #[test]
+    fn a_real_unfinished_sentence_is_still_continued() {
+        assert_eq!(
+            run("to Twillingate", Some("we drove out")),
+            " to Twillingate"
         );
     }
 }
