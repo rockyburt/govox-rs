@@ -110,6 +110,12 @@ pub fn is_restart_request(text: &str) -> bool {
 }
 
 static NON_WORD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[^a-zA-Z0-9\s]").unwrap());
+/// The same class, less the one character a custom command may keep.
+///
+/// See [`normalize_custom_text`] for why the slash survives there and nowhere
+/// else.
+static NON_WORD_OR_SLASH: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"[^a-zA-Z0-9/\s]").unwrap());
 static WHITESPACE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s+").unwrap());
 
 /// Strip everything that is not ASCII alphanumeric or whitespace, and collapse.
@@ -126,7 +132,18 @@ static WHITESPACE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s+").unwrap(
 /// inserting a sentence-ending nobody spoke.
 #[must_use]
 pub fn normalize_preserving_case(text: &str) -> String {
-    let words_only = NON_WORD.replace_all(text, " ");
+    shape(text, &NON_WORD)
+}
+
+/// Strip, collapse and trim, against whichever class of noise is being removed.
+///
+/// The single implementation behind every normalizer here. The module doc for
+/// `custom` warns that a second normalizer agreeing in the common cases and
+/// diverging on apostrophes would be a bug nobody could reproduce on purpose —
+/// so the variants differ by the character class they are handed and in no
+/// other way, and the divergence it warns about is unrepresentable.
+fn shape(text: &str, non_word: &Regex) -> String {
+    let words_only = non_word.replace_all(text, " ");
     WHITESPACE.replace_all(&words_only, " ").trim().to_owned()
 }
 
@@ -138,6 +155,29 @@ pub fn normalize_preserving_case(text: &str) -> String {
 #[must_use]
 pub fn normalize_command_text(text: &str) -> String {
     normalize_preserving_case(text).to_lowercase()
+}
+
+/// As [`normalize_command_text`], but a slash survives.
+///
+/// Only custom commands use this, and only so that "slash clear" can mean
+/// something a bare "clear" does not. Spoken punctuation runs long before
+/// matching, so by the time a custom phrase is compared the utterance already
+/// reads `/clear`; stripping the slash made it identical to the ordinary word
+/// and let a sentence ending in "clear" fire the command. Keeping it is what
+/// separates the two:
+///
+/// ```text
+/// "slash clear"             -> "/clear"      matches
+/// "let me make that clear"  -> "...clear"    does not
+/// ```
+///
+/// Built-in commands keep the stricter class deliberately. Their phrases are a
+/// compile-time table with no slash in it, they are replayed by the golden
+/// corpus, and widening what they accept would change recorded behaviour to buy
+/// nothing.
+#[must_use]
+pub fn normalize_custom_text(text: &str) -> String {
+    shape(text, &NON_WORD_OR_SLASH).to_lowercase()
 }
 
 fn lookup<T: Copy>(table: &[(&str, T)], key: &str) -> Option<T> {
@@ -288,11 +328,37 @@ pub fn ends_with_mode_phrase(text: &str, mode_switching: bool, command_mode: boo
 /// `pub(super)` so the custom-command scan can walk the tail exactly as this
 /// one does, rather than growing a second idea of where a word begins.
 pub(super) fn word_starts(text: &str) -> Vec<usize> {
+    starts_with_slash_rule(text, false)
+}
+
+/// [`word_starts`], and a slash also begins one.
+///
+/// Only the custom-command scan wants this, and only because the slash is
+/// `Attach::Tight`: "that is enough for now slash clear" comes out of spoken
+/// punctuation as `that is enough for now/clear`, with the mark glued to the
+/// word in front of it. Splitting on whitespace alone never sees `/clear` as a
+/// tail, so a slash command worked as a whole utterance and silently stopped
+/// working the moment anything was said before it — the exact regression the
+/// trailing scan exists to prevent.
+///
+/// Still one implementation, for the reason `word_starts` is shared at all: two
+/// ideas of where a word begins would disagree on precisely the inputs nobody
+/// thinks to test.
+pub(super) fn word_starts_with_slash(text: &str) -> Vec<usize> {
+    starts_with_slash_rule(text, true)
+}
+
+fn starts_with_slash_rule(text: &str, slash_starts: bool) -> Vec<usize> {
     let mut starts = Vec::new();
     let mut in_word = false;
     for (index, character) in text.char_indices() {
         if character.is_whitespace() {
             in_word = false;
+        } else if slash_starts && character == '/' {
+            // The slash opens a word rather than continuing one, and the next
+            // character continues *it* — so `/clear` is one tail, not two.
+            starts.push(index);
+            in_word = true;
         } else if !in_word {
             starts.push(index);
             in_word = true;

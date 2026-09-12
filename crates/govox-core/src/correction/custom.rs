@@ -20,19 +20,41 @@
 //! inherit the password-field refusal and the asleep guard for free, which a
 //! new variant would have had to remember to ask for.
 //!
-//! **Matching is the built-in normalization, unchanged.** Custom phrases are
-//! folded by [`super::commands::normalize_command_text`], so "Let's Go!" and
-//! "lets go" are the same phrase to a custom command for exactly the reasons
-//! they are the same phrase to a built-in one. A second normalizer that agreed
-//! in the common cases and diverged on apostrophes would be a bug nobody could
-//! reproduce deliberately.
+//! **Matching is the built-in normalization, plus the slash.** Custom phrases
+//! are folded by [`super::commands::normalize_custom_text`], so "Let's Go!" and
+//! "let s go" are the same phrase to a custom command for exactly the reasons
+//! they are the same phrase to a built-in one. (The apostrophe becomes a
+//! *space*, not nothing — so that phrase is three words, not two. This note
+//! used to claim "lets go", which was never true; the folding has always split
+//! there. It is written down because a phrase that quietly fails to match is
+//! the hardest kind of config bug to see.)
+//!
+//! The slash is the single exception, and it was earned. Spoken punctuation
+//! runs long before matching, so "slash clear" is already `/clear` by the time
+//! a phrase is compared — and the built-in normalizer then stripped the slash,
+//! making it indistinguishable from the ordinary word "clear". Since
+//! [`split_trailing_custom`] also scans the *end* of any sentence, "let me make
+//! that clear" fired the command and swallowed the sentence. A prefix word
+//! ("claude clear") worked around it at the cost of a word on every command and
+//! a duplicate entry for every way the recogniser hears that word.
+//!
+//! The original warning here — that a second normalizer agreeing in the common
+//! cases and diverging on apostrophes would be a bug nobody could reproduce
+//! deliberately — still stands, and is why the two are not two. Both call the
+//! same `shape`, handed a different character class, so they cannot disagree
+//! about apostrophes or anything else except the one character that is the
+//! whole point.
+//!
+//! The consequence for the config file is that a phrase is written the way it
+//! is *typed*, not the way it is said: `when_i_say = "/compact"`, spoken as
+//! "slash compact".
 
 use crate::caret::app_label_matches;
 use crate::config::CustomCommand;
 use crate::domain::{EditAction, EditOp, PipelineAction};
 use crate::keycodes::parse_chord;
 
-use super::commands::{detect_command, normalize_command_text};
+use super::commands::{detect_command, normalize_command_text, normalize_custom_text};
 use super::grammar::{CHORD_KEYS, MODIFIER_WORDS, PRESS_KEYS};
 
 /// The action for the first custom command whose phrase and scope both match.
@@ -51,14 +73,14 @@ pub fn match_custom(
     if commands.is_empty() {
         return None;
     }
-    let spoken = normalize_command_text(text);
+    let spoken = normalize_custom_text(text);
     if spoken.is_empty() {
         return None;
     }
     commands
         .iter()
         .find(|command| {
-            normalize_command_text(&command.phrase) == spoken && scope_allows(command, app)
+            normalize_custom_text(&command.phrase) == spoken && scope_allows(command, app)
         })
         .and_then(action_for)
 }
@@ -72,9 +94,13 @@ pub fn match_custom(
 /// silently stop working the moment the user said anything before it — which is
 /// the bug that shipped for the built-ins in 0.2.0 and is worth not repeating.
 ///
-/// Shares `word_starts` and the word cap with the built-in scan rather than
-/// re-deriving them: two ideas of where a word begins would disagree on exactly
-/// the inputs nobody thinks to test.
+/// Shares its word-splitting and the word cap with the built-in scan rather
+/// than re-deriving them: two ideas of where a word begins would disagree on
+/// exactly the inputs nobody thinks to test.
+///
+/// The one difference is that a slash opens a word here. It has to: the mark is
+/// `Attach::Tight`, so "... for now slash clear" arrives as `... for now/clear`
+/// and a whitespace-only split can never offer `/clear` as a tail.
 #[must_use]
 pub fn split_trailing_custom(
     text: &str,
@@ -84,7 +110,7 @@ pub fn split_trailing_custom(
     if commands.is_empty() {
         return None;
     }
-    let starts = super::commands::word_starts(text);
+    let starts = super::commands::word_starts_with_slash(text);
     // `saturating_sub(1)` leaves at least one word in front: a command that is
     // the *whole* utterance is `match_custom`'s to find, and returning an empty
     // prefix here would inject a stray separator ahead of it.
@@ -179,7 +205,7 @@ pub fn validate(commands: &[CustomCommand]) -> Vec<String> {
     let mut seen: Vec<(String, Option<String>)> = Vec::new();
 
     for command in commands {
-        let phrase = normalize_command_text(&command.phrase);
+        let phrase = normalize_custom_text(&command.phrase);
         let quoted = &command.phrase;
 
         if phrase.is_empty() {
@@ -216,8 +242,15 @@ pub fn validate(commands: &[CustomCommand]) -> Vec<String> {
 
         // Mode switching on, command mode off: the widest set a built-in can
         // occupy, so a phrase cleared here is clear in every mode.
+        //
+        // Asked with the *strict* normalization, deliberately, because that is
+        // what `detect_command` will see at runtime: it strips the slash before
+        // looking a built-in up, so "/clear" is shadowed by a built-in "clear"
+        // even though the two are different phrases to a custom command. Asking
+        // this question with the slash still on would clear a phrase that can
+        // never fire, which is the one outcome this check exists to prevent.
         if !matches!(
-            detect_command(&phrase, true, false),
+            detect_command(&normalize_command_text(&command.phrase), true, false),
             PipelineAction::Text(_)
         ) {
             problems.push(format!(
@@ -531,5 +564,115 @@ mod tests {
             app: None,
         }]);
         assert_eq!(problems.len(), 1, "{problems:?}");
+    }
+}
+
+#[cfg(test)]
+mod slash_phrase_tests {
+    use super::{match_custom, split_trailing_custom, validate};
+    use crate::config::CustomCommand;
+    use crate::correction::punctuation::apply_spoken_punctuation;
+    use crate::domain::PipelineAction;
+
+    fn clear() -> Vec<CustomCommand> {
+        vec![CustomCommand {
+            phrase: "/clear".to_owned(),
+            insert: Some("/clear".to_owned()),
+            press: None,
+            app: None,
+        }]
+    }
+
+    /// What the user actually says, through the stage that runs before matching.
+    fn spoken(words: &str) -> String {
+        apply_spoken_punctuation(words)
+    }
+
+    #[test]
+    fn saying_slash_clear_fires_the_command() {
+        assert_eq!(spoken("slash clear"), "/clear");
+        assert!(matches!(
+            match_custom(&spoken("slash clear"), &clear(), None),
+            Some(PipelineAction::Text(text)) if text == "/clear"
+        ));
+    }
+
+    /// The bug the slash exists to fix. `split_trailing_custom` scans the end of
+    /// every sentence, so a bare "clear" phrase turned ordinary prose into a
+    /// command and swallowed the words in front of it.
+    #[test]
+    fn ordinary_prose_ending_in_the_word_does_not() {
+        let sentence = spoken("let me make that clear");
+        assert!(match_custom(&sentence, &clear(), None).is_none());
+        assert!(split_trailing_custom(&sentence, &clear(), None).is_none());
+    }
+
+    #[test]
+    fn the_bare_word_alone_does_not_either() {
+        assert!(match_custom("clear", &clear(), None).is_none());
+    }
+
+    #[test]
+    fn a_slash_command_still_works_at_the_end_of_an_utterance() {
+        // Streaming makes an utterance the whole session, so this is the path
+        // that matters in practice, not the whole-string one.
+        let said = spoken("that is enough for now slash clear");
+        let (before, action) =
+            split_trailing_custom(&said, &clear(), None).expect("the trailing command is found");
+        assert_eq!(before, "that is enough for now");
+        assert!(matches!(action, PipelineAction::Text(text) if text == "/clear"));
+    }
+
+    /// The one character is the only difference from the built-in folding.
+    ///
+    /// Case, the exclamation mark and the apostrophe are all still removed. The
+    /// apostrophe becomes a *space*, which is worth pinning: "Let's Go!" is
+    /// three words after folding, so it is "let s go" that matches and not
+    /// "lets go". The module doc asserted the opposite for as long as it has
+    /// existed.
+    #[test]
+    fn everything_but_the_slash_is_still_folded_away() {
+        let commands = vec![CustomCommand {
+            phrase: "Let's Go!".to_owned(),
+            insert: Some("x".to_owned()),
+            press: None,
+            app: None,
+        }];
+        assert!(match_custom("let s go", &commands, None).is_some());
+        assert!(match_custom("lets go", &commands, None).is_none());
+    }
+
+    /// A phrase that `detect_command` would claim first is still reported, even
+    /// though the slash makes it a different phrase to a custom command.
+    #[test]
+    fn shadowing_is_judged_the_way_the_built_in_will_see_it() {
+        let shadowed = vec![CustomCommand {
+            phrase: "/new line".to_owned(),
+            insert: Some("x".to_owned()),
+            press: None,
+            app: None,
+        }];
+        let problems = validate(&shadowed);
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].contains("built-in"), "{problems:?}");
+    }
+
+    #[test]
+    fn two_slash_phrases_are_not_duplicates_of_each_other() {
+        let both = vec![
+            CustomCommand {
+                phrase: "/clear".to_owned(),
+                insert: Some("/clear".to_owned()),
+                press: None,
+                app: None,
+            },
+            CustomCommand {
+                phrase: "/compact".to_owned(),
+                insert: Some("/compact".to_owned()),
+                press: None,
+                app: None,
+            },
+        ];
+        assert!(validate(&both).is_empty(), "{:?}", validate(&both));
     }
 }
