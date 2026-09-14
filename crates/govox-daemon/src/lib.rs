@@ -23,6 +23,7 @@
 //! snapshot. `govox-py` instead rebinds attributes from the GLib tray thread
 //! with no synchronisation, which is sound only because of the GIL.
 
+pub mod control;
 pub mod daemon;
 pub mod diagnostics;
 pub mod feedback;

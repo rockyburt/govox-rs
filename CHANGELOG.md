@@ -43,6 +43,19 @@ before 1.0.0, minor versions may change behaviour.
 
 ### Added
 
+- **Dictation can be controlled over D-Bus.** govox claims `io.github.rockyburt.Govox` on the
+  session bus and serves `Start`, `Stop` and `Toggle` at `/io/github/rockyburt/Govox`
+  (interface `io.github.rockyburt.Govox.Dictation`), each returning whether it is listening
+  afterwards, plus a read-only `Listening` property.
+
+  Until now the only way in was the activation gesture, and a program cannot perform it
+  reliably. A double tap synthesized with `ydotool` does reach the evdev reader, but the
+  window is measured on the event loop, which a streaming decode stalls — so a stop sent
+  mid-dictation was the request most likely to land late and be read as the first tap of a
+  new pair. A method call is queued instead: late at worst, never lost. A requested stop
+  commits, like the overlay's button. If the name is already taken govox logs it and runs
+  without the interface, as it does without an input method.
+
 - **Bias terms can be scoped to the focused window.** `[[dictionary.bias_group]]` takes a
   `while_using` pattern — the same window-label matching `feedback.app_rules` uses — and
   contributes its terms only while that window has focus.

@@ -110,6 +110,23 @@ cp packaging/systemd/govox.service ~/.config/systemd/user/
 systemctl --user enable --now govox
 ```
 
+### From another program
+
+A macro pad, a launcher or a script can start and stop dictation over D-Bus, without faking
+the key gesture:
+
+```bash
+busctl --user call io.github.rockyburt.Govox /io/github/rockyburt/Govox \
+    io.github.rockyburt.Govox.Dictation Toggle
+```
+
+`Start`, `Stop` and `Toggle` each return whether govox is listening afterwards, and the
+`Listening` property reads it without changing anything. `Stop` keeps what you said, like
+clicking the overlay. Push-to-talk refuses a remote `Start`, since only releasing the key
+ends that kind of session. Prefer this to synthesizing the double tap with `ydotool`: the
+tap is timed on a loop that recognition can stall, so a faked stop is the request most
+likely to be missed, whereas a method call is queued and handled in order.
+
 ## Configure
 
 Settings live in `~/.config/govox/config.toml` and are layered over the built-in

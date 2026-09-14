@@ -113,6 +113,35 @@ impl Transition {
     }
 }
 
+/// A request to change dictation that did not come from a key.
+///
+/// The D-Bus control interface sends these, so another program — a macro pad,
+/// a launcher, a script — can drive govox without synthesizing the activation
+/// gesture. Synthesizing it is unreliable by construction: the double tap is
+/// timed on the event loop, which a streaming decode can stall past the window,
+/// and any ordinary key landing between the taps cancels them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ControlRequest {
+    Start,
+    /// End the session and keep what was said, like the overlay's stop button.
+    Stop,
+    /// Start when idle, stop when listening — decided by the controller's own
+    /// state, so a caller cannot get out of step with it.
+    Toggle,
+}
+
+impl ControlRequest {
+    /// The name the request is logged under.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Start => "start",
+            Self::Stop => "stop",
+            Self::Toggle => "toggle",
+        }
+    }
+}
+
 /// Tracks listening state across the three activation modes.
 ///
 /// `now_s` is passed in rather than read from the clock so double-tap timing is
@@ -298,6 +327,48 @@ impl ActivationController {
     /// `handle_event_at`; this is the same transition by another door.
     pub fn abort(&mut self) -> Option<Transition> {
         self.stop()
+    }
+
+    /// Start, stop or toggle a session on request, from outside the key path.
+    ///
+    /// A stop *commits*: it is [`Transition::StopListening`], the overlay
+    /// button's "I am done", not the stop key's discard. A caller that wants
+    /// the text thrown away has the stop key for it.
+    ///
+    /// Three things differ from the key gesture, all on purpose:
+    ///
+    /// - **A half-finished tap is forgotten**, toggle or stop. The request is a
+    ///   decision in its own right, and a stray first tap left pending would
+    ///   pair with the next real one and flip the session straight back.
+    /// - **It is never absorbed** by the guard after an automatic stop. That
+    ///   guard exists for a hand still finishing its gesture; a program asking
+    ///   to start has no gesture to finish.
+    /// - **Push-to-talk refuses to start.** That mode has no latched session:
+    ///   nothing but the key's release ends one, and the silence auto-stop is
+    ///   off for it, so a session started without the key down would run until
+    ///   something else noticed. Stopping still works.
+    ///
+    /// `None` when nothing changed — starting while listening, stopping while
+    /// idle — so the daemon applies transitions from here exactly as it does
+    /// from a key.
+    pub fn request(&mut self, request: ControlRequest) -> Option<Transition> {
+        self.last_tap_ts = None;
+        self.last_stop_tap_ts = None;
+        let start = match request {
+            ControlRequest::Start => true,
+            ControlRequest::Stop => false,
+            ControlRequest::Toggle => !self.listening,
+        };
+        if start {
+            if self.mode == ActivationMode::PushToTalk {
+                return None;
+            }
+            self.last_auto_stop_ts = None;
+            self.toggle_active = true;
+        } else {
+            self.toggle_active = false;
+        }
+        self.set_listening(start)
     }
 
     /// End a running session, or report nothing if none is running.
@@ -917,5 +988,114 @@ mod tests {
     fn transitions_name_the_indicator_state() {
         assert_eq!(Transition::StartListening.state(), "listening");
         assert_eq!(Transition::StopListening.state(), "idle");
+    }
+
+    #[test]
+    fn a_requested_start_and_stop_drive_the_session() {
+        let mut c = controller(ActivationMode::DoubleTap);
+        assert_eq!(
+            c.request(ControlRequest::Start),
+            Some(Transition::StartListening)
+        );
+        assert!(c.listening());
+        assert_eq!(
+            c.request(ControlRequest::Stop),
+            Some(Transition::StopListening),
+            "a requested stop commits; the stop key is the one that discards"
+        );
+        assert!(!c.listening());
+    }
+
+    #[test]
+    fn a_request_that_changes_nothing_reports_nothing() {
+        let mut c = controller(ActivationMode::DoubleTap);
+        assert_eq!(c.request(ControlRequest::Stop), None, "stop while idle");
+        c.request(ControlRequest::Start);
+        assert_eq!(
+            c.request(ControlRequest::Start),
+            None,
+            "start while listening"
+        );
+        assert!(c.listening());
+    }
+
+    #[test]
+    fn a_requested_toggle_follows_the_real_state() {
+        for mode in [ActivationMode::Toggle, ActivationMode::DoubleTap] {
+            let mut c = controller(mode);
+            assert_eq!(
+                c.request(ControlRequest::Toggle),
+                Some(Transition::StartListening),
+                "{mode:?}"
+            );
+            assert_eq!(
+                c.request(ControlRequest::Toggle),
+                Some(Transition::StopListening),
+                "{mode:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_request_hands_a_key_started_session_back_to_the_key() {
+        // Started by the gesture, stopped by a request, started by the gesture
+        // again: the latch must agree with `listening` at every step, or the
+        // next tap would "stop" a session that is not running.
+        let mut c = controller(ActivationMode::DoubleTap);
+        c.handle_event_at(&down(TOGGLE), 0.0);
+        c.handle_event_at(&down(TOGGLE), 0.1);
+        assert_eq!(
+            c.request(ControlRequest::Toggle),
+            Some(Transition::StopListening)
+        );
+        c.handle_event_at(&down(TOGGLE), 5.0);
+        assert_eq!(
+            c.handle_event_at(&down(TOGGLE), 5.1),
+            Some(Transition::StartListening)
+        );
+    }
+
+    #[test]
+    fn a_request_forgets_a_half_finished_tap() {
+        let mut c = controller(ActivationMode::DoubleTap);
+        assert_eq!(c.handle_event_at(&down(TOGGLE), 0.0), None, "first tap");
+        c.request(ControlRequest::Start);
+        assert_eq!(
+            c.handle_event_at(&down(TOGGLE), 0.1),
+            None,
+            "the pending tap must not pair with this one and stop the session"
+        );
+        assert!(c.listening());
+    }
+
+    #[test]
+    fn a_requested_start_is_not_absorbed_after_an_auto_stop() {
+        let mut c = controller(ActivationMode::DoubleTap);
+        c.request(ControlRequest::Start);
+        c.auto_stop_at(10.0);
+        assert_eq!(
+            c.request(ControlRequest::Start),
+            Some(Transition::StartListening),
+            "the guard is for a hand mid-gesture, and a request has none"
+        );
+    }
+
+    #[test]
+    fn push_to_talk_refuses_a_requested_start_but_honours_a_stop() {
+        let mut c = controller(ActivationMode::PushToTalk);
+        assert_eq!(c.request(ControlRequest::Start), None);
+        assert_eq!(c.request(ControlRequest::Toggle), None);
+        assert!(!c.listening());
+
+        c.handle_event(&down(PTT));
+        assert_eq!(
+            c.request(ControlRequest::Stop),
+            Some(Transition::StopListening)
+        );
+        assert_eq!(
+            c.handle_event(&up(PTT)),
+            None,
+            "the release after a requested stop has nothing left to end"
+        );
     }
 }

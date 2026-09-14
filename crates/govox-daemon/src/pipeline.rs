@@ -20,6 +20,7 @@
 use std::collections::{BTreeSet, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use govox_asr::whisper::{WhisperHandle, WhisperRecognizer};
 use govox_audio::{Backoff, CaptureSupervisor};
@@ -40,6 +41,7 @@ use govox_vad::{SileroVad, SpeechProbability};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+use crate::control::{ControlMessage, Dictation};
 use crate::daemon::{Announcer, Daemon, ReloadTrigger, Transcriber};
 use crate::feedback::FeedbackChannel;
 use crate::state::SharedState;
@@ -418,6 +420,45 @@ pub async fn run(
         });
     }
 
+    // The D-Bus control interface. A degrade, never a stop, like the input
+    // method: without it govox is the key-driven daemon it always was. The
+    // usual failure is a second govox already holding the name, and that one
+    // is the daemon a caller should be reaching anyway.
+    //
+    // Requests travel into the loop as events, like the tray's, so a start or
+    // stop runs on the task that owns the activation state.
+    let listening_flag = Arc::new(AtomicBool::new(false));
+    let (control_tx, mut control_rx) = mpsc::channel::<ControlMessage>(16);
+    {
+        let events = events_tx.clone();
+        tokio::spawn(async move {
+            while let Some(message) = control_rx.recv().await {
+                if events.send(Event::Control(message)).await.is_err() {
+                    return;
+                }
+            }
+        });
+    }
+    // Held for the life of the run: the connection is the name's registration.
+    let _control = match crate::control::serve(Dictation::new(
+        control_tx,
+        Arc::clone(&listening_flag),
+    ))
+    .await
+    {
+        Ok(connection) => {
+            tracing::info!(
+                name = crate::control::BUS_NAME,
+                "control interface on the session bus"
+            );
+            Some(connection)
+        }
+        Err(error) => {
+            tracing::info!(%error, "continuing without the control interface");
+            None
+        }
+    };
+
     spawn_keyboard_supervisor(keys.clone(), &events_tx, &shared, &cancel);
     spawn_capture(&device, sample_rate, frame_ms, &events_tx, &cancel);
 
@@ -486,6 +527,7 @@ pub async fn run(
         last_compact: None,
         last_decode: None,
         cancel: cancel.clone(),
+        listening_flag,
     };
     loop_state.run(events, &cancel).await;
 
@@ -622,6 +664,11 @@ enum Event {
     /// Separate from `StopRequested` because the overlay's stop button means
     /// "I am done", while the stop key means "this should not be happening".
     AbortRequested(&'static str),
+    /// Start, stop or toggle, from the D-Bus control interface.
+    ///
+    /// Carries its reply channel: the caller is waiting to learn whether govox
+    /// ended up listening.
+    Control(ControlMessage),
 }
 
 struct EventLoop<'a, A: Announcer> {
@@ -696,6 +743,11 @@ struct EventLoop<'a, A: Announcer> {
     /// the loop has had at least as long to breathe — see [`Self::feed_streaming`].
     last_decode: Option<(std::time::Instant, std::time::Duration)>,
     cancel: CancellationToken,
+    /// The control interface's `Listening` property, published after every
+    /// event rather than at each place a session can start or end — keys, the
+    /// overlay, Escape in a preedit field, the silence timeout and the control
+    /// interface itself — because a property that missed one would lie.
+    listening_flag: Arc<AtomicBool>,
 }
 
 impl<A: Announcer> EventLoop<'_, A> {
@@ -1016,6 +1068,26 @@ impl<A: Announcer> EventLoop<'_, A> {
                     );
                     self.auto_stop(reason).await;
                 }
+                Event::Control(message) => {
+                    let request = message.request.name();
+                    match self.controller.request(message.request) {
+                        Some(transition) => {
+                            tracing::info!(request, state = transition.state(), "control request");
+                            self.apply_transition(transition).await;
+                        }
+                        // Logged, like a stop asked while idle: a request that
+                        // changed nothing must be distinguishable from one that
+                        // never arrived.
+                        None => tracing::debug!(
+                            request,
+                            listening = self.controller.listening(),
+                            "control request changed nothing"
+                        ),
+                    }
+                    // After the transition has run, so a caller that goes on to
+                    // dictate is answered once the session is actually open.
+                    let _ = message.reply.send(self.controller.listening());
+                }
                 Event::Tray(command) => match command {
                     TrayCommand::Reload => {
                         let _ = self.reloads.send(ReloadTrigger::Requested);
@@ -1027,6 +1099,8 @@ impl<A: Announcer> EventLoop<'_, A> {
                     }
                 },
             }
+            self.listening_flag
+                .store(self.controller.listening(), Ordering::Relaxed);
         }
         tracing::debug!("event loop exited");
     }
@@ -1036,7 +1110,15 @@ impl<A: Announcer> EventLoop<'_, A> {
             return;
         };
         tracing::info!(state = transition.state(), "activation");
+        self.apply_transition(transition).await;
+    }
 
+    /// Carry out a transition, whichever door it came through.
+    ///
+    /// One body for the key and the control interface, so a session started
+    /// over D-Bus sets up exactly what a key-started one does — the input
+    /// method, the app rule, the bias, the streaming reset.
+    async fn apply_transition(&mut self, transition: Transition) {
         self.announcer.set_state(transition.state());
 
         match transition {
