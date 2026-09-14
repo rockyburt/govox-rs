@@ -8,7 +8,9 @@ use std::collections::VecDeque;
 
 use govox_core::config::{BufferTrimming, StreamingConfig};
 use govox_core::domain::{GovoxError, WordRecognizer};
-use govox_core::streaming::{HypothesisBuffer, TimedWord, join_words, trim_point};
+use govox_core::streaming::{
+    HypothesisBuffer, TimedWord, join_words, rescale_into_window, timing_is_plausible, trim_point,
+};
 
 use crate::whisper::WhisperHandle;
 
@@ -32,6 +34,18 @@ impl StreamingUpdate {
     pub fn caption(&self) -> String {
         format!("{}{}", self.committed, self.pending)
     }
+}
+
+/// Whether a decode will be followed by another that can correct it.
+///
+/// The one question that decides what to do with a hypothesis whose timing
+/// cannot be true: mid-session it is skipped, because the next decode re-reads
+/// the same audio; at the end of a session there is no next decode, so it is
+/// repaired instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Decode {
+    Ongoing,
+    Final,
 }
 
 /// Feeds a growing window to a recognizer and commits what two passes agree on.
@@ -94,11 +108,55 @@ impl<R: WordRecognizer> OnlineProcessor<R> {
     /// # Errors
     /// If the model fails.
     pub async fn process(&mut self) -> Result<StreamingUpdate, GovoxError> {
+        self.decode(Decode::Ongoing).await
+    }
+
+    async fn decode(&mut self, which: Decode) -> Result<StreamingUpdate, GovoxError> {
         if self.audio.is_empty() {
             return Ok(StreamingUpdate::default());
         }
         let window: Vec<f32> = self.audio.iter().copied().collect();
-        let words = self.asr.transcribe_words(&window).await?;
+        let window_s = self.buffered_s();
+        let mut words = self.asr.transcribe_words(&window).await?;
+
+        // Timing that cannot be true must not reach the agreement buffer, which
+        // runs on timing. See `timing_is_plausible` for how one such decode
+        // freezes a session: committed words stamped at 30 s make every later,
+        // correctly stamped word look already seen.
+        if !timing_is_plausible(&words, window_s) {
+            let latest_end_s = words.iter().map(|w| w.end).fold(0.0_f64, f64::max);
+            match which {
+                // Skipped, not repaired. The next decode re-reads this whole
+                // window anyway, so nothing is lost by it — while approximate
+                // times committed now would be the freeze by another route. The
+                // standing hypothesis is returned unchanged so the caption holds
+                // steady rather than blanking for a beat.
+                Decode::Ongoing => {
+                    tracing::info!(
+                        window_s,
+                        latest_end_s,
+                        words = words.len(),
+                        "discarding a decode whose word times run past its audio"
+                    );
+                    return Ok(StreamingUpdate {
+                        committed: String::new(),
+                        pending: join_words(self.hypotheses.incomplete()),
+                    });
+                }
+                // Nothing decodes after this one, so a skipped final decode
+                // would lose the session's last words outright. Approximate
+                // times are strictly better than none.
+                Decode::Final => {
+                    tracing::info!(
+                        window_s,
+                        latest_end_s,
+                        words = words.len(),
+                        "rescaling the final decode's word times into its audio"
+                    );
+                    words = rescale_into_window(words, window_s);
+                }
+            }
+        }
 
         // The model sees only the window, so its timestamps start at zero;
         // shift them so everything downstream works in session time.
@@ -237,7 +295,7 @@ impl<R: WordRecognizer> OnlineProcessor<R> {
         // reaching for the key, which decodes to the stock phrase, appended.
         let mut tail = String::new();
         if decode_tail && !self.audio.is_empty() {
-            match self.process().await {
+            match self.decode(Decode::Final).await {
                 Ok(update) => tail.push_str(&update.committed),
                 Err(error) => {
                     tracing::warn!(%error, "final decode failed; keeping what was already agreed");
@@ -330,6 +388,114 @@ mod tests {
             "again",
             "a word decoded after a trim was discarded as already-seen"
         );
+    }
+
+    /// Real word times, inside the audio: 0.35 s apart.
+    fn heard(texts: &[&str]) -> Vec<TimedWord> {
+        texts
+            .iter()
+            .enumerate()
+            .map(|(i, w)| word(i as f64 * 0.35, i as f64 * 0.35 + 0.3, w))
+            .collect()
+    }
+
+    /// A decode that ended without a closing timestamp token, as whisper.cpp
+    /// reports it: the segment's end is `seek + seek_delta`, the end of the
+    /// 30-second model window, and the words are spread across all of it.
+    fn stampless(texts: &[&str]) -> Vec<TimedWord> {
+        let step = 30.0 / texts.len() as f64;
+        texts
+            .iter()
+            .enumerate()
+            .map(|(i, w)| word(i as f64 * step, (i + 1) as f64 * step, w))
+            .collect()
+    }
+
+    fn words(line: &str) -> Vec<&str> {
+        line.split(' ').collect()
+    }
+
+    /// The freeze, as it happened on 2026-09-14 at 11:20: the recogniser went
+    /// on hearing "...about the St. John's hop being skipped?" for six seconds
+    /// while the caption stayed at "...about", and the tail was never typed.
+    ///
+    /// Two timestamp-less decodes in a row agreed, committed their words at
+    /// ~30 s, and every correctly stamped word after that was discarded as
+    /// already seen — including in the final decode, so it was lost at commit.
+    #[tokio::test]
+    async fn a_decode_stamped_past_its_audio_does_not_freeze_the_session() {
+        let about = words("is there anything I can do about");
+        let johns = words("is there anything I can do about the St. John's");
+        let hop = words("is there anything I can do about the St. John's hop");
+        let skipped = words("is there anything I can do about the St. John's hop being skipped?");
+        let asr = ScriptedWordRecognizer::saying(vec![
+            heard(&about),
+            heard(&about),
+            stampless(&johns),
+            stampless(&johns),
+            heard(&hop),
+            heard(&skipped),
+            heard(&skipped),
+            heard(&skipped),
+        ]);
+        let mut processor = OnlineProcessor::new(asr, &config(0.5, 60.0), RATE);
+
+        // Enough audio up front that the real word times fit inside it.
+        processor.push(&audio(4.0));
+        let mut session = String::new();
+        let mut last_caption = String::new();
+        for _ in 0..7 {
+            processor.push(&audio(0.5));
+            let update = processor.process().await.unwrap();
+            session.push_str(&update.committed);
+            last_caption = format!("{session}{}", update.pending);
+        }
+        assert!(
+            last_caption.contains("skipped?"),
+            "the caption froze: {last_caption:?}"
+        );
+
+        session.push_str(&processor.finish(true).await);
+        assert!(
+            session.contains("hop") && session.contains("skipped?"),
+            "the session's tail was lost at commit: {session:?}"
+        );
+    }
+
+    /// Skipping a decode must not blank the caption for a beat.
+    #[tokio::test]
+    async fn a_discarded_decode_keeps_showing_what_was_already_there() {
+        let asr = ScriptedWordRecognizer::saying(vec![
+            heard(&words("we drove out")),
+            stampless(&words("we drove out to")),
+        ]);
+        let mut processor = OnlineProcessor::new(asr, &config(0.5, 60.0), RATE);
+        processor.push(&audio(4.0));
+        let before = processor.process().await.unwrap().caption();
+        processor.push(&audio(0.5));
+        let after = processor.process().await.unwrap();
+        assert_eq!(after.caption(), before);
+        assert!(!after.is_empty());
+    }
+
+    /// The limit of skipping, covered: if no decode in a session is ever
+    /// believable, the final one is repaired rather than dropped, so the words
+    /// are still typed.
+    #[tokio::test]
+    async fn a_session_with_no_believable_timing_still_types_its_words() {
+        let said = words("slash compact please");
+        let asr = ScriptedWordRecognizer::saying(vec![
+            stampless(&said),
+            stampless(&said),
+            stampless(&said),
+        ]);
+        let mut processor = OnlineProcessor::new(asr, &config(0.5, 60.0), RATE);
+        processor.push(&audio(2.0));
+        processor.process().await.unwrap();
+        processor.push(&audio(0.5));
+        processor.process().await.unwrap();
+        let tail = processor.finish(true).await;
+        assert!(tail.contains("compact"), "the words were lost: {tail:?}");
     }
 
     /// The pre-roll drop moves the buffer origin, and must not be allowed to

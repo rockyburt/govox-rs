@@ -415,6 +415,68 @@ pub fn is_silence_artifact(text: &str) -> bool {
     !cleaned.contains(' ') && (cleaned.starts_with("www") || cleaned.ends_with("com"))
 }
 
+/// How far past the end of its audio a decode may stamp a word before its
+/// timing is disbelieved.
+///
+/// Measured, not guessed. Over a 67-decode trace of seven eval clips joined
+/// into one session, every accepted decode ended its last word at most 0.50 s
+/// past its audio (p50 -0.04 s, p99 0.50 s) — whisper's timestamps run slightly
+/// into the padding it appends. The slack is twice that worst case.
+///
+/// The errors it exists to catch are far larger. A decode that finds no
+/// timestamp token keeps whisper.cpp's default `seek_delta` of
+/// `100 * WHISPER_CHUNK_SIZE`, so its last segment ends at `seek + 3000` —
+/// **30.00 s**, however little audio there was; that is the `seek = 3000` line
+/// in the daemon's log. A milder variant, a predicted timestamp token past the
+/// end of the audio, was seen in the same trace at 1.14 s over.
+pub const TIMING_SLACK_S: f64 = 1.0;
+
+/// Whether every word in a window-relative hypothesis ends inside the audio
+/// that produced it.
+///
+/// A hypothesis that fails this has timing that cannot be true, and timing is
+/// what [`HypothesisBuffer`] runs on: it anchors the join to the commit point
+/// and, failing that, drops every word that starts before it. Admit a decode
+/// whose words claim to end at 30 s and, if two such decodes agree, those words
+/// are committed at 30 s — after which every real word, stamped at 3 s or 8 s,
+/// looks already seen and is discarded. The caption freezes mid-sentence and
+/// the session's tail is lost at commit, silently, while the recogniser goes on
+/// hearing every word correctly.
+///
+/// An empty hypothesis is plausible: it claims nothing.
+#[must_use]
+pub fn timing_is_plausible(words: &[TimedWord], window_s: f64) -> bool {
+    words
+        .iter()
+        .all(|word| word.end <= window_s + TIMING_SLACK_S)
+}
+
+/// Stretch or squeeze a hypothesis's word times so its last word ends at the
+/// end of the audio, keeping every word's relative position.
+///
+/// The fallback for a decode with nothing after it to correct it — the final
+/// decode of a session — where discarding an implausible hypothesis would lose
+/// the last words outright. The positions are approximate by construction,
+/// which is exactly why this is not used mid-session: approximate times
+/// committed there are the mechanism behind the freeze
+/// [`timing_is_plausible`] prevents. At the end of a session nothing is decoded
+/// again, so approximate is strictly better than nothing.
+///
+/// Scaling rather than clamping: clamping piles every late word onto the same
+/// instant, which the overlap search reads as one word said many times.
+#[must_use]
+pub fn rescale_into_window(words: Vec<TimedWord>, window_s: f64) -> Vec<TimedWord> {
+    let latest = words.iter().map(|word| word.end).fold(0.0_f64, f64::max);
+    if latest <= 0.0 {
+        return words;
+    }
+    let scale = window_s / latest;
+    words
+        .into_iter()
+        .map(|word| TimedWord::new(word.start * scale, word.end * scale, word.text))
+        .collect()
+}
+
 /// Join committed words into displayable text.
 ///
 /// Whisper emits each word with its own leading space, so the separator is the
@@ -1003,5 +1065,62 @@ mod tests {
         committed.extend(texts(buffer.incomplete()));
 
         assert_eq!(committed, script, "words were duplicated or dropped");
+    }
+}
+
+#[cfg(test)]
+mod implausible_timing_tests {
+    use super::{TIMING_SLACK_S, TimedWord, rescale_into_window, timing_is_plausible};
+
+    fn word(start: f64, end: f64) -> TimedWord {
+        TimedWord::new(start, end, "w")
+    }
+
+    #[test]
+    fn words_inside_the_audio_are_believed() {
+        assert!(timing_is_plausible(&[word(0.0, 0.4), word(0.5, 2.4)], 2.5));
+    }
+
+    #[test]
+    fn a_frame_or_two_of_rounding_is_not_a_reason_to_discard_a_decode() {
+        assert!(timing_is_plausible(&[word(2.0, 2.5 + TIMING_SLACK_S)], 2.5));
+    }
+
+    /// The real case: a timestamp-less decode from 2.5 s of audio, its words
+    /// spread by whisper.cpp across the whole 30 s model window.
+    #[test]
+    fn words_stamped_at_the_end_of_the_model_window_are_not() {
+        assert!(!timing_is_plausible(
+            &[word(0.0, 3.75), word(26.25, 30.0)],
+            2.5
+        ));
+    }
+
+    #[test]
+    fn an_empty_hypothesis_claims_nothing() {
+        assert!(timing_is_plausible(&[], 2.5));
+    }
+
+    #[test]
+    fn rescaling_ends_the_last_word_at_the_end_of_the_audio() {
+        let scaled = rescale_into_window(vec![word(0.0, 15.0), word(15.0, 30.0)], 3.0);
+        assert!((scaled[1].end - 3.0).abs() < 1e-9);
+        assert!(timing_is_plausible(&scaled, 3.0));
+    }
+
+    /// Clamping would pile the late words onto one instant; scaling keeps them
+    /// apart and in order.
+    #[test]
+    fn rescaling_keeps_every_word_in_its_place() {
+        let scaled = rescale_into_window(
+            vec![word(0.0, 10.0), word(10.0, 20.0), word(20.0, 30.0)],
+            3.0,
+        );
+        assert!(
+            scaled
+                .windows(2)
+                .all(|pair| pair[0].end <= pair[1].start + 1e-9)
+        );
+        assert!(scaled.iter().all(|w| w.start < w.end));
     }
 }
