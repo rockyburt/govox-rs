@@ -116,7 +116,7 @@ before 1.0.0, minor versions may change behaviour.
   always fit and it is discovered terms that give way. Expect the existing overflow warning
   to start naming dropped discovered terms — it could never fire before, which was the same
   bug. To keep more of them, raise `[recognition] bias_prompt_token_budget` towards its
-  real ceiling of about 218; a value past that is capped, with a warning, because an
+  real ceiling of 219; a value past that is capped, with a warning, because an
   over-long prompt does not fail, it truncates. A prompt that ever does overrun is now
   logged. The About menu's bias row reads in tokens.
 

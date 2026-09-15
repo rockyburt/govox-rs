@@ -26,6 +26,11 @@ async fn the_planned_prompt_fits_and_keeps_every_hand_written_term() {
     let handle = recognizer.handle();
     handle.warm_up().await.expect("the model loads");
     let count = |text: &str| handle.count_tokens(text);
+    let frame = count(govox_asr::PROMPT_FRAME).expect("countable");
+    eprintln!(
+        "framing sentence: {frame} tokens, so bias_prompt_token_budget can go to {}",
+        MAX_PROMPT_TOKENS - frame
+    );
 
     let loaded = govox_daemon::load_dictionary_with_discovery(&config, &count)
         .expect("the dictionary plans");
