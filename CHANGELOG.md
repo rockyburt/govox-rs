@@ -102,6 +102,27 @@ before 1.0.0, minor versions may change behaviour.
 
 ### Fixed
 
+- **Hand-written bias terms reach the recogniser again.** With `[dictionary.discover]`
+  switched on, none of the terms in your `bias` list had been biasing recognition — a
+  word like "Jira" came out as "jurr", "juror" or "jurid" however long it had been listed.
+
+  The prompt budget was counted in words, but whisper.cpp counts tokens, and discovered
+  names such as `Rentals-Deploy-Envs` or `govox_blue` are several tokens each. A list that
+  looked like 110 of 180 words was 311 tokens, and whisper.cpp reads only the last 223 of
+  a prompt: it drops the front without a warning, and the front is where your hand-written
+  terms go. The decode still succeeded, so nothing looked wrong.
+
+  The budget is now planned in the loaded model's own tokens, so the hand-written terms
+  always fit and it is discovered terms that give way. Expect the existing overflow warning
+  to start naming dropped discovered terms — it could never fire before, which was the same
+  bug. To keep more of them, raise `[recognition] bias_prompt_token_budget` towards its
+  real ceiling of about 218; a value past that is capped, with a warning, because an
+  over-long prompt does not fail, it truncates. A prompt that ever does overrun is now
+  logged. The About menu's bias row reads in tokens.
+
+  Any dictionary rule you added on the grounds that bias "was tried and lost" was judged
+  while bias was not being applied; it may no longer be needed.
+
 - **Full stops no longer appear in the middle of sentences that do not end.** Whisper
   decodes each streaming window as though it were a complete utterance, so the word at the
   window's edge arrives with a sentence ending nobody spoke.
