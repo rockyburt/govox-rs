@@ -96,8 +96,14 @@ pub fn load_dictionary(config: &Config) -> Result<PersonalDictionary, Dictionary
 ///
 /// # Errors
 /// If the dictionary file cannot be read or does not parse.
+///
+/// `count_tokens` is the recogniser's own tokenizer, or `None` for "not
+/// loaded". The bias budget is planned in its tokens, because that is what
+/// whisper.cpp truncates by — see [`govox_asr::MAX_PROMPT_TOKENS`] — and a
+/// pessimistic estimate stands in only where there is no model to ask.
 pub fn load_dictionary_with_discovery(
     config: &Config,
+    count_tokens: &dyn Fn(&str) -> Option<usize>,
 ) -> Result<LoadedDictionary, DictionaryLoadError> {
     let mut dictionary = load_dictionary(config)?;
     let Some(spec) = dictionary.discover.clone() else {
@@ -112,11 +118,15 @@ pub fn load_dictionary_with_discovery(
     let extra = audio_device_candidates(config, &spec);
     let found = govox_discover::discover(&spec, home.as_deref(), &extra);
 
-    let mut plan = plan_bias(
-        &dictionary,
-        &found.candidates,
-        config.recognition.bias_prompt_token_budget,
-    );
+    let budget = prompt_term_budget(config.recognition.bias_prompt_token_budget, count_tokens);
+    // A term costs what it costs *in the prompt*, where it follows a space:
+    // " Jira", not "Jira". whisper.cpp splits on spaces before merging, so the
+    // per-term counts add up to the list's.
+    let cost = |term: &str| {
+        count_tokens(&format!(" {term}"))
+            .unwrap_or_else(|| govox_core::discovery::estimated_token_cost(term))
+    };
+    let mut plan = plan_bias(&dictionary, &found.candidates, budget, &cost);
 
     // Replacements, for the spellings biasing cannot reach. A joined name like
     // `RentalsCa` comes back from recognition as "Rentals CA" however heavily
@@ -141,11 +151,12 @@ pub fn load_dictionary_with_discovery(
         .filter(|(from, _)| !written.contains(&from.to_lowercase()))
         .collect();
     dictionary.replacements.extend(plan.replacements.clone());
-    report_overflow(&plan, config.recognition.bias_prompt_token_budget);
+    report_overflow(&plan, budget);
     tracing::info!(
         found = found.len(),
         biased = plan.terms.len(),
-        words = plan.words,
+        tokens = plan.tokens,
+        budget,
         replacements = plan.replacements.len(),
         "planned the bias list"
     );
@@ -220,6 +231,27 @@ fn audio_device_candidates(config: &Config, spec: &DiscoverySpec) -> Vec<Candida
 /// be able to answer "why is that word still coming out wrong", so the terms
 /// that were dropped are named, along with the two knobs that would have kept
 /// them.
+/// The term budget, capped so the whole prompt fits in what whisper.cpp reads.
+///
+/// The configured value is honoured when it fits. When it does not — a budget
+/// raised past what the model can take — it is capped rather than trusted,
+/// because an over-budget prompt does not fail: whisper.cpp keeps its end and
+/// silently drops its front, which is exactly where the hand-written terms are.
+/// The four framing words are costed here, since they share the same window.
+fn prompt_term_budget(configured: u32, count_tokens: &dyn Fn(&str) -> Option<usize>) -> u32 {
+    let frame = count_tokens(govox_asr::PROMPT_FRAME)
+        .unwrap_or_else(|| govox_core::discovery::estimated_token_cost(govox_asr::PROMPT_FRAME));
+    let ceiling = u32::try_from(govox_asr::MAX_PROMPT_TOKENS.saturating_sub(frame)).unwrap_or(0);
+    if configured > ceiling {
+        tracing::warn!(
+            configured,
+            ceiling,
+            "bias_prompt_token_budget is more than the recogniser can read; capping it"
+        );
+    }
+    configured.min(ceiling)
+}
+
 fn report_overflow(plan: &BiasPlan, budget: u32) {
     if !plan.overflowed() {
         return;
@@ -239,7 +271,7 @@ fn report_overflow(plan: &BiasPlan, budget: u32) {
         String::new()
     };
     tracing::warn!(
-        "discovery found more terms than the {budget}-word bias budget holds; \
+        "discovery found more terms than the {budget}-token bias budget holds; \
          {} were dropped: {shown}{tail}. Raise [recognition] bias_prompt_token_budget \
          or lower [dictionary.discover] max_repos.",
         plan.dropped.len(),

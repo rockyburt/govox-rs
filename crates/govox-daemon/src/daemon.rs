@@ -47,6 +47,15 @@ pub trait Transcriber: Send + Sync {
     /// can. Whisper's implementation swaps the initial prompt used by the next
     /// decode.
     fn set_bias_terms(&self, _terms: &[String]) {}
+
+    /// How many tokens the recogniser's own tokenizer makes of `text`.
+    ///
+    /// Defaulted to `None`, for a recogniser with no tokenizer to consult —
+    /// the test doubles. Planning then falls back to a pessimistic estimate,
+    /// which drops more than it needs to rather than overrunning the prompt.
+    fn count_tokens(&self, _text: &str) -> Option<usize> {
+        None
+    }
 }
 
 /// Where the daemon says things the user should see.
@@ -707,7 +716,9 @@ impl<T: Transcriber> Daemon<T> {
             Ok(config) => config,
             Err(error) => return ReloadOutcome::failed(error.to_string()),
         };
-        let loaded = match crate::load_dictionary_with_discovery(&config) {
+        let loaded = match crate::load_dictionary_with_discovery(&config, &|text| {
+            self.transcriber.count_tokens(text)
+        }) {
             Ok(loaded) => loaded,
             Err(error) => return ReloadOutcome::failed(error.to_string()),
         };

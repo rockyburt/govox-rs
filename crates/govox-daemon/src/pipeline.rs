@@ -67,6 +67,10 @@ impl Transcriber for WhisperTranscriber {
         self.0.set_bias_terms(terms);
     }
 
+    fn count_tokens(&self, text: &str) -> Option<usize> {
+        self.0.count_tokens(text)
+    }
+
     async fn transcribe(
         &self,
         audio: &govox_core::domain::AudioBuffer,
@@ -89,11 +93,11 @@ pub async fn run(
     config_path: Option<std::path::PathBuf>,
     cancel: CancellationToken,
 ) -> Result<(), PipelineError> {
-    let crate::LoadedDictionary {
-        dictionary,
-        watch: discovered,
-        plan: bias_plan,
-    } = crate::load_dictionary_with_discovery(&config)?;
+    // Only the hand-written file here. It is the part worth refusing to start
+    // over, so it is still checked first; the bias list is planned after the
+    // model loads, below, because the budget is in the model's tokens and only
+    // the loaded model can count them.
+    let hand_dictionary = crate::load_dictionary(&config)?;
 
     // Resolved here, while `config` is still owned by this function and before
     // anything can swap it: these are the files *this* run was configured from,
@@ -149,7 +153,7 @@ pub async fn run(
     // actually carried the text, not merely the one chosen at startup.
     let injection_report = govox_input::InjectionReport::new();
 
-    let recognizer = WhisperRecognizer::start(&config.recognition, &dictionary, queue_size)?;
+    let recognizer = WhisperRecognizer::start(&config.recognition, &hand_dictionary, queue_size)?;
     let asr = recognizer.handle();
     let asr_handle = recognizer.handle();
     // A third handle, for re-biasing per session. Cheap: the handle is a clone
@@ -160,6 +164,15 @@ pub async fn run(
     // multi-second cold start on the user's first phrase reads as a hang.
     tracing::info!("loading the speech model…");
     asr.warm_up().await?;
+
+    // Now there is a tokenizer. Planned before a single decode has run, so no
+    // utterance is ever biased by the unplanned list.
+    let crate::LoadedDictionary {
+        dictionary,
+        watch: discovered,
+        plan: bias_plan,
+    } = crate::load_dictionary_with_discovery(&config, &|text| asr.count_tokens(text))?;
+    bias_handle.set_bias_terms(&dictionary.bias_terms);
 
     let shared = Arc::new(SharedState::new(config, dictionary));
     shared.set_bias_plan(bias_plan);
@@ -1718,8 +1731,8 @@ fn bias_rows(bias: &govox_core::discovery::BiasPlan, budget: u32) -> Vec<(String
     let mut rows = vec![(
         "Bias".to_owned(),
         format!(
-            "{} words of {budget} ({} discovered, {by_hand} by hand)",
-            bias.words, bias.discovered,
+            "{} tokens of {budget} ({} discovered, {by_hand} by hand)",
+            bias.tokens, bias.discovered,
         ),
     )];
     if !bias.dropped.is_empty() {
@@ -2109,7 +2122,7 @@ mod about_tests {
         BiasPlan {
             terms: (0..total).map(|n| format!("term{n}")).collect(),
             dropped: (0..dropped).map(|n| format!("lost{n}")).collect(),
-            words: total,
+            tokens: total,
             reserved: 0,
             discovered,
             replacements: Vec::new(),
@@ -2131,7 +2144,7 @@ mod about_tests {
         let rows = super::bias_rows(&plan(20, 6, 0), 180);
         assert_eq!(rows.len(), 1, "no dropped row when nothing was dropped");
         assert_eq!(rows[0].0, "Bias");
-        assert_eq!(rows[0].1, "26 words of 180 (20 discovered, 6 by hand)");
+        assert_eq!(rows[0].1, "26 tokens of 180 (20 discovered, 6 by hand)");
     }
 
     #[test]
@@ -2146,7 +2159,7 @@ mod about_tests {
                 "govox-rs".to_owned(),
             ],
             dropped: vec!["rockyburt".to_owned()],
-            words: 3,
+            tokens: 3,
             reserved: 0,
             discovered: 1,
             replacements: Vec::new(),
@@ -2181,7 +2194,7 @@ mod about_tests {
                 "Claude".to_owned(),
             ],
             dropped: Vec::new(),
-            words: 4,
+            tokens: 4,
             reserved: 0,
             discovered: 0,
             replacements: Vec::new(),
@@ -2206,7 +2219,7 @@ mod about_tests {
         let plan = BiasPlan {
             terms: vec!["RentalsCa".to_owned()],
             dropped: Vec::new(),
-            words: 1,
+            tokens: 1,
             reserved: 0,
             discovered: 1,
             replacements: vec![
@@ -2229,7 +2242,7 @@ mod about_tests {
         let plan = BiasPlan {
             terms: vec!["Jira".to_owned()],
             dropped: Vec::new(),
-            words: 1,
+            tokens: 1,
             reserved: 0,
             discovered: 0,
             replacements: Vec::new(),

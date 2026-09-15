@@ -17,5 +17,5 @@ pub mod whisper;
 
 pub use model::{ModelError, ResolvedModel, gguf_filename};
 pub use streaming::{OnlineProcessor, StreamingUpdate};
-pub use text::{bias_prompt, postprocess_text, whisper_language};
+pub use text::{MAX_PROMPT_TOKENS, PROMPT_FRAME, bias_prompt, postprocess_text, whisper_language};
 pub use whisper::{AsrError, Backend, WhisperHandle, WhisperRecognizer};

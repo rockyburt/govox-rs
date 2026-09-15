@@ -10,7 +10,7 @@
 //! `async fn transcribe`, the model is never shared, and the queue is where
 //! backpressure becomes visible rather than a lock.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use govox_core::config::{RecognitionConfig, RecognitionDevice};
 use govox_core::domain::{AudioBuffer, GovoxError, PersonalDictionary};
@@ -153,6 +153,14 @@ pub struct WhisperHandle {
     requests: mpsc::Sender<Request>,
     prompt: Arc<ArcSwap<String>>,
     budget: u32,
+    /// The loaded model, once there is one, for counting tokens.
+    ///
+    /// Shared rather than asked for over `requests`, because the one caller
+    /// that needs it — planning the bias list on a dictionary reload — is
+    /// synchronous and runs on the event loop, and a request would wait behind
+    /// any decode in flight. `whisper_tokenize` only reads the vocabulary, which
+    /// nothing mutates after load, so reading it beside a decode is safe.
+    tokenizer: Arc<OnceLock<Arc<WhisperContext>>>,
 }
 
 impl WhisperHandle {
@@ -200,6 +208,19 @@ impl WhisperHandle {
     /// it started with.
     pub fn set_bias_terms(&self, terms: &[String]) {
         self.prompt.store(Arc::new(bias_prompt(terms, self.budget)));
+    }
+
+    /// How many tokens the loaded model's own tokenizer makes of `text`.
+    ///
+    /// `None` until the model has loaded. The bias budget has to be planned in
+    /// these, not in words: see [`crate::MAX_PROMPT_TOKENS`] for what a
+    /// word-counted plan did.
+    #[must_use]
+    pub fn count_tokens(&self, text: &str) -> Option<usize> {
+        let context = self.tokenizer.get()?;
+        // 1024 is whisper.cpp's own scratch size for an initial prompt; a term
+        // anywhere near it is not a term.
+        context.tokenize(text, 1024).ok().map(|tokens| tokens.len())
     }
 
     /// Load and warm the model so the first real utterance is not slow.
@@ -272,9 +293,12 @@ impl WhisperRecognizer {
             &dictionary.bias_terms,
             config.bias_prompt_token_budget,
         )));
+        let tokenizer = Arc::new(OnceLock::new());
         let worker = Worker {
             config: config.clone(),
             prompt: Arc::clone(&prompt),
+            tokenizer: Arc::clone(&tokenizer),
+            checked_prompt: None,
             use_gpu,
             loaded: None,
         };
@@ -293,6 +317,7 @@ impl WhisperRecognizer {
                 // restart-only: `[recognition]` is not a reloadable section, so
                 // a running daemon never has a second answer for it.
                 budget: config.bias_prompt_token_budget,
+                tokenizer,
             }),
             thread: Some(thread),
         })
@@ -340,6 +365,11 @@ struct Worker {
     /// flight — and the whole point is that the *next* utterance is biased by
     /// the word you just added.
     prompt: Arc<ArcSwap<String>>,
+    /// Filled once the model loads, so handles can count tokens.
+    tokenizer: Arc<OnceLock<Arc<WhisperContext>>>,
+    /// The last prompt checked against [`crate::MAX_PROMPT_TOKENS`], so the
+    /// check runs once per prompt rather than once per decode.
+    checked_prompt: Option<Arc<String>>,
     use_gpu: bool,
     loaded: Option<Loaded>,
 }
@@ -358,7 +388,7 @@ struct Loaded {
     /// Kept alive alongside the state, and needed to build a fresh one if the
     /// reused state ever has to be replaced.
     #[allow(dead_code, reason = "owns the loaded model; the state is what decodes")]
-    context: WhisperContext,
+    context: Arc<WhisperContext>,
 }
 
 impl Worker {
@@ -440,9 +470,46 @@ impl Worker {
             let state = context
                 .create_state()
                 .map_err(|e| AsrError::Load(e.to_string()))?;
+            let context = Arc::new(context);
+            // Set once; a second load cannot happen on this worker.
+            let _ = self.tokenizer.set(Arc::clone(&context));
             self.loaded = Some(Loaded { context, state });
         }
         Ok(self.loaded.as_mut().expect("just loaded"))
+    }
+
+    /// Say so, loudly, if a prompt is longer than whisper.cpp will use.
+    ///
+    /// The planner keeps prompts inside [`crate::MAX_PROMPT_TOKENS`], so this
+    /// should never fire. It exists because the failure it describes is silent
+    /// by construction: whisper.cpp drops the front of an over-long prompt
+    /// without a word, the decode still succeeds, and the only symptom is that
+    /// the terms at the front — the hand-written ones — stop working. That ran
+    /// unnoticed for five days. Checked once per distinct prompt, not per
+    /// decode.
+    fn check_prompt_fits(&mut self, prompt: &Arc<String>) {
+        if self
+            .checked_prompt
+            .as_ref()
+            .is_some_and(|checked| Arc::ptr_eq(checked, prompt))
+        {
+            return;
+        }
+        self.checked_prompt = Some(Arc::clone(prompt));
+        let Some(context) = self.tokenizer.get() else {
+            return;
+        };
+        let Ok(tokens) = context.tokenize(prompt, 1024) else {
+            return;
+        };
+        if tokens.len() > crate::MAX_PROMPT_TOKENS {
+            tracing::warn!(
+                tokens = tokens.len(),
+                limit = crate::MAX_PROMPT_TOKENS,
+                "the bias prompt is longer than whisper.cpp will read; \
+                 the terms at its front are being silently dropped"
+            );
+        }
     }
 
     fn transcribe(&mut self, audio: &[f32]) -> Result<String, AsrError> {
@@ -458,6 +525,7 @@ impl Worker {
         // the prompt) and the context can be held at the same time.
         self.ensure_loaded()?;
         let prompt = self.prompt.load_full();
+        self.check_prompt_fits(&prompt);
         let params = Self::full_params_for(&self.config, &prompt);
         // Disjoint borrows: `params` holds `config` and the loaded prompt, this
         // holds `loaded`.
@@ -500,6 +568,7 @@ impl Worker {
 
         self.ensure_loaded()?;
         let prompt = self.prompt.load_full();
+        self.check_prompt_fits(&prompt);
         let mut params = Self::full_params_for(&self.config, &prompt);
         params.set_token_timestamps(true);
         params.set_max_len(1);

@@ -741,14 +741,34 @@ pub fn parse_ssh_config_hosts(text: &str) -> Vec<String> {
     hosts
 }
 
-/// What one term costs against `bias_prompt_token_budget`.
+/// A term's cost in whitespace-separated words.
 ///
-/// The same rule `bias_prompt` applies: whitespace-separated words. Kept here
-/// rather than imported so `govox-core` can plan a budget it does not own the
-/// spending of.
+/// **Not** what the recogniser counts. It was the planner's cost until
+/// 2026-09-15, on the reasoning that "a word is usually one to two BPE tokens",
+/// and that reasoning is what silently disabled every hand-written bias term:
+/// discovered names are nothing like ordinary words — `Rentals-Deploy-Envs`,
+/// `govox_blue`, `logilinux-gui` — and a 108-*word* list came to roughly 310
+/// tokens against whisper.cpp's 223-token prompt limit, which keeps the *end*
+/// of the prompt and drops the front, where the hand-written terms live. Kept
+/// for the planner's tests, whose budgets are easiest to read in words.
 #[must_use]
 pub fn word_cost(term: &str) -> usize {
     term.split_whitespace().count()
+}
+
+/// A deliberately pessimistic token count, for when no tokenizer is available.
+///
+/// Only a fallback: the daemon counts with the loaded model's own tokenizer,
+/// and has one before anything is decoded. Pessimistic because the two ways of
+/// being wrong are not symmetrical — overestimating drops a discovered term
+/// that would have fitted, underestimating lets the prompt overrun and lose the
+/// hand-written terms at its front. Whisper's BPE rarely spends more than one
+/// token per two characters on ASCII, and a leading space is part of the first
+/// token, so half the length rounded up is an upper bound for the names this
+/// list holds.
+#[must_use]
+pub fn estimated_token_cost(term: &str) -> usize {
+    term.chars().count().div_ceil(2).max(1)
 }
 
 /// The core bias list, and what did not fit in it.
@@ -758,9 +778,10 @@ pub struct BiasPlan {
     pub terms: Vec<String>,
     /// Discovered terms that did not, in the order they were dropped.
     pub dropped: Vec<String>,
-    /// What `terms` costs.
-    pub words: usize,
-    /// Words held back so the largest group still fits beside them.
+    /// What `terms` costs, in the units the planner was handed — recogniser
+    /// tokens in the daemon.
+    pub tokens: usize,
+    /// Tokens held back so the largest group still fits beside them.
     pub reserved: usize,
     /// Replacement rules derived from discovered names, in the order they were
     /// appended after the hand-written ones.
@@ -804,21 +825,29 @@ impl BiasPlan {
 /// truncates in list order and says nothing, which was fine while the list was
 /// hand-sized; a machine-sized list needs someone to be able to say which
 /// words were lost, so the planner decides and the daemon reports.
+///
+/// `cost` is what one term costs in the prompt, and it has to be the
+/// recogniser's own count. The rules above are only as true as it is: planned
+/// in words, a list that "fit" in 108 of 180 overran whisper.cpp's 223-token
+/// limit by ~90 tokens, and because whisper.cpp keeps the end of a prompt, the
+/// terms rule 1 promises never to drop were the first ones lost. Taken as a
+/// function so this stays pure — the tokenizer lives in the loaded model,
+/// which `govox-core` must never depend on — and so tests can hand it
+/// [`word_cost`] and keep their budgets readable.
 #[must_use]
-pub fn plan_bias(hand: &PersonalDictionary, found: &[Candidates], budget: u32) -> BiasPlan {
+pub fn plan_bias(
+    hand: &PersonalDictionary,
+    found: &[Candidates],
+    budget: u32,
+    cost: &dyn Fn(&str) -> usize,
+) -> BiasPlan {
     let mut terms = hand.bias_terms.clone();
-    let mut words: usize = terms.iter().map(|term| word_cost(term)).sum();
+    let mut tokens: usize = terms.iter().map(|term| cost(term)).sum();
 
     let reserved = hand
         .bias_groups
         .iter()
-        .map(|group| {
-            group
-                .terms
-                .iter()
-                .map(|term| word_cost(term))
-                .sum::<usize>()
-        })
+        .map(|group| group.terms.iter().map(|term| cost(term)).sum::<usize>())
         .max()
         .unwrap_or(0);
 
@@ -840,14 +869,14 @@ pub fn plan_bias(hand: &PersonalDictionary, found: &[Candidates], budget: u32) -
                 if !seen.insert(term.to_lowercase()) {
                     continue;
                 }
-                let cost = word_cost(term);
+                let term_cost = cost(term);
                 let capped = max_terms != 0 && discovered >= max_terms;
-                if capped || words + cost > ceiling {
+                if capped || tokens + term_cost > ceiling {
                     dropped.push(term.clone());
                     continue;
                 }
                 terms.push(term.clone());
-                words += cost;
+                tokens += term_cost;
                 discovered += 1;
             }
         }
@@ -856,12 +885,67 @@ pub fn plan_bias(hand: &PersonalDictionary, found: &[Candidates], budget: u32) -
     BiasPlan {
         terms,
         dropped,
-        words,
+        tokens,
         reserved,
         discovered,
         // Not a budget decision: replacements run after recognition and cost
         // no prompt words at all. Filled in by the caller.
         replacements: Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod token_cost_tests {
+    use super::*;
+
+    fn found(provider: ProviderName, terms: &[&str]) -> Candidates {
+        Candidates {
+            provider: Some(provider),
+            terms: terms.iter().map(|term| (*term).to_string()).collect(),
+        }
+    }
+
+    /// A tokenizer that charges hyphenated and underscored names by the piece,
+    /// the way Whisper's BPE does, and a plain word one token.
+    fn bpe_like(term: &str) -> usize {
+        term.split(['-', '_']).count() * 3
+    }
+
+    /// The 2026-09-15 bug, at the planner. In words this list is 4 of a budget
+    /// of 6 and everything "fits"; in tokens the discovered names cost 12, and
+    /// the planner must drop *them* — never the hand-written term.
+    #[test]
+    fn hand_written_terms_survive_a_budget_counted_in_real_tokens() {
+        let hand = PersonalDictionary {
+            bias_terms: vec!["Jira".to_owned()],
+            ..PersonalDictionary::default()
+        };
+        let discovered = [found(
+            ProviderName::Repos,
+            &["Rentals-Deploy-Envs", "govox_blue", "zellij"],
+        )];
+
+        let in_words = plan_bias(&hand, &discovered, 6, &word_cost);
+        assert!(
+            in_words.dropped.is_empty(),
+            "in words it all appears to fit"
+        );
+
+        let in_tokens = plan_bias(&hand, &discovered, 6, &bpe_like);
+        assert_eq!(in_tokens.terms.first().map(String::as_str), Some("Jira"));
+        assert!(in_tokens.tokens <= 6, "planned {} tokens", in_tokens.tokens);
+        assert!(
+            in_tokens
+                .dropped
+                .contains(&"Rentals-Deploy-Envs".to_owned())
+        );
+    }
+
+    #[test]
+    fn the_estimate_never_charges_less_than_a_token() {
+        assert_eq!(estimated_token_cost(""), 1);
+        assert_eq!(estimated_token_cost("CBD"), 2);
+        assert!(estimated_token_cost("Rentals-Deploy-Envs") >= 5);
     }
 }
 
@@ -1176,7 +1260,12 @@ Twillingate Bonavista
     #[test]
     fn the_hand_written_core_is_never_dropped_to_make_room_for_a_discovered_term() {
         let hand = dictionary(&["Rentals.ca", "ydotool"]);
-        let plan = plan_bias(&hand, &[found(ProviderName::Repos, &["govox-rs"])], 2);
+        let plan = plan_bias(
+            &hand,
+            &[found(ProviderName::Repos, &["govox-rs"])],
+            2,
+            &word_cost,
+        );
         assert_eq!(plan.terms, vec!["Rentals.ca", "ydotool"]);
         assert_eq!(
             plan.dropped,
@@ -1196,6 +1285,7 @@ Twillingate Bonavista
                 found(ProviderName::Branches, &["dashboard"]),
             ],
             3,
+            &word_cost,
         );
         assert_eq!(
             plan.terms,
@@ -1227,6 +1317,7 @@ Twillingate Bonavista
             &hand,
             &[found(ProviderName::Repos, &["govox-rs", "RentalsCa"])],
             3,
+            &word_cost,
         );
         assert_eq!(plan.reserved, 2, "the larger of the two groups");
         assert_eq!(plan.terms, vec!["govox-rs"]);
@@ -1240,6 +1331,7 @@ Twillingate Bonavista
             &hand,
             &[found(ProviderName::Repos, &["GOVOX-RS", "rockyburt"])],
             180,
+            &word_cost,
         );
         assert_eq!(
             plan.terms,
@@ -1263,6 +1355,7 @@ Twillingate Bonavista
             &hand,
             &[found(ProviderName::Repos, &["govox-rs", "rockyburt"])],
             180,
+            &word_cost,
         );
         assert_eq!(plan.terms, vec!["Rentals.ca", "govox-rs"]);
         assert_eq!(plan.dropped, vec!["rockyburt"]);
@@ -1278,6 +1371,7 @@ Twillingate Bonavista
             &hand,
             &[found(ProviderName::Repos, &["govox-rs", "rockyburt"])],
             180,
+            &word_cost,
         );
         assert_eq!(plan.terms.len(), 4);
         assert_eq!(plan.discovered, 2, "the two the hand-written list did not");

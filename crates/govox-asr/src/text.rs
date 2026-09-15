@@ -31,12 +31,29 @@ pub fn postprocess_text(text: &str, preserve_leading_space: bool) -> String {
     collapsed
 }
 
+/// The most prompt text whisper.cpp will actually use, in tokens.
+///
+/// `whisper_full_with_state` builds the decoder prompt from the last
+/// `max_prompt_ctx - 1` tokens of the initial prompt, where `max_prompt_ctx` is
+/// `n_text_ctx / 2` — 448 / 2 for every Whisper model — so 223. Everything
+/// before that is dropped **from the front, without a warning**: the warning
+/// whisper.cpp has is on the `carry_initial_prompt` path, which this does not
+/// use. Confirmed in the daemon's own log, where every decode's prompt was
+/// exactly 223 text tokens and began mid-list.
+pub const MAX_PROMPT_TOKENS: usize = 223;
+
+/// The words wrapped around the term list, for costing the frame itself.
+pub const PROMPT_FRAME: &str = "This transcript mentions.";
+
 /// Build the `initial_prompt` that biases the decoder toward known terms.
 ///
-/// Truncation is by whitespace-separated word, not by real tokenizer token —
-/// the same approximation `govox-py` makes. A word is usually one to two BPE
-/// tokens, so the budget is conservative rather than exact, which is the safe
-/// direction: overshooting would push real audio context out of the window.
+/// The word cap here is a backstop, not the budget. The budget is planned
+/// upstream in real tokens by `govox_core::discovery::plan_bias`, and a list
+/// that fits in N tokens cannot exceed N words, so this cap cannot bind on a
+/// planned list. It used to be the budget, on the reasoning that a word is one
+/// or two BPE tokens; for discovered names it is often five or six, and the
+/// word-counted list overran [`MAX_PROMPT_TOKENS`] and lost its front — every
+/// hand-written term — for five days without a symptom anyone could see.
 #[must_use]
 pub fn bias_prompt(bias_terms: &[String], token_budget: u32) -> String {
     if token_budget == 0 {
