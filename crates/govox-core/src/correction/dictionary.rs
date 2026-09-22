@@ -48,9 +48,37 @@ impl CompiledDictionary {
             // The replacement is inserted verbatim. As a template string it
             // would be scanned for group references, so a backslash or "\1" in
             // a user's dictionary would corrupt the output or fail.
-            result = super::punctuation::replace_all(pattern, &result, |_| target.clone());
+            let before = result.clone();
+            result = super::punctuation::replace_all(pattern, &before, |caps| {
+                let whole = caps.get(0).expect("whole match");
+                keep_sentence_capital(&before[..whole.start()], whole.as_str(), target)
+            });
         }
         result
+    }
+}
+
+/// `target`, capitalised when it replaces a sentence's capitalised first word.
+///
+/// The dictionary runs after the casing stages, so a lowercase target undid
+/// their work: "Sim links are broken." became "symlinks are broken." The
+/// capital is carried over only where casing put it — the match opens a
+/// sentence *and* arrives capitalised — so a mid-sentence "LOL" still becomes
+/// "lol", and an utterance continuing a sentence, which casing left lowercase,
+/// stays lowercase. A target that is not lowercase is the user's casing and is
+/// never touched.
+fn keep_sentence_capital(preceding: &str, matched: &str, target: &str) -> String {
+    let opens_sentence = preceding
+        .trim_end_matches([' ', '\t'])
+        .chars()
+        .next_back()
+        .is_none_or(|last| matches!(last, '.' | '!' | '?' | '…' | '\n'));
+    let capitalised = matched.chars().next().is_some_and(char::is_uppercase);
+    let lowercase_target = target.chars().next().is_some_and(char::is_lowercase);
+    if opens_sentence && capitalised && lowercase_target {
+        super::sentence_case(target)
+    } else {
+        target.to_owned()
     }
 }
 
@@ -127,4 +155,58 @@ fn py_escape(source: &str) -> String {
         out.push(char);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::apply_replacements;
+    use crate::domain::PersonalDictionary;
+
+    fn apply(text: &str, from: &str, to: &str) -> String {
+        let dictionary = PersonalDictionary {
+            replacements: vec![(from.to_owned(), to.to_owned())],
+            ..PersonalDictionary::default()
+        };
+        apply_replacements(text, &dictionary)
+    }
+
+    /// Casing capitalised the sentence; a lowercase target must not undo it.
+    #[test]
+    fn a_sentence_opening_capital_survives_the_replacement() {
+        assert_eq!(
+            apply("Sim links are broken.", "sim links", "symlinks"),
+            "Symlinks are broken."
+        );
+        assert_eq!(
+            apply("Done. Sim link it.", "sim link", "symlink"),
+            "Done. Symlink it."
+        );
+        assert_eq!(apply("Fine!\nLol", "lol", "lol"), "Fine!\nLol");
+    }
+
+    /// Anywhere else the target's own casing wins.
+    #[test]
+    fn mid_sentence_and_continuations_take_the_target_as_written() {
+        assert_eq!(
+            apply("That's a lot, LOL.", "lol", "lol"),
+            "That's a lot, lol."
+        );
+        assert_eq!(
+            apply("then sim link it", "sim link", "symlink"),
+            "then symlink it"
+        );
+        assert_eq!(
+            apply("So Sim Link it", "sim link", "symlink"),
+            "So symlink it"
+        );
+        // An utterance continuing a sentence arrives lowercase; it stays so.
+        assert_eq!(apply("lol that's funny", "lol", "lol"), "lol that's funny");
+    }
+
+    /// A target with casing of its own is the user's, even at a sentence start.
+    #[test]
+    fn a_cased_target_is_never_altered() {
+        assert_eq!(apply("Jura is down.", "jura", "Jira"), "Jira is down.");
+        assert_eq!(apply("Cbd oil.", "cbd", "CBD"), "CBD oil.");
+    }
 }

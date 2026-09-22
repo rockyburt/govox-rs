@@ -115,6 +115,11 @@ before 1.0.0, minor versions may change behaviour.
 
 ### Fixed
 
+- **A dictionary rule no longer lowercases the start of a sentence.** A rule such as
+  `sim link` -> `symlink` turned "Sim links are broken." into "symlinks are broken.", because the
+  dictionary runs after capitalisation. A lowercase replacement now keeps the capital when it opens a
+  sentence; mid-sentence it is inserted as written, and a replacement with casing of its own
+  ("Jira") is never altered.
 
 - **A spoken "hehe" is no longer reduced to "he".** Whisper often writes it as "he he", and the
   repeated-word stage collapsed that as a stutter. A run of "he" that closes a clause — followed by
