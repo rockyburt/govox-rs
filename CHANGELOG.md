@@ -115,6 +115,12 @@ before 1.0.0, minor versions may change behaviour.
 
 ### Fixed
 
+
+- **A spoken "hehe" is no longer reduced to "he".** Whisper often writes it as "he he", and the
+  repeated-word stage collapsed that as a stutter. A run of "he" that closes a clause — followed by
+  punctuation or the end of the utterance — is now kept, so a dictionary rule can turn it into
+  `hehe`; "he he went home" still collapses. See `docs/parity.md`.
+
 - **Hand-written bias terms reach the recogniser again.** With `[dictionary.discover]`
   switched on, none of the terms in your `bias` list had been biasing recognition — a
   word like "Jira" came out as "jurr", "juror" or "jurid" however long it had been listed.
