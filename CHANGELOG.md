@@ -115,6 +115,12 @@ before 1.0.0, minor versions may change behaviour.
 
 ### Fixed
 
+- **"rentals, do …" no longer comes out as "Rentals-DO …".** Discovery was putting repository
+  and command names like `Rentals-DO` into the recogniser's prompt, and Whisper copied the
+  exact string whenever it heard the two words together. A discovered name that joins a
+  function word ("do", "my", "for", …) to another word is now kept out of the prompt at any
+  budget, and the log names each one. Bias it by hand if you do want it.
+
 - **Hand-written bias terms reach the recogniser again.** With `[dictionary.discover]`
   switched on, none of the terms in your `bias` list had been biasing recognition — a
   word like "Jira" came out as "jurr", "juror" or "jurid" however long it had been listed.

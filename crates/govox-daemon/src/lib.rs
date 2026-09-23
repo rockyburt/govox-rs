@@ -254,6 +254,16 @@ fn prompt_term_budget(configured: u32, count_tokens: &dyn Fn(&str) -> Option<usi
 }
 
 fn report_overflow(plan: &BiasPlan, budget: u32) {
+    // Not an overflow, and said separately so nobody raises the budget to get
+    // these back: no budget would.
+    if !plan.withheld.is_empty() {
+        tracing::info!(
+            "discovery withheld {} term(s) from the bias prompt because they glue an \
+             ordinary word into a name: {}. Bias one by hand if you mean it.",
+            plan.withheld.len(),
+            plan.withheld.join(", "),
+        );
+    }
     if !plan.overflowed() {
         return;
     }
