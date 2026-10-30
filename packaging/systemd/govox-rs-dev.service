@@ -35,7 +35,10 @@ Type=simple
 # add LTO and codegen-units=1 to every edit-run cycle for no audible gain.
 #
 # Point at the shared target directory rather than a worktree, so the unit
-# keeps working whichever worktree the build came from.
+# keeps working whichever worktree the build came from. This path assumes the
+# checkout's own `target/`; where a local `.cargo/config.toml` sets
+# `target-dir`, edit both paths in the installed copy to `<target-dir>/debug/govox`
+# (see packaging/README.md). `tools/dev-restart.sh` refuses when they disagree.
 ExecStart=%h/dev/personal/repos/govox-rs/target/debug/govox run
 Restart=on-failure
 RestartSec=2

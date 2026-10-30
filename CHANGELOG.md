@@ -125,6 +125,14 @@ before 1.0.0, minor versions may change behaviour.
   and when said twice (`hello/forward/world`, now `hello//world`). One trade: `--` dictated
   as a typewriter em dash in prose now arrives with a space before it.
 
+- **`tools/dev-restart.sh` refuses when the unit runs a different binary than it built.** The
+  installed `govox-rs-dev.service` names a path, and `.cargo/config.toml` decides where cargo
+  builds; when they disagree the unit relaunches whatever older binary is left on disk while
+  every check passes. That is how a daemon ran an 08-19 build for hours — and showed a
+  long-fixed notification panic on every reload — while the script reported the current
+  version. It now compares the restarted process with the binary it built and names both
+  paths. `packaging/README.md` says how to point the unit at a relocated target directory.
+
 - **Hand-written bias terms reach the recogniser again.** With `[dictionary.discover]`
   switched on, none of the terms in your `bias` list had been biasing recognition — a
   word like "Jira" came out as "jurr", "juror" or "jurid" however long it had been listed.
