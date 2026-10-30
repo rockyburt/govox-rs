@@ -257,11 +257,12 @@ terms = []
 # stayed red for four days as a standing reference, and the fix was measured
 # against it rather than against a memory of the bug.
 #
-# One limit, and this clip does not hit it: an utterance that OPENS with
-# "hyphen hyphen" still renders only one mark, because the punctuation pattern
-# takes the first word as an ordinary prefix (the same group that suppresses
-# "add a comma here"). A flag never starts a sentence in practice — you say
-# "cargo test --all-targets" — so this is recorded, not fixed.
+# It still was not right, and the 2026-10-30 run — the first with this clip
+# recorded — showed why: both marks survived but each attached `Tight`, gluing the
+# flag to the command (`cargo clippy--all-targets`). "hyphen hyphen" is now one
+# phrase attached to the word after it; see the parity row "A doubled hyphen
+# opens a flag". The same change fixed the limit recorded here before, an
+# utterance OPENING with "hyphen hyphen" rendering only one mark.
 
 [[clip]]
 id = "rust-crates"

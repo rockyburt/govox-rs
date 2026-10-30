@@ -115,6 +115,16 @@ before 1.0.0, minor versions may change behaviour.
 
 ### Fixed
 
+- **A dictated long flag keeps its space.** "cargo clippy hyphen hyphen all hyphen targets"
+  came out `cargo clippy--all-targets`, the flag glued to the command; it is now
+  `cargo clippy --all-targets`. "dash dash" works the same way, an utterance can now *open*
+  with one (in a terminal, `"dash dash help"` is `--help`, where it used to render a single
+  hyphen; prose sentence-cases it as `--Help`, as it does any other leading mark), and "the
+  dash dash flag" stays prose instead of becoming `the dash -flag`. The same fix applies to
+  "forward slash", which lost its first word at the start of an utterance (`forward/usr`)
+  and when said twice (`hello/forward/world`, now `hello//world`). One trade: `--` dictated
+  as a typewriter em dash in prose now arrives with a space before it.
+
 - **Hand-written bias terms reach the recogniser again.** With `[dictionary.discover]`
   switched on, none of the terms in your `bias` list had been biasing recognition — a
   word like "Jira" came out as "jurr", "juror" or "jurid" however long it had been listed.
