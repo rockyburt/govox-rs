@@ -97,6 +97,31 @@ if ! systemctl --user is-active --quiet "$UNIT"; then
     exit 1
 fi
 
+# Running is not the same as running *this build*. The version check above
+# vouches for $BIN, but the unit starts whatever its ExecStart names, and the
+# two are configured in different files: `target-dir` in the untracked
+# `.cargo/config.toml`, the path in the installed unit. When they disagree the
+# unit quietly relaunches some older binary still on disk, and every check above
+# passes — observed on 2026-10-30, when a unit pointed at a checkout's own
+# `target/` ran an 08-19 build for hours while this script reported 0.2.0+104.
+PID=$(systemctl --user show --property=MainPID --value "$UNIT")
+RUNNING=$(readlink "/proc/$PID/exe" 2>/dev/null || echo "unknown")
+if [[ "$RUNNING" == "unknown" ]]; then
+    echo "==> could not read which binary $UNIT is running (MainPID=$PID)" >&2
+    exit 1
+elif [[ "$RUNNING" == *" (deleted)" && "${RUNNING% (deleted)}" == "$(readlink -f "$BIN")" ]]; then
+    # The right file, replaced after the process launched from it: another
+    # worktree built into the shared target directory during the restart.
+    echo "==> $UNIT started a binary that was rebuilt under it; run this again" >&2
+    exit 1
+elif [[ "$(readlink -f "${RUNNING% (deleted)}")" != "$(readlink -f "$BIN")" ]]; then
+    echo "==> $UNIT is running $RUNNING" >&2
+    echo "==> but this script built $BIN" >&2
+    echo "==> point ExecStart (and ConditionPathExists) in" >&2
+    echo "    ~/.config/systemd/user/$UNIT at $BIN, then: systemctl --user daemon-reload" >&2
+    exit 1
+fi
+
 echo "==> running"
 if [[ "${1:-}" == "--follow" ]]; then
     exec journalctl --user -u "$UNIT" -f
