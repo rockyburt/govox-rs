@@ -8,6 +8,19 @@ before 1.0.0, minor versions may change behaviour.
 
 ### Security
 
+- **Dependencies refreshed, closing 12 advisories the audit job had been failing on since
+  2026-09-12.** A lockfile-only `cargo update`: `quinn-proto` 0.11.19 (RUSTSEC-2026-0338 to
+  -0342), `rustls` 0.23.46 (-0285, -0346, -0348, -0349), `rustls-webpki` (-0382),
+  `webpki-root-certs` (-0383) and `rtrb` (-0274), plus a yanked `chacha20` and an unsound
+  `tokio` the job also denies. Most reach govox through `hf-hub` on the model-download path.
+  `whisper-rs` did not move, and the correction golden corpus is unchanged.
+
+  Three informational advisories are accepted rather than fixed, and CI now ignores them with
+  the reason recorded beside the flag: `zvariant`, `zvariant_derive` and `zbus_names` are
+  unmaintained because upstream folded them into `zbus` 6.0. govox cannot take that yet —
+  `atspi`, `ksni` and `notify-rust`, each at its latest release, still require `zbus` 5.
+  Revisit when `atspi` publishes a `zbus` 6 release.
+
 - **`h2` updated to 0.4.19, closing RUSTSEC-2026-0258** ("unbounded empty DATA frames",
   published 2026-08-17). It reaches govox through `govox-asr` -> `hf-hub` -> `hyper`, which is
   the model-download path. A lockfile-only change.

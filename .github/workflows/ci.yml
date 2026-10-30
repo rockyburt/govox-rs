@@ -174,7 +174,23 @@ jobs:
       #     alternative the advisory names), or when the overlay's text
       #     rendering is next touched for any other reason.
       #
+      #   RUSTSEC-2026-0370 zvariant, -0372 zvariant_derive, -0371 zbus_names
+      #     are unmaintained as standalone crates: upstream folded them into
+      #     zbus 6.0 (the `wire` module), so `patched = []` and the fix is the
+      #     zbus 5 -> 6 migration. That migration is blocked, not deferred:
+      #     zbus 5 is required by atspi 0.30, ksni 0.3.7 and notify-rust 4.18.2,
+      #     each the latest release, and moving govox's own crates alone would
+      #     still ship zvariant through those three. Informational only — no
+      #     vulnerability is reported against them. Accepted 2026-10-30.
+      #     Revisit when atspi publishes a zbus 6 release (it carries the most
+      #     surface: AT-SPI field reading), then ksni and notify-rust.
+      #
       # Never delete this job or drop the flag to get green: an accepted risk
       # is an --ignore with a reason, not a missing check.
       - name: Cargo audit
-        run: cargo audit --deny warnings --ignore RUSTSEC-2026-0192
+        run: >-
+          cargo audit --deny warnings
+          --ignore RUSTSEC-2026-0192
+          --ignore RUSTSEC-2026-0370
+          --ignore RUSTSEC-2026-0371
+          --ignore RUSTSEC-2026-0372
