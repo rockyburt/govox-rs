@@ -128,6 +128,12 @@ before 1.0.0, minor versions may change behaviour.
 
 ### Fixed
 
+- **The live preview stops flickering a full stop.** While you speak, the underlined text
+  no longer ends in `.`, `?` or `!`: mid-sentence that mark is a guess that you have
+  finished, Whisper makes it at every pause, and the next decode took it back — a full stop
+  appearing and vanishing at every breath. The committed text keeps its punctuation, so the
+  mark now appears once, when you stop.
+
 - **A dictated long flag keeps its space.** "cargo clippy hyphen hyphen all hyphen targets"
   came out `cargo clippy--all-targets`, the flag glued to the command; it is now
   `cargo clippy --all-targets`. "dash dash" works the same way, an utterance can now *open*
