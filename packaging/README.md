@@ -95,6 +95,20 @@ tools/dev-restart.sh --follow   # ...and then tail the journal
 Use the script rather than `systemctl --user restart` on its own: restarting without
 building relaunches the *old* binary, which looks exactly like a change that did not work.
 
+**The unit's two paths must name the target directory cargo actually builds into.** The
+tracked unit assumes the checkout's own `target/`. If a machine-local `.cargo/config.toml`
+sets `[build] target-dir` elsewhere — the setup that shares one build across worktrees —
+edit `ExecStart` and `ConditionPathExists` in the *installed* copy to
+`<target-dir>/debug/govox`. Find it with:
+
+```bash
+cargo metadata --format-version 1 --no-deps | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p'
+```
+
+Otherwise the unit runs whatever stale binary is left in the checkout's `target/`.
+`tools/dev-restart.sh` checks the restarted process against the binary it built and
+refuses, naming both paths, when they differ.
+
 Debug rather than release is deliberate. `[profile.dev.package."*"] opt-level = 2` already
 optimises every dependency, whisper.cpp and the Vulkan backend included, so the only
 unoptimised code is govox's own glue — which is not where the time goes. A release build
