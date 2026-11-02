@@ -434,7 +434,29 @@ pub fn drop_filler_words(text: &str, fillers: &[String]) -> String {
 /// arriving as one "he", and stutters are exactly what this stage exists to
 /// absorb. Bias is the lever for that case: teaching the recogniser to emit
 /// "hehe" as one token stops the repeat ever forming. See the dictionary.
+///
+/// Bias alone lost, so "he" has a narrower exemption of its own — see
+/// [`LAUGHTER_AT_CLAUSE_END`].
 const LAUGHTER: &[&str] = &["ha", "hah", "heh", "hee"];
+
+/// Laughter that is also an ordinary word, so its repeat survives only where a
+/// stutter cannot be: at the end of a clause.
+///
+/// A stutter is a false start, so something always follows it — "he he went
+/// home". A laugh is a reaction, so it closes the clause — "I don't know, he
+/// he." Position tells them apart where the words cannot. Observed: "hehe"
+/// reaching the document as a bare "He." and "pretty small he.", with no
+/// intact "he he" in thirty days of captions.
+const LAUGHTER_AT_CLAUSE_END: &[&str] = &["he"];
+
+/// Whether `rest` — the text after a repeat — starts a new clause: nothing but
+/// horizontal whitespace before the end of the text or a clause mark.
+fn ends_clause(rest: &str) -> bool {
+    rest.trim_start_matches([' ', '\t'])
+        .chars()
+        .next()
+        .is_none_or(|next| matches!(next, '.' | ',' | '!' | '?' | ';' | ':' | '…' | '\n'))
+}
 
 /// Words that keep their repeats, because for these a repeat carries meaning.
 ///
@@ -475,10 +497,13 @@ pub fn collapse_repeated_words(text: &str) -> String {
         LazyLock::new(|| FancyRegex::new(r"(?i)\b(\w+)(\s+\1\b)+").unwrap());
     punctuation::replace_all(&PATTERN, text, |caps| {
         let first = caps.get(1).expect("first group").as_str();
-        if is_collapse_exempt(first) {
+        let whole = caps.get(0).expect("whole match");
+        let laughing = LAUGHTER_AT_CLAUSE_END.contains(&first.to_lowercase().as_str())
+            && ends_clause(&text[whole.end()..]);
+        if laughing || is_collapse_exempt(first) {
             // Returned verbatim, so the repeat survives exactly as spoken
             // rather than being normalised to some canonical spacing.
-            return caps.get(0).expect("whole match").as_str().to_owned();
+            return whole.as_str().to_owned();
         }
         first.to_owned()
     })
@@ -805,6 +830,28 @@ mod tests {
         // would preserve every genuine stutter. Bias is the lever for a spoken
         // "hehe", not this table.
         assert_eq!(collapse_repeated_words("he he went home"), "he went home");
+    }
+
+    /// "he he" closing a clause is a laugh; followed by more words, a stutter.
+    #[test]
+    fn he_he_survives_only_where_a_stutter_cannot_be() {
+        assert_eq!(
+            collapse_repeated_words("I don't know, he he."),
+            "I don't know, he he."
+        );
+        assert_eq!(
+            collapse_repeated_words("pretty small he he"),
+            "pretty small he he"
+        );
+        assert_eq!(
+            collapse_repeated_words("He he, that's good"),
+            "He he, that's good"
+        );
+        assert_eq!(collapse_repeated_words("he he he !"), "he he he !");
+        assert_eq!(collapse_repeated_words("he he\nnext"), "he he\nnext");
+
+        assert_eq!(collapse_repeated_words("he he went home."), "he went home.");
+        assert_eq!(collapse_repeated_words("so he he said no"), "so he said no");
     }
 
     /// Case is folded for the lookup, as it is for the match itself.
