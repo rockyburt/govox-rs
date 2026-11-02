@@ -2209,6 +2209,7 @@ mod about_tests {
         BiasPlan {
             terms: (0..total).map(|n| format!("term{n}")).collect(),
             dropped: (0..dropped).map(|n| format!("lost{n}")).collect(),
+            withheld: Vec::new(),
             tokens: total,
             reserved: 0,
             discovered,
@@ -2246,6 +2247,7 @@ mod about_tests {
                 "govox-rs".to_owned(),
             ],
             dropped: vec!["rockyburt".to_owned()],
+            withheld: Vec::new(),
             tokens: 3,
             reserved: 0,
             discovered: 1,
@@ -2281,6 +2283,7 @@ mod about_tests {
                 "Claude".to_owned(),
             ],
             dropped: Vec::new(),
+            withheld: Vec::new(),
             tokens: 4,
             reserved: 0,
             discovered: 0,
@@ -2306,6 +2309,7 @@ mod about_tests {
         let plan = BiasPlan {
             terms: vec!["RentalsCa".to_owned()],
             dropped: Vec::new(),
+            withheld: Vec::new(),
             tokens: 1,
             reserved: 0,
             discovered: 1,
@@ -2329,6 +2333,7 @@ mod about_tests {
         let plan = BiasPlan {
             terms: vec!["Jira".to_owned()],
             dropped: Vec::new(),
+            withheld: Vec::new(),
             tokens: 1,
             reserved: 0,
             discovered: 0,

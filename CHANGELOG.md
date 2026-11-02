@@ -128,6 +128,12 @@ before 1.0.0, minor versions may change behaviour.
 
 ### Fixed
 
+- **"rentals, do …" no longer comes out as "Rentals-DO …".** Discovery was putting repository
+  and command names like `Rentals-DO` into the recogniser's prompt, and Whisper copied the
+  exact string whenever it heard the two words together. A discovered name that joins a
+  function word ("do", "my", "for", …) to another word is now kept out of the prompt at any
+  budget, and the log names each one. Bias it by hand if you do want it.
+
 - **A dictionary rule no longer lowercases the start of a sentence.** A rule such as
   `sim link` -> `symlink` turned "Sim links are broken." into "symlinks are broken.", because the
   dictionary runs after capitalisation. A lowercase replacement now keeps the capital when it opens a

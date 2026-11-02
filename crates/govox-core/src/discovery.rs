@@ -537,6 +537,28 @@ fn case_split(name: &str) -> Vec<String> {
     parts
 }
 
+/// Is this a name of several words, one of which is a function word?
+///
+/// The hazard [`SPOKEN_FUNCTION_WORDS`] guards against, stated once for both
+/// places it bites. A rule generated from `DoIt` would rewrite "do it"; a bias
+/// term `Rentals-DO` does the same thing less reliably, from the other end:
+/// with the exact string sitting in the prompt, Whisper copies it the moment it
+/// hears "rentals, do the ticket stuff". Both split the name the way it would
+/// be said — at separators and at case boundaries — and a single word is never
+/// a match, because there is no second word for it to be glued to.
+#[must_use]
+pub fn joins_a_function_word(name: &str) -> bool {
+    let parts: Vec<String> = name
+        .split(['-', '_', '.', ' '])
+        .flat_map(case_split)
+        .map(|part| part.to_lowercase())
+        .collect();
+    parts.len() >= 2
+        && parts
+            .iter()
+            .any(|part| SPOKEN_FUNCTION_WORDS.contains(&part.as_str()))
+}
+
 /// How a joined repository name is likely to arrive from recognition.
 ///
 /// The problem this solves cannot be solved by biasing. Bias nudges *which
@@ -568,16 +590,10 @@ pub fn spoken_variants(name: &str) -> Vec<String> {
         return Vec::new();
     }
     let parts = case_split(name);
-    if parts.len() < 2 {
+    if parts.len() < 2 || joins_a_function_word(name) {
         return Vec::new();
     }
     let lowered: Vec<String> = parts.iter().map(|part| part.to_lowercase()).collect();
-    if lowered
-        .iter()
-        .any(|part| SPOKEN_FUNCTION_WORDS.contains(&part.as_str()))
-    {
-        return Vec::new();
-    }
 
     // Space and hyphen: the two ways Whisper renders a boundary it heard.
     // Both are matched case-insensitively by the dictionary, so only these two
@@ -778,6 +794,11 @@ pub struct BiasPlan {
     pub terms: Vec<String>,
     /// Discovered terms that did not, in the order they were dropped.
     pub dropped: Vec<String>,
+    /// Discovered terms kept out whatever the budget, because biasing them
+    /// glues an ordinary phrase into a name: see [`joins_a_function_word`].
+    /// Separate from `dropped` because the remedy is different — a bigger
+    /// budget would bring those back and must not bring these.
+    pub withheld: Vec<String>,
     /// What `terms` costs, in the units the planner was handed — recogniser
     /// tokens in the daemon.
     pub tokens: usize,
@@ -819,7 +840,11 @@ impl BiasPlan {
 ///    focusing the window a group is scoped to cannot silently evict the core
 ///    that was discovered for every window.
 /// 3. **Discovered terms fill what is left**, in provider priority order,
-///    deduplicated case-insensitively against everything already listed.
+///    deduplicated case-insensitively against everything already listed —
+///    except a name that joins a function word, which is withheld at any
+///    budget. `Rentals-DO` in the prompt turns "rentals, do that" into
+///    "Rentals-DO that". Hand-written terms are not checked: an instruction
+///    is taken as meant.
 ///
 /// What does not fit is *returned* rather than quietly truncated. `bias_prompt`
 /// truncates in list order and says nothing, which was fine while the list was
@@ -859,6 +884,7 @@ pub fn plan_bias(
         .map_or(0, |discover| discover.max_terms);
 
     let mut dropped = Vec::new();
+    let mut withheld = Vec::new();
     let mut discovered = 0usize;
     for provider in ProviderName::ALL {
         for answer in found
@@ -867,6 +893,10 @@ pub fn plan_bias(
         {
             for term in &answer.terms {
                 if !seen.insert(term.to_lowercase()) {
+                    continue;
+                }
+                if joins_a_function_word(term) {
+                    withheld.push(term.clone());
                     continue;
                 }
                 let term_cost = cost(term);
@@ -885,6 +915,7 @@ pub fn plan_bias(
     BiasPlan {
         terms,
         dropped,
+        withheld,
         tokens,
         reserved,
         discovered,
@@ -1217,6 +1248,44 @@ Twillingate Bonavista
             !spoken_variants("RentalsCa").is_empty(),
             "the guard must not swallow the case this exists for"
         );
+    }
+
+    #[test]
+    fn a_name_that_glues_a_function_word_is_never_biased() {
+        // The reported failure: with `Rentals-DO` in the prompt, "rentals, do
+        // the ticket creation stuff" came back as "rentals-do the Ticket
+        // creation stuff". Found twice, as a repository and as a command.
+        let hand = dictionary(&["Jira"]);
+        let discovered = [
+            found(ProviderName::Repos, &["Rentals-DO", "Rentals-API"]),
+            found(ProviderName::Commands, &["rentals-do", "zellij"]),
+        ];
+        let plan = plan_bias(&hand, &discovered, 100, &word_cost);
+        assert_eq!(plan.terms, vec!["Jira", "Rentals-API", "zellij"]);
+        assert_eq!(plan.withheld, vec!["Rentals-DO"]);
+        assert!(plan.dropped.is_empty(), "withheld is not over budget");
+    }
+
+    #[test]
+    fn a_hand_written_term_is_biased_even_when_it_glues_a_function_word() {
+        let plan = plan_bias(&dictionary(&["Rentals-DO"]), &[], 100, &word_cost);
+        assert_eq!(plan.terms, vec!["Rentals-DO"]);
+        assert!(plan.withheld.is_empty());
+    }
+
+    #[test]
+    fn only_a_name_of_several_words_can_glue_one() {
+        assert!(joins_a_function_word("Rentals-DO"));
+        assert!(joins_a_function_word("log-my-day"));
+        assert!(joins_a_function_word("DoIt"));
+        assert!(joins_a_function_word("rentals_for.ca"));
+        // A lone function word has nothing to be glued to.
+        assert!(!joins_a_function_word("the"));
+        // Function words as letters inside a word are not function words.
+        assert!(!joins_a_function_word("Rentals-DocCentre"));
+        assert!(!joins_a_function_word("Rentals-Deploy"));
+        assert!(!joins_a_function_word("RentalsCa"));
+        assert!(!joins_a_function_word("govox-rs"));
     }
 
     #[test]
