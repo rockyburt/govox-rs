@@ -415,6 +415,42 @@ pub fn is_silence_artifact(text: &str) -> bool {
     !cleaned.contains(' ') && (cleaned.starts_with("www") || cleaned.ends_with("com"))
 }
 
+/// The preview of a session still in progress, without its closing mark.
+///
+/// While you are still speaking, a mark at the very end of the hypothesis is a
+/// guess that the sentence is over — and it usually is not. Whisper writes one
+/// from prosody at every pause ("…running into."), and the correction pipeline
+/// adds one to anything with more than a word in it. The next decode, hearing
+/// more, drops it, so the preview flickers a full stop on and off at every
+/// breath. Trimmed only from what is *shown*: the commit is corrected from the
+/// session's own text and keeps its punctuation, so the mark arrives once, when
+/// it is true.
+///
+/// Only a trailing run of terminators, and the spaces around it; nothing else
+/// changes. Marks inside the text — a sentence that genuinely ended, `main.rs`
+/// — are kept, as are closing quotes and brackets, which are content rather
+/// than a guess. So is a line break, and any mark before one: "new line" was
+/// dictated, which is the opposite of a guess. A final word that already holds
+/// a dot (`p.m.`, `U.S.A.`) keeps its last one too, or trimming would swap one
+/// flicker for another. A preview that is nothing *but* marks is left as it
+/// is, since an empty preview reads as "nothing heard".
+#[must_use]
+pub fn without_provisional_terminator(text: &str) -> &str {
+    const TERMINATORS: [char; 7] = ['.', '?', '!', '…', '。', '？', '！'];
+    const SPACES: [char; 2] = [' ', '\t'];
+    let body = text.trim_end_matches(SPACES);
+    let bare = body.trim_end_matches(TERMINATORS);
+    if bare.len() == body.len() {
+        return text;
+    }
+    let bare = bare.trim_end_matches(SPACES);
+    let last_word = bare.rsplit(char::is_whitespace).next().unwrap_or("");
+    if !bare.chars().any(char::is_alphanumeric) || last_word.contains('.') {
+        return text;
+    }
+    bare
+}
+
 /// How far past the end of its audio a decode may stamp a word before its
 /// timing is disbelieved.
 ///
@@ -489,6 +525,83 @@ pub fn join_words(words: &[TimedWord]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_provisional_sentence_end_is_not_shown() {
+        // The guessed full stop that appears, then vanishes when you carry on.
+        assert_eq!(
+            without_provisional_terminator("The thing I keep running into."),
+            "The thing I keep running into"
+        );
+        assert_eq!(without_provisional_terminator("Is it done?"), "Is it done");
+        assert_eq!(without_provisional_terminator("Stop!"), "Stop");
+        // A run, and the whitespace a stage may leave after it.
+        assert_eq!(without_provisional_terminator("Wait... "), "Wait");
+    }
+
+    #[test]
+    fn only_the_end_is_trimmed() {
+        // A sentence that really ended mid-session keeps its full stop; so do
+        // the dots inside a filename or a domain.
+        assert_eq!(
+            without_provisional_terminator("Hello there. How are"),
+            "Hello there. How are"
+        );
+        assert_eq!(
+            without_provisional_terminator("open main.rs on rentals.ca"),
+            "open main.rs on rentals.ca"
+        );
+    }
+
+    #[test]
+    fn a_spoken_line_break_is_content_not_a_guess() {
+        // "hello new line" previews as "Hello\n": the break was dictated, and
+        // trimming trailing whitespace wholesale used to make it vanish.
+        assert_eq!(without_provisional_terminator("Hello\n"), "Hello\n");
+        assert_eq!(without_provisional_terminator("Hello\n\n"), "Hello\n\n");
+        // A mark *before* the break was spoken too ("hello period new line").
+        assert_eq!(without_provisional_terminator("Hello.\n"), "Hello.\n");
+        // Nothing removed means nothing changed, trailing space included.
+        assert_eq!(without_provisional_terminator("hello "), "hello ");
+    }
+
+    #[test]
+    fn an_abbreviation_keeps_its_final_dot() {
+        // The last word already holds a dot, so the final one is part of it:
+        // trimming would swap one flicker for another ("p.m" -> "p.m. today").
+        assert_eq!(without_provisional_terminator("at 5 p.m."), "at 5 p.m.");
+        assert_eq!(
+            without_provisional_terminator("in the U.S.A."),
+            "in the U.S.A."
+        );
+    }
+
+    #[test]
+    fn every_terminator_is_trimmed() {
+        assert_eq!(without_provisional_terminator("and then…"), "and then");
+        assert_eq!(without_provisional_terminator("Why?! "), "Why");
+        assert_eq!(without_provisional_terminator("你好。"), "你好");
+        assert_eq!(without_provisional_terminator("真的？"), "真的");
+    }
+
+    #[test]
+    fn a_preview_that_is_only_marks_is_left_alone() {
+        // Trimming would leave nothing to show, and an empty preview reads as
+        // "nothing heard" rather than "a full stop".
+        assert_eq!(without_provisional_terminator("."), ".");
+        assert_eq!(without_provisional_terminator("?!"), "?!");
+        assert_eq!(without_provisional_terminator(""), "");
+    }
+
+    #[test]
+    fn other_closing_marks_are_kept() {
+        // Not a sentence-end guess: a closing quote or bracket is content.
+        assert_eq!(
+            without_provisional_terminator("he said \"no\""),
+            "he said \"no\""
+        );
+        assert_eq!(without_provisional_terminator("call f(x)"), "call f(x)");
+    }
 
     fn words(specs: &[(f64, f64, &str)]) -> Vec<TimedWord> {
         specs

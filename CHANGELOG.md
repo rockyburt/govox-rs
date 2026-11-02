@@ -8,6 +8,19 @@ before 1.0.0, minor versions may change behaviour.
 
 ### Security
 
+- **Dependencies refreshed, closing 12 advisories the audit job had been failing on since
+  2026-09-12.** A lockfile-only `cargo update`: `quinn-proto` 0.11.19 (RUSTSEC-2026-0338 to
+  -0342), `rustls` 0.23.46 (-0285, -0346, -0348, -0349), `rustls-webpki` (-0382),
+  `webpki-root-certs` (-0383) and `rtrb` (-0274), plus a yanked `chacha20` and an unsound
+  `tokio` the job also denies. Most reach govox through `hf-hub` on the model-download path.
+  `whisper-rs` did not move, and the correction golden corpus is unchanged.
+
+  Three informational advisories are accepted rather than fixed, and CI now ignores them with
+  the reason recorded beside the flag: `zvariant`, `zvariant_derive` and `zbus_names` are
+  unmaintained because upstream folded them into `zbus` 6.0. govox cannot take that yet —
+  `atspi`, `ksni` and `notify-rust`, each at its latest release, still require `zbus` 5.
+  Revisit when `atspi` publishes a `zbus` 6 release.
+
 - **`h2` updated to 0.4.19, closing RUSTSEC-2026-0258** ("unbounded empty DATA frames",
   published 2026-08-17). It reaches govox through `govox-asr` -> `hf-hub` -> `hyper`, which is
   the model-download path. A lockfile-only change.
@@ -120,6 +133,30 @@ before 1.0.0, minor versions may change behaviour.
   exact string whenever it heard the two words together. A discovered name that joins a
   function word ("do", "my", "for", …) to another word is now kept out of the prompt at any
   budget, and the log names each one. Bias it by hand if you do want it.
+
+- **The live preview stops flickering a full stop.** While you speak, the underlined text
+  no longer ends in `.`, `?` or `!`: mid-sentence that mark is a guess that you have
+  finished, Whisper makes it at every pause, and the next decode took it back — a full stop
+  appearing and vanishing at every breath. The committed text keeps its punctuation, so the
+  mark now appears once, when you stop.
+
+- **A dictated long flag keeps its space.** "cargo clippy hyphen hyphen all hyphen targets"
+  came out `cargo clippy--all-targets`, the flag glued to the command; it is now
+  `cargo clippy --all-targets`. "dash dash" works the same way, an utterance can now *open*
+  with one (in a terminal, `"dash dash help"` is `--help`, where it used to render a single
+  hyphen; prose sentence-cases it as `--Help`, as it does any other leading mark), and "the
+  dash dash flag" stays prose instead of becoming `the dash -flag`. The same fix applies to
+  "forward slash", which lost its first word at the start of an utterance (`forward/usr`)
+  and when said twice (`hello/forward/world`, now `hello//world`). One trade: `--` dictated
+  as a typewriter em dash in prose now arrives with a space before it.
+
+- **`tools/dev-restart.sh` refuses when the unit runs a different binary than it built.** The
+  installed `govox-rs-dev.service` names a path, and `.cargo/config.toml` decides where cargo
+  builds; when they disagree the unit relaunches whatever older binary is left on disk while
+  every check passes. That is how a daemon ran an 08-19 build for hours — and showed a
+  long-fixed notification panic on every reload — while the script reported the current
+  version. It now compares the restarted process with the binary it built and names both
+  paths. `packaging/README.md` says how to point the unit at a relocated target directory.
 
 - **Hand-written bias terms reach the recogniser again.** With `[dictionary.discover]`
   switched on, none of the terms in your `bias` list had been biasing recognition — a

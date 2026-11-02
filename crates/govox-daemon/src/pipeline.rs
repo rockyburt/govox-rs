@@ -1015,7 +1015,12 @@ impl<A: Announcer> EventLoop<'_, A> {
             // that has not been decided yet, and showing its resolved form
             // would be showing a decision govox has not taken.
             match result.action {
-                govox_core::domain::PipelineAction::Text(text) => text,
+                // Without its closing mark: mid-session that mark is a guess
+                // the sentence has ended, and the next decode usually takes it
+                // back. The commit is corrected separately and keeps it.
+                govox_core::domain::PipelineAction::Text(text) => {
+                    govox_core::streaming::without_provisional_terminator(&text).to_owned()
+                }
                 _ => hypothesis.to_owned(),
             }
         };

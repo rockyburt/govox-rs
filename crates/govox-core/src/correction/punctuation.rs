@@ -58,6 +58,14 @@ pub const SPOKEN_PUNCTUATION: &[(&str, &str, Attach)] = &[
     ("period", ".", Attach::Left),
     ("comma", ",", Attach::Left),
     ("colon", ":", Attach::Left),
+    // A doubled hyphen opens a long flag, so it belongs to the word *after* it
+    // and keeps the space in front: "clippy hyphen hyphen all" is
+    // `clippy --all`. Read as two `Tight` hyphens it glued to the command
+    // (`clippy--all`). Must precede the single words — alternation is ordered —
+    // and the pattern refuses to take a hyphen word as a `prefix` when a pair
+    // starts there, or an utterance opening with one renders a single mark.
+    ("hyphen hyphen", "--", Attach::Right),
+    ("dash dash", "--", Attach::Right),
     ("hyphen", "-", Attach::Tight),
     // A synonym for "hyphen", not an em dash. Nobody dictating a command-line
     // flag or a hyphenated word says "hyphen hyphen" and means `——`, and the
@@ -168,7 +176,23 @@ static PATTERN: LazyLock<Regex> = LazyLock::new(|| {
             unique.push(word);
         }
     }
-    let guard = format!(r"(?:open|close)\s+(?:{})\b", unique.join("|"));
+    // Likewise a multi-word phrase whose remainder is itself a phrase ("hyphen
+    // hyphen"): taken as a prefix, its first word would leave only the rest to
+    // match, rendering one mark where two were spoken. Derived from the table
+    // for the same reason as the paired guard, so a future doubled phrase is
+    // guarded the moment it is added.
+    let compound: Vec<String> = SPOKEN_PUNCTUATION
+        .iter()
+        .filter(|(p, _, _)| {
+            p.split_once(' ')
+                .is_some_and(|(_, rest)| SPOKEN_PUNCTUATION.iter().any(|(q, _, _)| *q == rest))
+        })
+        .map(|(p, _, _)| fancy_regex::escape(p).into_owned())
+        .collect();
+    let mut guard = format!(r"(?:open|close)\s+(?:{})\b", unique.join("|"));
+    if !compound.is_empty() {
+        guard = format!(r"{guard}|(?:{})\b", compound.join("|"));
+    }
 
     let phrases: Vec<String> = SPOKEN_PUNCTUATION
         .iter()
@@ -440,9 +464,46 @@ mod tests {
         // hyphenated word.
         assert_eq!(punct("all dash targets"), "all-targets");
         assert_eq!(punct("all hyphen targets"), "all-targets");
+    }
+
+    #[test]
+    fn a_doubled_hyphen_opens_a_flag() {
+        // `--` belongs to the word after it, as a flag does: it keeps the space
+        // in front. Two `Tight` hyphens glued it to the command instead —
+        // "cargo clippy--all-targets", which no shell accepts.
+        assert_eq!(
+            punct("cargo clippy hyphen hyphen all hyphen targets"),
+            "cargo clippy --all-targets"
+        );
         assert_eq!(
             punct("cargo clippy dash dash all dash targets"),
-            "cargo clippy--all-targets"
+            "cargo clippy --all-targets"
         );
+    }
+
+    #[test]
+    fn a_doubled_hyphen_can_open_the_utterance() {
+        // Was one mark: the first "hyphen" was taken as an ordinary prefix word,
+        // the same group that makes "add a comma here" prose.
+        assert_eq!(punct("hyphen hyphen all hyphen targets"), "--all-targets");
+        assert_eq!(punct("dash dash help"), "--help");
+    }
+
+    #[test]
+    fn forward_slash_is_whole_even_where_its_first_word_could_be_a_prefix() {
+        // The same defect as the doubled hyphen, reached by the same derived
+        // guard: "forward" was taken as a prefix word, leaving the bare "slash"
+        // to match. A second "forward slash" lost its first word the same way,
+        // which is the half of a URL's `//` that went missing.
+        assert_eq!(punct("forward slash usr"), "/usr");
+        assert_eq!(
+            punct("hello forward slash forward slash world"),
+            "hello//world"
+        );
+    }
+
+    #[test]
+    fn a_doubled_hyphen_after_a_determiner_is_prose() {
+        assert_eq!(punct("pass the dash dash flag"), "pass the dash dash flag");
     }
 }
