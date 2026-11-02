@@ -56,6 +56,15 @@ before 1.0.0, minor versions may change behaviour.
 
 ### Added
 
+- **The overlay says when it is catching up.** While a streaming decode runs, the daemon's
+  frame loop is held, so the level meter used to freeze mid-sentence and the HUD looked hung.
+  It now shows a band sweeping the meter (a travelling ripple in the compact pill) for any
+  decode longer than 120 ms, then returns to the live level. The protocol gains `busy 1` /
+  `busy 0`; older helpers ignore it. The helper also draws between commands when a backlog
+  arrives, instead of handling all of it first, which removes a second short stall right
+  after each decode. Decoding off the frame loop, so the meter keeps moving too, is a
+  separate change.
+
 - **Dictation can be controlled over D-Bus.** govox claims `io.github.rockyburt.Govox` on the
   session bus and serves `Start`, `Stop` and `Toggle` at `/io/github/rockyburt/Govox`
   (interface `io.github.rockyburt.Govox.Dictation`), each returning whether it is listening
@@ -127,6 +136,10 @@ before 1.0.0, minor versions may change behaviour.
   recogniser unaided. They are unrecorded until you read them aloud.
 
 ### Fixed
+
+- **Command, spelling and sleep modes now reach the tray and overlay.** The pipeline's
+  announcer wrapper never forwarded `mode`, so the daemon's mode changes were dropped before
+  they reached either surface. A test now calls every announcer method through the wrapper.
 
 - **"rentals, do …" no longer comes out as "Rentals-DO …".** Discovery was putting repository
   and command names like `Rentals-DO` into the recogniser's prompt, and Whisper copied the

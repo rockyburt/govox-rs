@@ -68,6 +68,13 @@ struct Hud {
     /// fading in at the corner and then gliding across the screen.
     awaiting_anchor: Option<Instant>,
     caret_marker: bool,
+    /// When the daemon's current decode began, or `None` when it is not
+    /// decoding. Timed here, not by the daemon: the daemon is exactly the
+    /// thing that cannot run a clock while it decodes.
+    busy_since: Option<Instant>,
+    /// Drives the busy sweep. One clock for the life of the helper, so the
+    /// sweep keeps moving through its fade-out instead of jumping to rest.
+    clock: Instant,
 }
 
 impl Hud {
@@ -91,6 +98,8 @@ impl Hud {
             anchor: None,
             awaiting_anchor: None,
             caret_marker: false,
+            busy_since: None,
+            clock: Instant::now(),
         })
     }
 
@@ -116,17 +125,21 @@ impl Hud {
         });
 
         loop {
-            match incoming.try_recv() {
-                Ok(line) => {
-                    if let Some(command) = Command::parse(&line)
-                        && !self.handle(command)?
-                    {
-                        return Ok(());
+            // A bounded batch, then a frame. Draining to empty first meant the
+            // backlog a decode leaves behind held the card still until every
+            // queued line was handled — a second stall right after the first.
+            for _ in 0..g::MAX_COMMANDS_PER_FRAME {
+                match incoming.try_recv() {
+                    Ok(line) => {
+                        if let Some(command) = Command::parse(&line)
+                            && !self.handle(command)?
+                        {
+                            return Ok(());
+                        }
                     }
-                    continue;
+                    Err(mpsc::TryRecvError::Disconnected) => return Ok(()),
+                    Err(mpsc::TryRecvError::Empty) => break,
                 }
-                Err(mpsc::TryRecvError::Disconnected) => return Ok(()),
-                Err(mpsc::TryRecvError::Empty) => {}
             }
 
             if self.click_to_stop && self.window.poll_clicked() {
@@ -164,6 +177,10 @@ impl Hud {
                 self.state.level = 0.0;
                 self.state.caption.clear();
                 self.state.compact = false;
+                // A session can end mid-decode; the next one must not open
+                // already showing "catching up".
+                self.busy_since = None;
+                self.state.busy = 0.0;
                 self.anchor = None;
                 // A session that ends while still waiting must not leave the
                 // flag set, or the next `show` would be held back by a wait
@@ -204,6 +221,12 @@ impl Hud {
             // No resize: the mode's word is bounded by the idle label's
             // length, so the card it is drawn on is already wide enough.
             Command::Mode(mode) => self.state.mode = mode,
+            // Repeated `busy 1` keeps the original start, so the show delay
+            // counts from when the decode began rather than restarting.
+            Command::Busy(true) => {
+                self.busy_since.get_or_insert_with(Instant::now);
+            }
+            Command::Busy(false) => self.busy_since = None,
             Command::Quit => return Ok(false),
         }
         Ok(true)
@@ -301,6 +324,12 @@ impl Hud {
             self.window.hide()?;
             return Ok(());
         }
+
+        // The busy indicator fades like the card does, so a decode that ends
+        // just past the show delay eases out rather than blinking.
+        let busy_target = g::busy_target(self.busy_since.map(|since| since.elapsed()));
+        (self.state.busy, _) = g::fade_step(self.state.busy, busy_target);
+        self.state.busy_phase = g::sweep_phase(self.clock.elapsed());
 
         let mut gliding = false;
         if let (Some(current), Some(target)) = (self.position, self.position_target) {

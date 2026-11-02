@@ -17,6 +17,8 @@
 // says nothing useful.
 #![allow(dead_code)]
 
+use std::time::Duration;
+
 /// Toast-card geometry, in logical pixels.
 ///
 /// The card is narrow at idle and widens only while a caption is showing, so it
@@ -103,6 +105,27 @@ pub const GLIDE_SNAP_PX: f32 = 1.0;
 /// that never report at all, and short enough that a user who is already
 /// speaking does not notice the card is late.
 pub const ANCHOR_WAIT_MS: u64 = 250;
+
+/// How long a decode must have been running before the card says so.
+///
+/// Most streaming decodes on a GPU finish well inside this, and an indicator
+/// that flashed on for every one of them would strobe at the decode rate —
+/// noise that says nothing. Past it, the level feed has visibly stopped, and
+/// that is the moment a held meter starts to read as a hung HUD.
+pub const BUSY_SHOW_DELAY_MS: u64 = 120;
+
+/// One pass of the busy sweep across the meter track, and the band's width.
+pub const BUSY_SWEEP_PERIOD_MS: u64 = 900;
+pub const BUSY_SWEEP_WIDTH: f32 = 16.0;
+
+/// At most this many protocol lines are handled between two frames.
+///
+/// A decode holds the daemon's frame loop, and when it returns the frames it
+/// queued are all sent at once. Handling the backlog to the end before drawing
+/// again is what made the card stall *after* a decode as well as during it; a
+/// bound keeps the animation running through the drain. Generous, because the
+/// lines are cheap and a backlog longer than this is rare.
+pub const MAX_COMMANDS_PER_FRAME: usize = 64;
 
 /// Caret-marker geometry. The reported rectangle can be zero pixels wide, so
 /// the drawn box has a floor, and the crosshair arms extend outside it.
@@ -405,6 +428,51 @@ pub fn fade_step(opacity: f32, target: f32) -> (f32, bool) {
     } else {
         (target, false)
     }
+}
+
+/// Whether the busy indicator should be showing, `running` into a decode.
+///
+/// `None` is no decode at all.
+#[must_use]
+pub fn busy_target(running: Option<Duration>) -> f32 {
+    match running {
+        Some(elapsed) if elapsed >= Duration::from_millis(BUSY_SHOW_DELAY_MS) => 1.0,
+        _ => 0.0,
+    }
+}
+
+/// Where the sweep is in its pass, 0..1, `elapsed` into the decode.
+#[must_use]
+pub fn sweep_phase(elapsed: Duration) -> f32 {
+    let period = u128::from(BUSY_SWEEP_PERIOD_MS);
+    (elapsed.as_millis() % period) as f32 / period as f32
+}
+
+/// The visible part of the sweep's band on a track `track` pixels wide, as an
+/// offset from the track's start and a width, or `None` when it is off the
+/// track entirely.
+///
+/// The band enters from the left and leaves at the right, so a pass reads as
+/// motion through the meter rather than a block blinking at one end.
+#[must_use]
+pub fn sweep_span(phase: f32, track: f32) -> Option<(f32, f32)> {
+    let travel = track + BUSY_SWEEP_WIDTH;
+    let start = phase.clamp(0.0, 1.0) * travel - BUSY_SWEEP_WIDTH;
+    let left = start.max(0.0);
+    let right = (start + BUSY_SWEEP_WIDTH).min(track);
+    (right - left > 0.5).then_some((left, right - left))
+}
+
+/// One bar's height, 0..1, in the pill's busy ripple.
+///
+/// A wave travels left to right across the bars, twice per sweep period, and
+/// stays low — between a fifth and a half of full height — so it reads as
+/// "working" rather than as loud speech.
+#[must_use]
+pub fn ripple_scale(phase: f32, index: usize) -> f32 {
+    let offset = index as f32 / BAR_COUNT as f32;
+    let wave = (std::f32::consts::TAU * (phase * 2.0 - offset)).sin();
+    0.2 + 0.3 * (0.5 + 0.5 * wave)
 }
 
 /// One frame of the glide.
@@ -740,6 +808,70 @@ mod tests {
     }
 
     // --- animation ----------------------------------------------------------
+
+    #[test]
+    fn a_short_decode_never_shows_the_busy_indicator() {
+        assert_eq!(busy_target(None), 0.0);
+        assert_eq!(busy_target(Some(Duration::from_millis(0))), 0.0);
+        assert_eq!(
+            busy_target(Some(Duration::from_millis(BUSY_SHOW_DELAY_MS - 1))),
+            0.0
+        );
+        assert_eq!(
+            busy_target(Some(Duration::from_millis(BUSY_SHOW_DELAY_MS))),
+            1.0
+        );
+        assert_eq!(busy_target(Some(Duration::from_secs(3))), 1.0);
+    }
+
+    #[test]
+    fn the_sweep_phase_wraps_once_per_period() {
+        assert_eq!(sweep_phase(Duration::ZERO), 0.0);
+        let half = sweep_phase(Duration::from_millis(BUSY_SWEEP_PERIOD_MS / 2));
+        assert!((half - 0.5).abs() < 0.01, "{half}");
+        assert_eq!(
+            sweep_phase(Duration::from_millis(BUSY_SWEEP_PERIOD_MS)),
+            0.0
+        );
+    }
+
+    #[test]
+    fn the_sweep_enters_on_the_left_crosses_and_leaves_on_the_right() {
+        // At the very start and end of a pass the band is off the track, so
+        // the wrap from one pass to the next is not a visible jump.
+        assert_eq!(sweep_span(0.0, METER_WIDTH), None);
+        assert_eq!(sweep_span(1.0, METER_WIDTH), None);
+
+        let mut last = -1.0;
+        for step in 1..20 {
+            let phase = step as f32 / 20.0;
+            if let Some((left, width)) = sweep_span(phase, METER_WIDTH) {
+                assert!(left >= 0.0 && left + width <= METER_WIDTH + 0.001);
+                assert!(width <= BUSY_SWEEP_WIDTH + 0.001);
+                assert!(left >= last, "the band moved backwards at {phase}");
+                last = left;
+            }
+        }
+        let (_, mid) = sweep_span(0.5, METER_WIDTH).expect("on the track mid-pass");
+        assert!(
+            (mid - BUSY_SWEEP_WIDTH).abs() < 0.001,
+            "full width mid-pass"
+        );
+    }
+
+    #[test]
+    fn the_ripple_stays_low_and_differs_bar_to_bar() {
+        for step in 0..40 {
+            let phase = step as f32 / 40.0;
+            for index in 0..BAR_COUNT {
+                let scale = ripple_scale(phase, index);
+                assert!((0.2..=0.5).contains(&scale), "{scale} at {phase}/{index}");
+            }
+        }
+        // A wave, not a pulse: at any instant the bars are not all equal.
+        let heights: Vec<f32> = (0..BAR_COUNT).map(|i| ripple_scale(0.1, i)).collect();
+        assert!(heights.windows(2).any(|w| (w[0] - w[1]).abs() > 0.05));
+    }
 
     #[test]
     fn a_fade_reaches_its_target_and_then_reports_settled() {

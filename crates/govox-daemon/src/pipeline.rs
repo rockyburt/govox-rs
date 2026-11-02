@@ -574,6 +574,16 @@ impl<A: Announcer> Announcer for SharedAnnouncer<A> {
     fn refresh_about(&self) {
         self.0.refresh_about();
     }
+    // `mode` was missing here from the day it joined the trait, so the
+    // daemon's mode changes — command, spelling, asleep — reached neither the
+    // tray nor the overlay. The test below now calls every method through
+    // this wrapper.
+    fn mode(&self, mode: Option<&str>) {
+        self.0.mode(mode);
+    }
+    fn busy(&self, busy: bool) {
+        self.0.busy(busy);
+    }
 }
 
 /// How much speech to hear before the first streaming decode.
@@ -842,7 +852,13 @@ impl<A: Announcer> EventLoop<'_, A> {
         }
         let started = std::time::Instant::now();
         self.voiced_since_decode = 0.0;
+        // This await holds the frame loop, so no level reaches the overlay
+        // until it returns. Said out loud on both sides, and the helper times
+        // it itself — only decodes long enough to notice are shown. `false`
+        // goes out before anything below can return early.
+        self.announcer.busy(true);
         let result = processor.process().await;
+        self.announcer.busy(false);
         // Recorded for the failure path too: a decode that errors slowly is
         // just as capable of starving the loop as one that succeeds slowly.
         self.last_decode = Some((std::time::Instant::now(), started.elapsed()));
@@ -1923,6 +1939,96 @@ fn probe_capabilities() -> govox_core::domain::Capabilities {
     // the diagnostic reports cannot disagree — which was the whole point of
     // there being a diagnostic.
     crate::diagnostics::capabilities(&crate::diagnostics::Probes::default())
+}
+
+#[cfg(test)]
+mod shared_announcer_tests {
+    use super::SharedAnnouncer;
+    use crate::daemon::Announcer;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Default)]
+    struct Recording(Mutex<Vec<&'static str>>);
+
+    impl Recording {
+        fn note(&self, call: &'static str) {
+            self.0.lock().expect("poisoned").push(call);
+        }
+    }
+
+    // Every method overridden, so a default on the trait cannot stand in for
+    // a call the wrapper failed to forward.
+    impl Announcer for Recording {
+        fn set_state(&self, _: &str) {
+            self.note("set_state");
+        }
+        fn caption(&self, _: &str) {
+            self.note("caption");
+        }
+        fn notify(&self, _: &str, _: &str) {
+            self.note("notify");
+        }
+        fn level(&self, _: f32) {
+            self.note("level");
+        }
+        fn anchor(&self, _: Option<govox_core::domain::CaretRect>) {
+            self.note("anchor");
+        }
+        fn compact(&self, _: bool) {
+            self.note("compact");
+        }
+        fn expect_anchor(&self) {
+            self.note("expect_anchor");
+        }
+        fn caret_marker(&self, _: bool) {
+            self.note("caret_marker");
+        }
+        fn refresh_about(&self) {
+            self.note("refresh_about");
+        }
+        fn mode(&self, _: Option<&str>) {
+            self.note("mode");
+        }
+        fn busy(&self, _: bool) {
+            self.note("busy");
+        }
+    }
+
+    #[test]
+    fn the_shared_announcer_forwards_every_method() {
+        // The trait defaults most methods to no-ops, so a wrapper that forgets
+        // one compiles and silently drops it. `mode` was dropped this way for
+        // months. Adding a method to `Announcer` means adding it here too.
+        let inner = Arc::new(Recording::default());
+        let shared = SharedAnnouncer(Arc::clone(&inner));
+        shared.set_state("listening");
+        shared.caption("hello");
+        shared.notify("title", "body");
+        shared.level(0.5);
+        shared.anchor(None);
+        shared.compact(true);
+        shared.expect_anchor();
+        shared.caret_marker(true);
+        shared.refresh_about();
+        shared.mode(Some("command"));
+        shared.busy(true);
+        assert_eq!(
+            *inner.0.lock().expect("poisoned"),
+            [
+                "set_state",
+                "caption",
+                "notify",
+                "level",
+                "anchor",
+                "compact",
+                "expect_anchor",
+                "caret_marker",
+                "refresh_about",
+                "mode",
+                "busy",
+            ]
+        );
+    }
 }
 
 #[cfg(test)]

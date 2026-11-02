@@ -29,6 +29,7 @@ const KNOWN_VERBS: &[&str] = &[
     "caret-marker",
     "compact",
     "mode",
+    "busy",
     "quit",
 ];
 
@@ -50,6 +51,8 @@ fn every_command() -> Vec<String> {
         OverlayCommand::Caption(String::new()).encode(),
         OverlayCommand::Mode(Some("command".to_owned())).encode(),
         OverlayCommand::Mode(None).encode(),
+        OverlayCommand::Busy(true).encode(),
+        OverlayCommand::Busy(false).encode(),
     ]
 }
 

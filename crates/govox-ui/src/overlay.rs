@@ -9,9 +9,9 @@
 //! The wire protocol is a **superset** of the reference's, which makes it the
 //! most useful debugging seam in the port: the Rust daemon can drive the
 //! *Python* overlay and vice versa. Every line the reference defines is
-//! byte-identical; `mode` is the one addition, and it is safe because both
-//! helpers ignore lines they do not recognise, so the Python overlay drives
-//! exactly as it always did and simply never paints an indicator. Point
+//! byte-identical; `mode` and `busy` are the additions, and they are safe
+//! because both helpers ignore lines they do not recognise, so the Python
+//! overlay drives exactly as it always did and simply never paints them. Point
 //! [`OverlayClient`] at the Python helper with `GOVOX_OVERLAY_CMD`:
 //!
 //! ```text
@@ -19,7 +19,7 @@
 //! ```
 //!
 //! Commands out: `show` `pulse` `hide` `level` `caption` `anchor` `mode`
-//! `expect-anchor` `caret-marker` `compact` `quit`. In: `stop`.
+//! `busy` `expect-anchor` `caret-marker` `compact` `quit`. In: `stop`.
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, Command, Stdio};
@@ -104,6 +104,16 @@ pub enum OverlayCommand {
     /// older helper — including the Python one — draws the plain microphone
     /// and stays driveable, which is the whole point of keeping that seam.
     Mode(Option<String>),
+    /// A streaming decode is running, so the level feed has stopped.
+    ///
+    /// Recognition runs on the thread that reads audio frames, so while a
+    /// decode is in flight no `level` arrives and the meter holds whatever it
+    /// last showed. A held meter reads as a hung HUD. This lets the helper
+    /// say "catching up" instead, from its own animation clock, which keeps
+    /// running while the daemon is busy. Added after `mode`, and safe for the
+    /// same reason: a helper that does not know it ignores it and behaves
+    /// exactly as before.
+    Busy(bool),
     Quit,
 }
 
@@ -129,6 +139,7 @@ impl OverlayCommand {
             Self::ExpectAnchor => "expect-anchor".to_owned(),
             Self::CaretMarker(on) => format!("caret-marker {}", u8::from(*on)),
             Self::Compact(on) => format!("compact {}", u8::from(*on)),
+            Self::Busy(on) => format!("busy {}", u8::from(*on)),
             // A mode is one bare word. Anything else — spaces, a newline, an
             // empty string — is sent as the clear, because a malformed mode
             // line would either desynchronize the stream or paint an
@@ -417,6 +428,8 @@ mod tests {
         );
         assert_eq!(OverlayCommand::Compact(true).encode(), "compact 1");
         assert_eq!(OverlayCommand::Compact(false).encode(), "compact 0");
+        assert_eq!(OverlayCommand::Busy(true).encode(), "busy 1");
+        assert_eq!(OverlayCommand::Busy(false).encode(), "busy 0");
     }
 
     #[test]

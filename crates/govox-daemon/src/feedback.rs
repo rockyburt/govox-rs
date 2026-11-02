@@ -209,6 +209,15 @@ impl<S: PlaySink + 'static> Announcer for FeedbackChannel<S> {
         }
     }
 
+    fn busy(&self, busy: bool) {
+        // Unconditional, like the mode: it is status, not content, and a
+        // meter switched off still leaves a card that would otherwise look
+        // frozen while the daemon decodes.
+        if let Some(overlay) = &self.overlay {
+            overlay.send(&OverlayCommand::Busy(busy));
+        }
+    }
+
     fn caption(&self, text: &str) {
         if self.config.overlay_caption
             && let Some(overlay) = &self.overlay
@@ -422,6 +431,31 @@ mod tests {
         channel.level(0.9);
 
         assert_eq!(overlay.sent(), vec![OverlayCommand::Show]);
+    }
+
+    #[test]
+    fn a_decode_reaches_the_overlay_even_with_the_meter_turned_off() {
+        // Status, not content: the card still freezes during a decode when the
+        // meter is off, because the caption stops updating too.
+        let config = FeedbackConfig {
+            overlay_level: false,
+            ..FeedbackConfig::default()
+        };
+        let overlay = Arc::new(RecordingOverlay::default());
+        let channel = channel(config, &overlay);
+
+        channel.set_state("listening");
+        channel.busy(true);
+        channel.busy(false);
+
+        assert_eq!(
+            overlay.sent(),
+            vec![
+                OverlayCommand::Show,
+                OverlayCommand::Busy(true),
+                OverlayCommand::Busy(false)
+            ]
+        );
     }
 
     #[test]
