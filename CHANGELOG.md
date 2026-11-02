@@ -134,6 +134,17 @@ before 1.0.0, minor versions may change behaviour.
   function word ("do", "my", "for", …) to another word is now kept out of the prompt at any
   budget, and the log names each one. Bias it by hand if you do want it.
 
+- **A dictionary rule no longer lowercases the start of a sentence.** A rule such as
+  `sim link` -> `symlink` turned "Sim links are broken." into "symlinks are broken.", because the
+  dictionary runs after capitalisation. A lowercase replacement now keeps the capital when it opens a
+  sentence; mid-sentence it is inserted as written, and a replacement with casing of its own
+  ("Jira") is never altered.
+
+- **A spoken "hehe" is no longer reduced to "he".** Whisper often writes it as "he he", and the
+  repeated-word stage collapsed that as a stutter. A run of "he" that closes a clause — followed by
+  punctuation or the end of the utterance — is now kept, so a dictionary rule can turn it into
+  `hehe`; "he he went home" still collapses. See `docs/parity.md`.
+
 - **The live preview stops flickering a full stop.** While you speak, the underlined text
   no longer ends in `.`, `?` or `!`: mid-sentence that mark is a guess that you have
   finished, Whisper makes it at every pause, and the next decode took it back — a full stop
