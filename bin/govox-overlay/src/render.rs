@@ -28,8 +28,30 @@ pub struct State {
     pub has_level_feed: bool,
     /// The daemon's mode, or `None` for ordinary dictation.
     pub mode: Option<String>,
+    /// How strongly the "decoding" indicator shows, 0..=1, already faded. The
+    /// level meter gives way to it in proportion, because during a decode the
+    /// level is stale and a frozen meter is what reads as a hung HUD.
+    pub busy: f32,
+    /// Where the busy sweep is in its pass, 0..1.
+    pub busy_phase: f32,
     pub width: i32,
     pub height: i32,
+}
+
+impl State {
+    /// The busy strength the drawing should use.
+    ///
+    /// Zero asleep: sleep still decodes, listening for "wake up", but a card
+    /// animating "working on it" while claiming to be asleep contradicts
+    /// itself — the same reason the pill holds its bars flat there.
+    #[must_use]
+    pub fn shown_busy(&self) -> f32 {
+        if self.mode.as_deref() == Some("asleep") {
+            0.0
+        } else {
+            self.busy.clamp(0.0, 1.0)
+        }
+    }
 }
 
 impl Default for State {
@@ -42,6 +64,8 @@ impl Default for State {
             pulse_on: true,
             has_level_feed: false,
             mode: None,
+            busy: 0.0,
+            busy_phase: 0.0,
             width: g::CARD_WIDTH_IDLE,
             height: g::CARD_HEIGHT,
         }
@@ -241,13 +265,35 @@ fn draw_card(canvas: &mut PixmapMut<'_>, state: &State, text: &Text) {
             None,
         );
     }
+    // While a decode runs the level is stale, so the fill gives way to a band
+    // sweeping the track: "catching up", not "stopped hearing you".
+    let busy = state.shown_busy();
     let fill_width = g::METER_WIDTH * state.level.clamp(0.0, 1.0);
     if fill_width > 0.0
+        && busy < 1.0
         && let Some(fill) = rounded_rect(meter_x, meter_y, fill_width, g::METER_HEIGHT, radius)
     {
         canvas.fill_path(
             &fill,
-            &rgba(0.30, 0.78, 0.42, 0.95 * alpha),
+            &rgba(0.30, 0.78, 0.42, 0.95 * alpha * (1.0 - busy)),
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
+    }
+    if busy > 0.0
+        && let Some((offset, band)) = g::sweep_span(state.busy_phase, g::METER_WIDTH)
+        && let Some(sweep) = rounded_rect(
+            meter_x + offset,
+            meter_y,
+            band,
+            g::METER_HEIGHT,
+            radius.min(band / 2.0),
+        )
+    {
+        canvas.fill_path(
+            &sweep,
+            &rgba(0.97, 0.97, 0.98, 0.85 * alpha * busy),
             FillRule::Winding,
             Transform::identity(),
             None,
@@ -328,6 +374,7 @@ fn draw_pill(canvas: &mut PixmapMut<'_>, state: &State) {
         group_x + g::MIC_CRADLE_RADIUS * 2.0 + g::PILL_GAP,
         mid_y,
         level,
+        (state.shown_busy(), state.busy_phase),
         tint,
         alpha,
     );
@@ -494,6 +541,7 @@ fn draw_waveform(
     x: f32,
     mid_y: f32,
     level: f32,
+    (busy, phase): (f32, f32),
     tint: (f32, f32, f32),
     alpha: f32,
 ) {
@@ -502,7 +550,10 @@ fn draw_waveform(
     // otherwise trying to be a system control.
     let paint = rgba(tint.0, tint.1, tint.2, 0.90 * alpha);
     for index in 0..g::BAR_COUNT {
-        let scaled = g::bar_scale(level, g::BAR_RESPONSE[index]);
+        // During a decode the bars blend into a travelling ripple, so the pill
+        // keeps moving while the level is stale instead of freezing mid-word.
+        let heard = g::bar_scale(level, g::BAR_RESPONSE[index]);
+        let scaled = heard * (1.0 - busy) + g::ripple_scale(phase, index) * busy;
         let bar_h = g::BAR_MIN_HEIGHT + (g::BAR_MAX_HEIGHT - g::BAR_MIN_HEIGHT) * scaled;
         let bar_x = x + index as f32 * (g::BAR_WIDTH + g::BAR_GAP);
         if let Some(bar) = rounded_rect(
@@ -863,6 +914,63 @@ mod tests {
         let dictating = pixels(None);
         for mode in ["command", "spelling", "asleep"] {
             assert_ne!(pixels(Some(mode)), dictating, "{mode} looks like dictation");
+        }
+    }
+
+    /// Both surfaces, drawn with the given busy strength, phase and mode.
+    fn busy_pixels(compact: bool, busy: f32, phase: f32, mode: Option<&str>) -> Vec<u8> {
+        let (width, height) = g::card_size(compact, false);
+        let mut pixmap = Pixmap::new(width as u32, height as u32).expect("pixmap");
+        let state = State {
+            opacity: 1.0,
+            level: 0.6,
+            has_level_feed: true,
+            compact,
+            mode: mode.map(str::to_owned),
+            busy,
+            busy_phase: phase,
+            width,
+            height,
+            ..State::default()
+        };
+        draw(&mut pixmap, &state, &Text::load().expect("font"));
+        pixmap.data().to_vec()
+    }
+
+    #[test]
+    fn a_decode_changes_what_both_surfaces_paint() {
+        // The whole point of the indicator: a card that looked the same while
+        // decoding would still read as frozen.
+        for compact in [false, true] {
+            assert_ne!(
+                busy_pixels(compact, 1.0, 0.5, None),
+                busy_pixels(compact, 0.0, 0.5, None),
+                "compact={compact}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_busy_indicator_moves_from_frame_to_frame() {
+        // Motion is what separates "working" from "hung"; a static busy
+        // pattern would be a different kind of frozen.
+        for compact in [false, true] {
+            assert_ne!(
+                busy_pixels(compact, 1.0, 0.3, None),
+                busy_pixels(compact, 1.0, 0.6, None),
+                "compact={compact}"
+            );
+        }
+    }
+
+    #[test]
+    fn asleep_shows_no_busy_indicator() {
+        for compact in [false, true] {
+            assert_eq!(
+                busy_pixels(compact, 1.0, 0.5, Some("asleep")),
+                busy_pixels(compact, 0.0, 0.5, Some("asleep")),
+                "compact={compact}"
+            );
         }
     }
 }

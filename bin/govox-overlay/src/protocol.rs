@@ -38,6 +38,8 @@ pub enum Command {
     CaretMarker(bool),
     /// Which mode the daemon is in, or `None` for ordinary dictation.
     Mode(Option<String>),
+    /// The daemon is decoding, so the level feed has stopped until it is done.
+    Busy(bool),
     Quit,
 }
 
@@ -86,6 +88,7 @@ impl Command {
             ("mode", Some(name)) => Some(Self::Mode(parse_mode(name))),
             ("compact", Some(flag)) => Some(Self::Compact(flag.trim() == "1")),
             ("caret-marker", Some(flag)) => Some(Self::CaretMarker(flag.trim() == "1")),
+            ("busy", Some(flag)) => Some(Self::Busy(flag.trim() == "1")),
             _ => None,
         }
     }
@@ -124,6 +127,17 @@ mod tests {
         assert_eq!(Command::parse("hide"), Some(Command::Hide));
         assert_eq!(Command::parse("quit"), Some(Command::Quit));
         assert_eq!(Command::parse("expect-anchor"), Some(Command::ExpectAnchor));
+    }
+
+    #[test]
+    fn busy_is_a_one_or_zero_and_bare_busy_is_ignored() {
+        assert_eq!(Command::parse("busy 1"), Some(Command::Busy(true)));
+        assert_eq!(Command::parse("busy 0"), Some(Command::Busy(false)));
+        // Like `compact`: anything but "1" is off, which is the safe reading —
+        // a stuck busy indicator would hide a meter that is working.
+        assert_eq!(Command::parse("busy yes"), Some(Command::Busy(false)));
+        // A bare `busy` has no state to set, so it is not a command at all.
+        assert_eq!(Command::parse("busy"), None);
     }
 
     #[test]

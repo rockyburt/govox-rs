@@ -105,6 +105,12 @@ pub trait Announcer: Send + Sync {
     /// it once through a notification that fades is what let someone sit in
     /// command mode believing it had done nothing.
     fn mode(&self, _mode: Option<&str>) {}
+    /// A streaming decode started (`true`) or finished (`false`).
+    ///
+    /// Recognition runs on the frame loop, so while it does, `level` stops
+    /// arriving. This is how a surface tells "catching up" apart from "hung".
+    /// Defaulted like `level`: only the overlay has anything to show.
+    fn busy(&self, _busy: bool) {}
 }
 
 /// Logs instead of showing anything. The default until M7.
