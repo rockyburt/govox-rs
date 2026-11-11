@@ -8,6 +8,10 @@ before 1.0.0, minor versions may change behaviour.
 
 ### Security
 
+- **`async-executor` updated to 1.14.1, replacing the yanked 1.14.0.** The nightly audit had
+  failed on it since 2026-11-03. It reaches govox through `zbus` (`govox-a11y`,
+  `govox-daemon`, `govox-ime`, `govox-ui`). A lockfile-only change.
+
 - **Dependencies refreshed, closing 12 advisories the audit job had been failing on since
   2026-09-12.** A lockfile-only `cargo update`: `quinn-proto` 0.11.19 (RUSTSEC-2026-0338 to
   -0342), `rustls` 0.23.46 (-0285, -0346, -0348, -0349), `rustls-webpki` (-0382),
