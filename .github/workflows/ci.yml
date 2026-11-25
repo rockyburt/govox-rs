@@ -185,6 +185,15 @@ jobs:
       #     Revisit when atspi publishes a zbus 6 release (it carries the most
       #     surface: AT-SPI field reading), then ksni and notify-rust.
       #
+      #   RUSTSEC-2026-0543 chrono and -0542 humantime are unmaintained, with no
+      #     patched version. Both reach govox only through hf-hub's Xet download
+      #     client (hf-hub -> hf-xet -> xet-client / xet-runtime), the model
+      #     download path, and xet 1.8.1, the latest, still requires them.
+      #     hf-hub 1.0 has no feature that leaves Xet out. Informational only —
+      #     no vulnerability is reported against either. Accepted 2026-11-25.
+      #     Revisit when an hf-xet release drops them, or if govox ever
+      #     downloads models without hf-hub.
+      #
       # Never delete this job or drop the flag to get green: an accepted risk
       # is an --ignore with a reason, not a missing check.
       - name: Cargo audit
@@ -194,3 +203,5 @@ jobs:
           --ignore RUSTSEC-2026-0370
           --ignore RUSTSEC-2026-0371
           --ignore RUSTSEC-2026-0372
+          --ignore RUSTSEC-2026-0542
+          --ignore RUSTSEC-2026-0543
