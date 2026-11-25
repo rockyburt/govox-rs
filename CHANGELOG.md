@@ -8,6 +8,13 @@ before 1.0.0, minor versions may change behaviour.
 
 ### Security
 
+- **`url` updated to 2.5.9, closing RUSTSEC-2026-0592** (stack overflow in `Url::origin()` on
+  nested `blob:` URLs). It reaches govox through `hf-hub` and `reqwest` on the model-download
+  path. A lockfile-only change. The same audit run raised two informational advisories, now
+  accepted with the reason recorded beside the flag in CI: `chrono` (RUSTSEC-2026-0543) and
+  `humantime` (-0542) are unmaintained, and both come only from `hf-hub`'s Xet client, whose
+  latest release still needs them.
+
 - **`async-executor` updated to 1.14.1, replacing the yanked 1.14.0.** The nightly audit had
   failed on it since 2026-11-03. It reaches govox through `zbus` (`govox-a11y`,
   `govox-daemon`, `govox-ime`, `govox-ui`). A lockfile-only change.
