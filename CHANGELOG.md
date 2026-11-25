@@ -8,6 +8,17 @@ before 1.0.0, minor versions may change behaviour.
 
 ### Security
 
+- **`url` updated to 2.5.9, closing RUSTSEC-2026-0592** (stack overflow in `Url::origin()` on
+  nested `blob:` URLs). It reaches govox through `hf-hub` and `reqwest` on the model-download
+  path. A lockfile-only change. The same audit run raised two informational advisories, now
+  accepted with the reason recorded beside the flag in CI: `chrono` (RUSTSEC-2026-0543) and
+  `humantime` (-0542) are unmaintained, and both come only from `hf-hub`'s Xet client, whose
+  latest release still needs them.
+
+- **`async-executor` updated to 1.14.1, replacing the yanked 1.14.0.** The nightly audit had
+  failed on it since 2026-11-03. It reaches govox through `zbus` (`govox-a11y`,
+  `govox-daemon`, `govox-ime`, `govox-ui`). A lockfile-only change.
+
 - **Dependencies refreshed, closing 12 advisories the audit job had been failing on since
   2026-09-12.** A lockfile-only `cargo update`: `quinn-proto` 0.11.19 (RUSTSEC-2026-0338 to
   -0342), `rustls` 0.23.46 (-0285, -0346, -0348, -0349), `rustls-webpki` (-0382),
@@ -136,6 +147,15 @@ before 1.0.0, minor versions may change behaviour.
   recogniser unaided. They are unrecorded until you read them aloud.
 
 ### Fixed
+
+- **Preedit no longer switches itself off because a stale IBus file's pid was reused.** Bus
+  discovery trusted any `IBUS_DAEMON_PID` that was alive. A year-old `-unix-1` file on the P1
+  named a pid that now belonged to another process, it sorted ahead of the live
+  `-unix-wayland-0`, and govox connected to a socket that had gone, logged "continuing
+  without preedit dictation" and typed finished text at the end of each utterance for eleven
+  days. A candidate must now name a process whose `comm` is `ibus-daemon`, a `unix:path=`
+  socket must still exist, and the file for this session's `WAYLAND_DISPLAY` or `DISPLAY` is
+  tried first.
 
 - **Command, spelling and sleep modes now reach the tray and overlay.** The pipeline's
   announcer wrapper never forwarded `mode`, so the daemon's mode changes were dropped before
