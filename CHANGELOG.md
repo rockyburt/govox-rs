@@ -148,6 +148,15 @@ before 1.0.0, minor versions may change behaviour.
 
 ### Fixed
 
+- **Preedit no longer switches itself off because a stale IBus file's pid was reused.** Bus
+  discovery trusted any `IBUS_DAEMON_PID` that was alive. A year-old `-unix-1` file on the P1
+  named a pid that now belonged to another process, it sorted ahead of the live
+  `-unix-wayland-0`, and govox connected to a socket that had gone, logged "continuing
+  without preedit dictation" and typed finished text at the end of each utterance for eleven
+  days. A candidate must now name a process whose `comm` is `ibus-daemon`, a `unix:path=`
+  socket must still exist, and the file for this session's `WAYLAND_DISPLAY` or `DISPLAY` is
+  tried first.
+
 - **Command, spelling and sleep modes now reach the tray and overlay.** The pipeline's
   announcer wrapper never forwarded `mode`, so the daemon's mode changes were dropped before
   they reached either surface. A test now calls every announcer method through the wrapper.
